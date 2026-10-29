@@ -296,8 +296,6 @@ const Op = struct {
 const Harness = struct {
     domain: u32,
     set: IntervalSet,
-    /// Compare every block of the domain after every op (only affordable for tiny domains).
-    full_check: bool,
     trace: *std.hash.Wyhash,
     failure_buf: [160]u8 = undefined,
     failure: ?[]const u8 = null,
@@ -305,7 +303,7 @@ const Harness = struct {
     fn init(domain: u32, capacity: u32, trace: *std.hash.Wyhash) Harness {
         assert(capacity <= IntervalSet.capacity_max and domain <= domain_max);
         assert(model.count == 0); // the previous run cleaned up after itself
-        return .{ .domain = domain, .set = .{ .capacity = capacity }, .full_check = domain <= 64, .trace = trace };
+        return .{ .domain = domain, .set = .{ .capacity = capacity }, .trace = trace };
     }
 
     /// Clear the model cheaply: it equals the set (checked), so clear the set's ranges.
@@ -353,13 +351,13 @@ const Harness = struct {
             total += iv.hi - iv.lo;
         }
         // 2. Contents: same number of blocks as the model, and agreement at the op's edges,
-        //    where off-by-ones live. Tiny domains compare every block.
+        //    where off-by-ones live. Tiny domains compare every block (only affordable there).
         if (total != model.count) return h.fail("set holds {d} blocks, model holds {d}", .{ total, model.count });
         const edges = [_]u32{ op.lo -% 1, op.lo, op.hi -% 1, op.hi };
         for (edges) |x| if (x < h.domain and h.set.contains(x) != model.get(x)) {
             return h.fail("block {d}: set says {}, model says {}", .{ x, h.set.contains(x), model.get(x) });
         };
-        if (h.full_check) for (0..h.domain) |x| if (h.set.contains(@intCast(x)) != model.get(@intCast(x))) {
+        if (h.domain <= 64) for (0..h.domain) |x| if (h.set.contains(@intCast(x)) != model.get(@intCast(x))) {
             return h.fail("block {d}: set says {}, model says {}", .{ x, h.set.contains(@intCast(x)), model.get(@intCast(x)) });
         };
         return true;
@@ -384,8 +382,16 @@ fn print_slots(set: *const IntervalSet) void {
 }
 
 fn mark_hit_by(before: *const [marks.count]u64) []const u8 {
-    for (marks.hits, before, 0..) |now, then, k| if (now != then) return @tagName(@as(marks.Mark, @fromBackingInt(@intCast(k))));
+    for (marks.hits, before, std.enums.values(marks.Mark)) |now, then, mark| if (now != then) return @tagName(mark);
     return "-";
+}
+
+/// " name=delta" for every mark since `start`.
+fn print_mark_deltas(start: *const [marks.count]u64) void {
+    for (marks.hits, start, std.enums.values(marks.Mark)) |now, then, mark| {
+        std.debug.print(" {s}={d}", .{ @tagName(mark), now - then });
+    }
+    std.debug.print("\n", .{});
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -462,10 +468,7 @@ fn run_seed(seed: u64, verbose: bool) SeedResult {
     }
     if (verbose) {
         std.debug.print("marks:", .{});
-        for (marks.hits, marks_start, 0..) |now, then, k| {
-            std.debug.print(" {s}={d}", .{ @tagName(@as(marks.Mark, @fromBackingInt(@intCast(k)))), now - then });
-        }
-        std.debug.print("\n", .{});
+        print_mark_deltas(&marks_start);
     }
     return .{ .ok = ok, .trace = trace.final(), .ops = @min(step + 1, ops_per_seed) };
 }
@@ -566,10 +569,7 @@ fn exhaust(max_len: u32) bool {
         sequences_total += sequences;
         ops_total += ops;
         std.debug.print("len={d} sequences={d} ops={d} hits:", .{ length, sequences, ops });
-        for (marks.hits, marks_start, 0..) |now, then, k| {
-            std.debug.print(" {s}={d}", .{ @tagName(@as(marks.Mark, @fromBackingInt(@intCast(k)))), now - then });
-        }
-        std.debug.print("\n", .{});
+        print_mark_deltas(&marks_start);
         if (failed_len != 0) {
             std.debug.print("FAIL at len={d}: sequence {d} of this length, {d} sequences and {d} ops in total\n", .{
                 length, sequences, sequences_total, ops_total,
@@ -631,10 +631,6 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(2);
         }
     }
-    const flags = if (gen_boundaries and bug_fill_gap)
-        " --gen-boundaries --bug-fill-gap"
-    else if (gen_boundaries) " --gen-boundaries" else if (bug_fill_gap) " --bug-fill-gap" else "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(count, true);
         std.debug.print("seed={d} ops={d} trace={x:0>16} {s}\n", .{ count, r.ops, r.trace, if (r.ok) "PASS" else "FAIL" });
@@ -667,7 +663,9 @@ pub fn main(init: std.process.Init) !void {
         for (marks.hits, before, 0..) |now, then, k| seeds_hit[k] += @intFromBool(now != then);
         if (!r.ok) {
             std.debug.print("FAIL at seed={d} after {d} seeds ({d} ops). Replay with:\n", .{ seed, seed + 1, ops_total });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed, if (gen_boundaries) " --gen-boundaries" else "", if (bug_fill_gap) " --bug-fill-gap" else "",
+            });
             failed = true;
             seed += 1;
             break;
@@ -679,9 +677,9 @@ pub fn main(init: std.process.Init) !void {
             seed, if (gen_boundaries) "boundaries" else "uniform",
         });
         var never: u32 = 0;
-        for (seeds_hit, marks.hits, 0..) |s, total, k| {
+        for (seeds_hit, marks.hits, std.enums.values(marks.Mark)) |s, total, mark| {
             std.debug.print("  {s:<19} {d:>10} {d:>11}{s}\n", .{
-                @tagName(@as(marks.Mark, @fromBackingInt(@intCast(k)))), s, total, if (total == 0) "   <-- NEVER HIT" else "",
+                @tagName(mark), s, total, if (total == 0) "   <-- NEVER HIT" else "",
             });
             never += @intFromBool(total == 0);
         }

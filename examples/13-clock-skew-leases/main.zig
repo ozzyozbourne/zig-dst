@@ -198,9 +198,9 @@ const Entry = struct { value: u64 = 0, version: Version = .{} };
 const Kind = enum(u8) { request_vote, vote, heartbeat, heartbeat_ack, accept, accept_ok };
 
 const Message = struct {
-    deliver_at: u64,
+    deliver_at: u64 = 0, // set by `send`
     from: u8,
-    to: u8,
+    to: u8 = 0, // set by `broadcast` for broadcasts
     kind: Kind,
     term: u64,
     granted: bool = false,
@@ -316,6 +316,13 @@ const Checker = struct {
     stale_reads: u64 = 0,
     lease_reads: u64 = 0,
     commits: u64 = 0,
+
+    /// A handover gap for the summary. An overlap is the tightest possible handover: report it
+    /// as a negative gap.
+    fn gap(c: *const Checker, ticks: i64, pair: [2]u8, name: []const u8) Gap {
+        if (c.overlap_ticks > 0) return .{ .ticks = -@as(i64, @intCast(c.overlap_ticks)), .pair = c.overlap_pair, .name = name };
+        return .{ .ticks = ticks, .pair = pair, .name = name };
+    }
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -505,7 +512,7 @@ const Simulator = struct {
         if (first) sim.event(node.id, '?', "term={d}", .{node.term}) else {
             sim.trace.update(std.mem.asBytes(&[_]u64{ sim.tick, node.id, node.term }));
         }
-        sim.broadcast(.{ .deliver_at = 0, .from = node.id, .to = 0, .kind = .request_vote, .term = node.term });
+        sim.broadcast(.{ .from = node.id, .kind = .request_vote, .term = node.term });
     }
 
     fn become_leader(sim: *Simulator, node: *Node) void {
@@ -531,7 +538,7 @@ const Simulator = struct {
         node.accepted[key] = entry;
         node.pending[node.pending_count] = .{ .key = key, .entry = entry, .acks = @as(u8, 1) << @intCast(node.id), .recovery = recovery };
         node.pending_count += 1;
-        sim.broadcast(.{ .deliver_at = 0, .from = node.id, .to = 0, .kind = .accept, .term = node.term, .key = key, .entry = entry });
+        sim.broadcast(.{ .from = node.id, .kind = .accept, .term = node.term, .key = key, .entry = entry });
     }
 
     fn on_message(sim: *Simulator, m: Message) void {
@@ -548,7 +555,7 @@ const Simulator = struct {
                     node.reset_election_timer();
                     sim.event(node.id, 'v', "for={d}", .{m.from});
                 }
-                sim.send(.{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .vote, .term = node.term, .granted = grant, .kv = node.accepted });
+                sim.send(.{ .from = node.id, .to = m.from, .kind = .vote, .term = node.term, .granted = grant, .kv = node.accepted });
             },
             .vote => {
                 if (node.role != .candidate or m.term != node.term or !m.granted) return;
@@ -559,18 +566,17 @@ const Simulator = struct {
                 if (@popCount(node.votes) >= quorum) sim.become_leader(node);
             },
             .heartbeat => {
-                if (m.term < node.term) {
-                    // Tell the stale leader about the newer term (it steps down on the ack).
-                    sim.send(.{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .heartbeat_ack, .term = node.term, .stamp = m.stamp });
-                    return;
+                // A stale leader gets an ungranted ack with the newer term (it steps down on it).
+                const current = m.term >= node.term;
+                if (current) {
+                    assert(node.role != .leader); // one leader per term: votes are unique per term
+                    node.role = .follower;
+                    node.leader = m.from;
+                    node.reset_election_timer();
+                    // THE PROMISE, measured on MY clock from when I received it.
+                    node.promise_until = @max(node.promise_until, node.lease_clock() + lease_us);
                 }
-                assert(node.role != .leader); // one leader per term: votes are unique per term
-                node.role = .follower;
-                node.leader = m.from;
-                node.reset_election_timer();
-                // THE PROMISE, measured on MY clock from when I received it.
-                node.promise_until = @max(node.promise_until, node.lease_clock() + lease_us);
-                sim.send(.{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .heartbeat_ack, .term = node.term, .stamp = m.stamp, .granted = true });
+                sim.send(.{ .from = node.id, .to = m.from, .kind = .heartbeat_ack, .term = node.term, .stamp = m.stamp, .granted = current });
             },
             .heartbeat_ack => {
                 if (node.role != .leader or m.term != node.term or !m.granted) return;
@@ -585,21 +591,19 @@ const Simulator = struct {
                 node.lease_until = @max(node.lease_until, best + Node.leader_lease_us());
             },
             .accept => {
-                if (m.term < node.term) {
-                    sim.send(.{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .accept_ok, .term = node.term, .key = m.key, .entry = m.entry });
-                    return;
+                const current = m.term >= node.term;
+                if (current) {
+                    if (node.role == .candidate) node.role = .follower;
+                    if (m.entry.version.newer(node.accepted[m.key].version)) node.accepted[m.key] = m.entry;
                 }
-                if (node.role == .candidate) node.role = .follower;
-                if (m.entry.version.newer(node.accepted[m.key].version)) node.accepted[m.key] = m.entry;
-                sim.send(.{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .accept_ok, .term = node.term, .key = m.key, .entry = m.entry, .granted = true });
+                sim.send(.{ .from = node.id, .to = m.from, .kind = .accept_ok, .term = node.term, .key = m.key, .entry = m.entry, .granted = current });
             },
             .accept_ok => {
                 if (node.role != .leader or m.term != node.term or !m.granted) return;
                 var i: usize = 0;
                 while (i < node.pending_count) : (i += 1) {
                     const p = &node.pending[i];
-                    if (p.key != m.key or p.entry.version.term != m.entry.version.term or
-                        p.entry.version.seq != m.entry.version.seq) continue;
+                    if (p.key != m.key or !std.meta.eql(p.entry.version, m.entry.version)) continue;
                     p.acks |= @as(u8, 1) << @intCast(m.from);
                     if (@popCount(p.acks) < quorum) return;
                     sim.commit(node, p.*);
@@ -629,9 +633,9 @@ const Simulator = struct {
         if (node.role == .leader) {
             if (node.mono < node.next_heartbeat) return;
             node.next_heartbeat = node.mono + heartbeat_us;
-            sim.broadcast(.{ .deliver_at = 0, .from = node.id, .to = 0, .kind = .heartbeat, .term = node.term, .stamp = node.lease_clock() });
+            sim.broadcast(.{ .from = node.id, .kind = .heartbeat, .term = node.term, .stamp = node.lease_clock() });
             for (node.pending[0..node.pending_count]) |p| { // retransmit unacked writes
-                sim.broadcast(.{ .deliver_at = 0, .from = node.id, .to = 0, .kind = .accept, .term = node.term, .key = p.key, .entry = p.entry });
+                sim.broadcast(.{ .from = node.id, .kind = .accept, .term = node.term, .key = p.key, .entry = p.entry });
             }
             return;
         }
@@ -681,15 +685,20 @@ const Simulator = struct {
         sim.failure_tick = sim.tick;
     }
 
+    /// How many nodes believe they hold a valid lease right now.
+    fn holders(sim: *const Simulator) u8 {
+        var count: u8 = 0;
+        for (&sim.nodes) |*node| count += @intFromBool(node.holds_lease());
+        return count;
+    }
+
     /// Lease exclusivity, in true time, every tick. Also records lease intervals and handover
     /// gaps (the true time between one node's lease ending and another's beginning).
     fn check_leases(sim: *Simulator) void {
         const c = &sim.checker;
-        var holders: u8 = 0;
         for (&sim.nodes) |*node| {
             const now = node.holds_lease();
             const i = node.id;
-            if (now) holders += 1;
             if (now and !c.held[i]) {
                 const other_holding = for (0..node_count) |j| {
                     if (j != i and c.held[j]) break @as(u8, @intCast(j));
@@ -726,7 +735,7 @@ const Simulator = struct {
             if (!promised and c.promised[i]) sim.event(i, 'e', "promise_expired", .{});
             c.promised[i] = promised;
         }
-        if (holders >= 2) {
+        if (sim.holders() >= 2) {
             c.overlap_ticks += 1;
             if (sim.failure == .none and sim.verbose) {
                 std.debug.print("LEASE OVERLAP: node {d} and node {d} both hold a lease at tick {d} (true time)\n", .{
@@ -740,11 +749,7 @@ const Simulator = struct {
     /// After a failure, run on while the damage is still unfolding: two leases overlap, or the
     /// node that served a stale read still believes in its lease.
     fn still_failing(sim: *const Simulator) bool {
-        var holders: u8 = 0;
-        for (&sim.nodes) |*node| if (node.holds_lease()) {
-            holders += 1;
-        };
-        if (holders >= 2) return true;
+        if (sim.holders() >= 2) return true;
         return sim.stale_reader != none and sim.nodes[sim.stale_reader].holds_lease();
     }
 
@@ -774,7 +779,6 @@ const Result = struct {
     trace_hash: u64,
     ticks: u64,
     checker: Checker,
-    elections: u64,
     steps: u64,
 };
 
@@ -804,21 +808,13 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) Result {
     sim.run();
     const c = sim.checker;
     if (verbose) {
-        // An overlap is the tightest possible handover: report it as a negative gap.
-        const overlap: i64 = -@as(i64, @intCast(c.overlap_ticks));
-        const gap: Gap = if (c.overlap_ticks > 0)
-            .{ .ticks = overlap, .pair = c.overlap_pair, .name = "pair" }
-        else
-            .{ .ticks = c.min_gap, .pair = c.min_gap_pair, .name = "pair" };
-        const expiry_gap: Gap = if (c.overlap_ticks > 0)
-            .{ .ticks = overlap, .pair = c.overlap_pair, .name = "expiry_pair" }
-        else
-            .{ .ticks = c.expiry_gap, .pair = c.expiry_gap_pair, .name = "expiry_pair" };
+        const gap = c.gap(c.min_gap, c.min_gap_pair, "pair");
+        const expiry_gap = c.gap(c.expiry_gap, c.expiry_gap_pair, "expiry_pair");
         std.debug.print("summary: handovers={d} min_gap={f} expiry_gap={f} overlap_ticks={d} stale_reads={d} lease_reads={d} commits={d} elections={d} steps={d}\n", .{
             c.handovers, gap, expiry_gap, c.overlap_ticks, c.stale_reads, c.lease_reads, c.commits, sim.elections, sim.steps,
         });
     }
-    return .{ .failure = sim.failure, .trace_hash = sim.trace.final(), .ticks = sim.tick, .checker = c, .elections = sim.elections, .steps = sim.steps };
+    return .{ .failure = sim.failure, .trace_hash = sim.trace.final(), .ticks = sim.tick, .checker = c, .steps = sim.steps };
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -836,10 +832,6 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(2);
         }
     }
-    const flags = if (bug_no_drift_margin and bug_wall_clock)
-        " --bug-no-drift-margin --bug-wall-clock"
-    else if (bug_no_drift_margin) " --bug-no-drift-margin" else if (bug_wall_clock) " --bug-wall-clock" else "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(init.gpa, count, true);
         std.debug.print("seed={d} ticks={d} trace={x:0>16} {s}\n", .{
@@ -863,7 +855,9 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("FAIL at seed={d} ({s}) after {d} seeds. Replay with:\n", .{
                 seed, @tagName(r.failure), seed + 1,
             });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed, if (bug_no_drift_margin) " --bug-no-drift-margin" else "", if (bug_wall_clock) " --bug-wall-clock" else "",
+            });
             std.process.exit(1);
         }
         handovers += r.checker.handovers;

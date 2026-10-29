@@ -237,7 +237,7 @@ const Command = enum(u8) {
 
 const Message = struct {
     command: Command,
-    from: u8, // Node index: replicas are 0..replica_count, clients follow.
+    from: u8 = 0, // Set by `send`. Node index: replicas are 0..replica_count, clients follow.
     view: u32 = 0,
     op: u32 = 0,
     commit: u32 = 0,
@@ -383,33 +383,37 @@ const Simulator = struct {
         });
     }
 
-    /// `--events` only (see trace_events): prints, never hashes, never draws randomness.
-    fn event_message(sim: *const Simulator, kind: []const u8, to: u8, m: Message, at: u64) void {
+    /// `--events` only (see trace_events): prints one `@` line, never hashes, never draws randomness.
+    fn at(sim: *const Simulator, comptime fmt: []const u8, args: anytype) void {
         if (!sim.verbose or !trace_events) return;
+        std.debug.print("{d:>6} @" ++ fmt ++ "\n", .{sim.now} ++ args);
+    }
+
+    fn event_message(sim: *const Simulator, kind: []const u8, to: u8, m: Message, at_tick: u64) void {
         const client, const request = if (m.command == .prepare) .{ m.entry.client, m.entry.request } else .{ m.client, m.request };
-        std.debug.print("{d:>6} @{s} from={d} to={d} cmd={s} view={d} op={d} commit={d} client={d} request={d} at={d}\n", .{
-            sim.now, kind, m.from, to, @tagName(m.command), m.view, m.op, m.commit, client, request, at,
+        sim.at("{s} from={d} to={d} cmd={s} view={d} op={d} commit={d} client={d} request={d} at={d}", .{
+            kind, m.from, to, @tagName(m.command), m.view, m.op, m.commit, client, request, at_tick,
         });
     }
 
     // ---- Network --------------------------------------------------------------------------
 
+    fn enqueue(sim: *Simulator, to: u8, m: Message, deliver_at: u64) void {
+        sim.event_message("send", to, m, deliver_at);
+        sim.packets.append(sim.gpa, .{ .deliver_at = deliver_at, .to = to, .message = m }) catch oom();
+    }
+
     fn send(sim: *Simulator, from: u8, to: u8, message: Message) void {
         var m = message;
         m.from = from;
-        if (from == to) {
-            sim.event_message("send", to, m, sim.now + 1);
-            sim.packets.append(sim.gpa, .{ .deliver_at = sim.now + 1, .to = to, .message = m }) catch oom();
-            return;
-        }
+        if (from == to) return sim.enqueue(to, m, sim.now + 1);
         const o = &sim.options;
         if (sim.partitioned[from][to]) return sim.event_message("cut", to, m, sim.now);
         if (chance(sim.random, o.packet_loss)) return sim.event_message("lost", to, m, sim.now);
         const copies: u32 = if (chance(sim.random, o.packet_duplicate)) 2 else 1;
         for (0..copies) |_| {
             const delay = sim.random.intRangeAtMost(u32, o.one_way_delay_min, o.one_way_delay_max);
-            sim.event_message("send", to, m, sim.now + delay);
-            sim.packets.append(sim.gpa, .{ .deliver_at = sim.now + delay, .to = to, .message = m }) catch oom();
+            sim.enqueue(to, m, sim.now + delay);
         }
     }
 
@@ -450,22 +454,26 @@ const Simulator = struct {
         x.done_at = @max(last, sim.now) +
             sim.random.intRangeAtMost(u32, sim.options.write_latency_min, sim.options.write_latency_max);
         queue.append(sim.gpa, x) catch oom();
-        if (sim.verbose and trace_events) std.debug.print("{d:>6} @write replica={d} kind={s} view={d} op={d} at={d}\n", .{ sim.now, r, @tagName(x.kind), x.view, x.op, x.done_at });
+        sim.at("write replica={d} kind={s} view={d} op={d} at={d}", .{ r, @tagName(x.kind), x.view, x.op, x.done_at });
+    }
+
+    fn set_log(sim: *Simulator, log: *std.ArrayList(Entry), entries: []const Entry) void {
+        log.clearRetainingCapacity();
+        log.appendSlice(sim.gpa, entries) catch oom();
     }
 
     fn tick_storage(sim: *Simulator, r: u8) void {
         const st = &sim.storages[r];
         while (st.pending.items.len > 0 and st.pending.items[0].done_at <= sim.now) {
             const w = st.pending.orderedRemove(0);
-            if (sim.verbose and trace_events) std.debug.print("{d:>6} @durable replica={d} kind={s} view={d} op={d}\n", .{ sim.now, r, @tagName(w.kind), w.view, w.op });
+            sim.at("durable replica={d} kind={s} view={d} op={d}", .{ r, @tagName(w.kind), w.view, w.op });
             switch (w.kind) {
                 .append => {
                     std.debug.assert(st.log.items.len + 1 == w.entry.op); // FIFO keeps the WAL dense.
                     st.log.append(sim.gpa, w.entry) catch oom();
                 },
                 .install => {
-                    st.log.clearRetainingCapacity();
-                    st.log.appendSlice(sim.gpa, sim.snapshots.items[w.log]) catch oom();
+                    sim.set_log(&st.log, sim.snapshots.items[w.log]);
                     st.view = w.view;
                     st.log_view = w.view;
                 },
@@ -486,7 +494,7 @@ const Simulator = struct {
                     sim.try_commit(r);
                 } else {
                     // Only now, with the prepare on "disk", may the backup vouch for it.
-                    sim.send(r, sim.primary_index(rep.view), .{ .command = .prepare_ok, .from = r, .view = rep.view, .op = rep.durable_op });
+                    sim.send(r, sim.primary_index(rep.view), .{ .command = .prepare_ok, .view = rep.view, .op = rep.durable_op });
                 }
             },
             .view => {
@@ -499,7 +507,6 @@ const Simulator = struct {
                     sim.record_dvc(r, r, dvc);
                 } else sim.send(r, p, .{
                     .command = .do_view_change,
-                    .from = r,
                     .view = rep.view,
                     .log_view = dvc.log_view,
                     .op = dvc.op,
@@ -549,31 +556,41 @@ const Simulator = struct {
             .client = m.client,
             .request = m.request,
             .transfer = m.transfer,
-            .parent = if (len > 0) rep.log.items[len - 1].checksum else 0,
+            .parent = if (rep.log.last()) |last| last.checksum else 0,
             .checksum = 0,
         };
         e.checksum = e.compute_checksum();
         rep.log.append(sim.gpa, e) catch oom();
         sim.write(r, .{ .kind = .append, .view = rep.view, .op = e.op, .entry = e });
-        sim.broadcast(r, .{ .command = .prepare, .from = r, .view = rep.view, .op = e.op, .commit = rep.commit, .entry = e });
+        sim.broadcast(r, .{ .command = .prepare, .view = rep.view, .op = e.op, .commit = rep.commit, .entry = e });
     }
 
     fn request_view(sim: *Simulator, r: u8, to: u8, view: u32) void {
         if (sim.now < sim.replicas[r].get_view_after) return;
         sim.replicas[r].get_view_after = sim.now + 10;
-        sim.send(r, to, .{ .command = .get_view, .from = r, .view = view });
+        sim.send(r, to, .{ .command = .get_view, .view = view });
+    }
+
+    /// Backup preamble for messages from the primary (prepare, commit): false means ignore it.
+    fn accept_from_primary(sim: *Simulator, r: u8, m: Message) bool {
+        const rep = &sim.replicas[r];
+        if (m.view < rep.view) return false;
+        if (m.view > rep.view or rep.status != .normal) {
+            sim.request_view(r, m.from, m.view);
+            return false;
+        }
+        if (sim.primary_index(rep.view) == r) return false;
+        rep.timeout = sim.normal_timeout();
+        return true;
     }
 
     fn on_prepare(sim: *Simulator, r: u8, m: Message) void {
+        if (!sim.accept_from_primary(r, m)) return;
         const rep = &sim.replicas[r];
-        if (m.view < rep.view) return;
-        if (m.view > rep.view or rep.status != .normal) return sim.request_view(r, m.from, m.view);
-        if (sim.primary_index(rep.view) == r) return;
-        rep.timeout = sim.normal_timeout();
         const e = m.entry;
         const len: u32 = @intCast(rep.log.items.len);
         if (e.op == len + 1) {
-            const parent = if (len > 0) rep.log.items[len - 1].checksum else 0;
+            const parent = if (rep.log.last()) |last| last.checksum else 0;
             if (e.parent == parent and e.checksum == e.compute_checksum()) {
                 rep.log.append(sim.gpa, e) catch oom();
                 sim.write(r, .{ .kind = .append, .view = rep.view, .op = e.op, .entry = e });
@@ -614,8 +631,8 @@ const Simulator = struct {
         const e = rep.log.items[rep.commit];
         const result = rep.sm.apply(e);
         rep.commit += 1;
-        if (sim.verbose and trace_events) std.debug.print("{d:>6} @commit replica={d} op={d} checksum={x:0>16} client={d} request={d} view={d} transfer={d}>{d}:{d} result={s}\n", .{
-            sim.now, r, e.op, e.checksum, e.client, e.request, e.view, e.transfer.from, e.transfer.to, e.transfer.amount, @tagName(result),
+        sim.at("commit replica={d} op={d} checksum={x:0>16} client={d} request={d} view={d} transfer={d}>{d}:{d} result={s}", .{
+            r, e.op, e.checksum, e.client, e.request, e.view, e.transfer.from, e.transfer.to, e.transfer.amount, @tagName(result),
         });
         sim.check_commit(r, e, result);
         sim.log_replica(r, ' ');
@@ -627,7 +644,6 @@ const Simulator = struct {
         const s = rep.sm.sessions[client];
         sim.send(r, sim.n() + client, .{
             .command = .reply,
-            .from = r,
             .view = rep.view,
             .client = client,
             .request = s.request,
@@ -637,16 +653,13 @@ const Simulator = struct {
     }
 
     fn on_commit(sim: *Simulator, r: u8, m: Message) void {
+        if (!sim.accept_from_primary(r, m)) return;
         const rep = &sim.replicas[r];
-        if (m.view < rep.view) return;
-        if (m.view > rep.view or rep.status != .normal) return sim.request_view(r, m.from, m.view);
-        if (sim.primary_index(rep.view) == r) return;
-        rep.timeout = sim.normal_timeout();
         if (m.op > rep.log.items.len) sim.request_view(r, m.from, m.view);
         sim.commit_to(r, m.commit);
         // Re-ack in case our earlier prepare_ok was lost.
         if (rep.durable_op > m.commit) {
-            sim.send(r, m.from, .{ .command = .prepare_ok, .from = r, .view = rep.view, .op = rep.durable_op });
+            sim.send(r, m.from, .{ .command = .prepare_ok, .view = rep.view, .op = rep.durable_op });
         }
     }
 
@@ -661,7 +674,7 @@ const Simulator = struct {
         rep.timeout = 60 + sim.random.uintLessThan(u32, 60);
         hash_ints(&sim.trace, .{ sim.now, r, view, 0xBEEF });
         sim.log_replica(r, 'v');
-        sim.broadcast(r, .{ .command = .start_view_change, .from = r, .view = view });
+        sim.broadcast(r, .{ .command = .start_view_change, .view = view });
     }
 
     fn check_svc_quorum(sim: *Simulator, r: u8) void {
@@ -671,20 +684,24 @@ const Simulator = struct {
         sim.write(r, .{ .kind = .view, .view = rep.view, .op = 0 });
     }
 
-    fn on_start_view_change(sim: *Simulator, r: u8, m: Message) void {
+    /// Counts `m` as a start_view_change vote (a DVC implies one). False if `m` is for another
+    /// view or we are not in a view change.
+    fn count_svc(sim: *Simulator, r: u8, m: Message) bool {
         const rep = &sim.replicas[r];
         if (m.view > rep.view) sim.start_view_change(r, m.view);
-        if (m.view != rep.view or rep.status != .view_change) return;
+        if (m.view != rep.view or rep.status != .view_change) return false;
         rep.svc_votes |= @as(u8, 1) << @intCast(m.from);
         sim.check_svc_quorum(r);
+        return true;
+    }
+
+    fn on_start_view_change(sim: *Simulator, r: u8, m: Message) void {
+        _ = sim.count_svc(r, m);
     }
 
     fn on_do_view_change(sim: *Simulator, r: u8, m: Message) void {
+        if (!sim.count_svc(r, m)) return;
         const rep = &sim.replicas[r];
-        if (m.view > rep.view) sim.start_view_change(r, m.view);
-        if (m.view != rep.view or rep.status != .view_change) return;
-        rep.svc_votes |= @as(u8, 1) << @intCast(m.from); // A DVC implies an SVC vote.
-        sim.check_svc_quorum(r);
         if (sim.primary_index(rep.view) == r) sim.record_dvc(r, m.from, .{
             .log_view = m.log_view,
             .op = m.op,
@@ -720,8 +737,7 @@ const Simulator = struct {
         // up to date and this is indistinguishable from the correct rule.
         if (bug_view_change_log) best = r;
         const chosen = rep.dvcs[best].?;
-        rep.log.clearRetainingCapacity();
-        rep.log.appendSlice(sim.gpa, sim.snapshots.items[chosen.log]) catch oom();
+        sim.set_log(&rep.log, sim.snapshots.items[chosen.log]);
         rep.status = .normal;
         rep.log_view = rep.view;
         rep.durable_op = 0;
@@ -732,7 +748,7 @@ const Simulator = struct {
         sim.write(r, .{ .kind = .install, .view = rep.view, .op = op, .log = chosen.log });
         hash_ints(&sim.trace, .{ sim.now, r, rep.view, op, 0xF00D });
         sim.log_replica(r, '/');
-        sim.broadcast(r, .{ .command = .start_view, .from = r, .view = rep.view, .op = op, .commit = commit_max, .log = chosen.log });
+        sim.broadcast(r, .{ .command = .start_view, .view = rep.view, .op = op, .commit = commit_max, .log = chosen.log });
         sim.commit_to(r, commit_max);
     }
 
@@ -748,8 +764,7 @@ const Simulator = struct {
         rep.view = m.view;
         rep.status = .normal;
         rep.log_view = m.view;
-        rep.log.clearRetainingCapacity();
-        rep.log.appendSlice(sim.gpa, log) catch oom();
+        sim.set_log(&rep.log, log);
         rep.durable_op = 0;
         rep.svc_votes = 0;
         rep.dvc_persisting = false;
@@ -765,7 +780,6 @@ const Simulator = struct {
         if (!sim.is_primary(r)) return;
         sim.send(r, m.from, .{
             .command = .start_view,
-            .from = r,
             .view = rep.view,
             .op = @intCast(rep.log.items.len),
             .commit = rep.commit,
@@ -780,7 +794,7 @@ const Simulator = struct {
         if (rep.timeout > 0) return;
         if (sim.is_primary(r)) {
             rep.timeout = heartbeat_ticks;
-            sim.broadcast(r, .{ .command = .commit, .from = r, .view = rep.view, .commit = rep.commit, .op = @intCast(rep.log.items.len) });
+            sim.broadcast(r, .{ .command = .commit, .view = rep.view, .commit = rep.commit, .op = @intCast(rep.log.items.len) });
         } else sim.start_view_change(r, rep.view + 1);
     }
 
@@ -800,15 +814,18 @@ const Simulator = struct {
         const rep = &sim.replicas[r];
         const st = &sim.storages[r];
         var log = rep.log;
-        log.clearRetainingCapacity();
-        log.appendSlice(sim.gpa, st.log.items) catch oom();
-        rep.* = .{ .log = log, .view = st.view, .log_view = st.log_view };
-        rep.stability = sim.options.restart_stability;
-        hash_ints(&sim.trace, .{ sim.now, r, 0x0B0B });
+        sim.set_log(&log, st.log.items);
         // The state machine restarts empty (commit=0) and re-executes the log as the replica
         // learns the commit number again. The state checker sees those as repeat commits.
-        rep.durable_op = @intCast(rep.log.items.len);
-        rep.timeout = sim.normal_timeout();
+        rep.* = .{
+            .log = log,
+            .view = st.view,
+            .log_view = st.log_view,
+            .durable_op = @intCast(log.items.len),
+            .timeout = sim.normal_timeout(),
+            .stability = sim.options.restart_stability,
+        };
+        hash_ints(&sim.trace, .{ sim.now, r, 0x0B0B });
         if (rep.log_view != rep.view) { // Crashed mid view change.
             rep.status = .view_change;
             rep.svc_votes = @as(u8, 1) << @intCast(r);
@@ -860,11 +877,11 @@ const Simulator = struct {
             if (sim.options.partition_symmetric or side[a]) sim.partitioned[a][b] = true;
         };
         sim.partition_active = true;
-        var bits: u8 = 0;
-        for (side[0..sim.n()], 0..) |s, i| bits |= @as(u8, @intFromBool(s)) << @intCast(i);
-        hash_ints(&sim.trace, .{ sim.now, bits, 0x9A97 });
+        var bits: std.bit_set.Integer(replicas_max) = .empty;
+        for (side[0..sim.n()], 0..) |s, i| bits.setValue(i, s);
+        hash_ints(&sim.trace, .{ sim.now, bits.mask, 0x9A97 });
         if (sim.verbose) std.debug.print("{d:>6}    partition side={b:0>5} {s}\n", .{
-            sim.now, bits, if (sim.options.partition_symmetric) "symmetric" else "asymmetric",
+            sim.now, bits.mask, if (sim.options.partition_symmetric) "symmetric" else "asymmetric",
         });
     }
 
@@ -888,7 +905,6 @@ const Simulator = struct {
             const to = (from + 1 + sim.random.uintLessThan(u8, accounts - 1)) % accounts;
             const m: Message = .{
                 .command = .request,
-                .from = sim.n() + c,
                 .client = c,
                 .request = cl.request_next,
                 .transfer = .{ .from = from, .to = to, .amount = sim.random.intRangeAtMost(u32, 1, 80) },
@@ -1088,9 +1104,6 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--bug-view-change-log")) bug_view_change_log = true;
         if (std.mem.eql(u8, arg, "--events")) trace_events = true;
     }
-    const flags = if (bug_commit_early and bug_view_change_log)
-        " --bug-commit-early --bug-view-change-log"
-    else if (bug_commit_early) " --bug-commit-early" else if (bug_view_change_log) " --bug-view-change-log" else "";
 
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(init.gpa, count, true);
@@ -1107,7 +1120,11 @@ pub fn main(init: std.process.Init) !void {
         const r = run_seed(init.gpa, seed, false);
         if (!r.ok) {
             std.debug.print("FAIL at seed={d} after {d} seeds: {s}\nReplay with:\n", .{ seed, seed + 1, r.reason() });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed,
+                if (bug_commit_early) " --bug-commit-early" else "",
+                if (bug_view_change_log) " --bug-view-change-log" else "",
+            });
             std.process.exit(1);
         }
     }

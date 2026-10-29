@@ -46,7 +46,8 @@ var verbose_sectors = false;
 const sector_size = 64;
 const sector_count = 4096; // 256 KiB disk
 const header_size = 32;
-const value_max = 3 * sector_size - header_size; // largest value that fits in 3 sectors
+const record_size_max = 3 * sector_size;
+const value_max = record_size_max - header_size; // largest value that fits in 3 sectors
 const key_count = 8;
 const batch_max = 4; // most puts the store will group under one fsync
 
@@ -70,11 +71,6 @@ fn event(tag: u8, a: u64, b: u64) void {
 
 const CachedSector = struct { sector: u32, data: [sector_size]u8 };
 
-/// `--sectors` only: what the last crash did to each cached sector, in cache order.
-var crash_log: [batch_max * 3]struct { sector: u32, applied: bool } = undefined;
-var crash_log_len: usize = 0;
-var crash_keep_percent: u8 = 0;
-
 const Disk = struct {
     /// Survives a crash. Starts full of random bytes (like TigerBeetle's testing Storage, which
     /// fills never-written sectors with PRNG bytes) so that stale data looks like noise rather
@@ -83,6 +79,15 @@ const Disk = struct {
     /// Written but not yet durable, oldest first. Lost or torn on crash.
     cache: std.ArrayList(CachedSector) = .empty,
     random: std.Random,
+    /// The fields below are only printed by --sectors (they draw nothing and touch no trace).
+    /// What the last crash did to each cached sector, in cache order.
+    last_crash: struct {
+        keep_percent: u8 = 0,
+        len: usize = 0,
+        sectors: [batch_max * record_size_max / sector_size]struct { sector: u32, applied: bool } = undefined,
+    } = .{},
+    /// Furthest byte the log has ever reached.
+    high_water: u64 = 0,
 
     fn write(disk: *Disk, gpa: std.mem.Allocator, offset: u64, bytes: []const u8) !void {
         assert(offset % sector_size == 0);
@@ -96,6 +101,7 @@ const Disk = struct {
             for (disk.cache.items) |c| assert(c.sector != sector);
             try disk.cache.append(gpa, .{ .sector = sector, .data = bytes[i..][0..sector_size].* });
         }
+        disk.high_water = @max(disk.high_water, offset + bytes.len);
     }
 
     /// Reads see the cache first (read-your-writes), then durable bytes.
@@ -139,19 +145,16 @@ const Disk = struct {
     fn crash(disk: *Disk) struct { applied: usize, dropped: usize } {
         const keep_percent = disk.random.uintAtMost(u8, 100);
         var applied: usize = 0;
-        crash_log_len = 0;
-        for (disk.cache.items) |c| {
+        disk.last_crash.keep_percent = keep_percent;
+        disk.last_crash.len = disk.cache.items.len;
+        for (disk.cache.items, disk.last_crash.sectors[0..disk.cache.items.len]) |c, *log| {
             const keep = disk.random.uintLessThan(u8, 100) < keep_percent;
             if (keep) {
                 disk.apply(c);
                 applied += 1;
             }
-            if (verbose_sectors) {
-                crash_log[crash_log_len] = .{ .sector = c.sector, .applied = keep };
-                crash_log_len += 1;
-            }
+            log.* = .{ .sector = c.sector, .applied = keep };
         }
-        if (verbose_sectors) crash_keep_percent = keep_percent;
         const dropped = disk.cache.items.len - applied;
         disk.cache.clearRetainingCapacity();
         return .{ .applied = applied, .dropped = dropped };
@@ -200,6 +203,23 @@ fn encode(buffer: []u8, parent: u64, r: *const Record) u64 {
     return checksum;
 }
 
+const Header = struct { checksum: u64, parent: u64, seq: u64, key: u8, len: u8 };
+
+fn decode_header(bytes: *const [header_size]u8) Header {
+    return .{
+        .checksum = std.mem.readInt(u64, bytes[0..8], .little),
+        .parent = std.mem.readInt(u64, bytes[8..16], .little),
+        .seq = std.mem.readInt(u64, bytes[16..24], .little),
+        .key = bytes[24],
+        .len = bytes[25],
+    };
+}
+
+/// `buffer` holds the whole record whose header is `header`.
+fn checksum_ok(buffer: []const u8, header: Header) bool {
+    return record_checksum(buffer[8 .. header_size + header.len]) == header.checksum;
+}
+
 const Store = struct {
     // Everything here is volatile: rebuilt from the disk by recover() after every crash.
     log_end: u64 = 0,
@@ -214,7 +234,7 @@ const Store = struct {
     stop: []const u8 = "",
 
     fn full(store: *const Store) bool {
-        return store.log_end + 3 * sector_size > sector_count * sector_size;
+        return store.log_end + record_size_max > sector_count * sector_size;
     }
 
     /// Append a record to the log. With the bug, ack right away (data only in volatile cache!).
@@ -223,7 +243,7 @@ const Store = struct {
         assert(store.fsync_done_at == null);
         assert(store.batch_len < batch_max);
         assert(r.seq == store.next_seq);
-        var buffer: [3 * sector_size]u8 = undefined;
+        var buffer: [record_size_max]u8 = undefined;
         const size = Record.sectors(r.len) * sector_size;
         store.last_checksum = encode(buffer[0..size], store.last_checksum, &r);
         try disk.write(gpa, store.log_end, buffer[0..size]);
@@ -259,57 +279,36 @@ const Store = struct {
         assert(disk.cache.items.len == 0); // a crash empties the cache
         var store: Store = .{};
         out.clearRetainingCapacity();
-        while (true) {
-            if (store.log_end + sector_size > disk.durable.len) {
-                store.stop = "end of disk";
-                break;
-            }
-            var buffer: [3 * sector_size]u8 = undefined;
+        // Each iteration replays one record or yields why the replay stops.
+        store.stop = while (true) {
+            if (store.log_end + sector_size > disk.durable.len) break "end of disk";
+            var buffer: [record_size_max]u8 = undefined;
             disk.read(store.log_end, buffer[0..sector_size]);
-            const checksum = std.mem.readInt(u64, buffer[0..8], .little);
-            const parent = std.mem.readInt(u64, buffer[8..16], .little);
-            const seq = std.mem.readInt(u64, buffer[16..24], .little);
-            const key = buffer[24];
-            const len = buffer[25];
+            const h = decode_header(buffer[0..header_size]);
             // Validate what can be checked without trusting `len` too far.
-            if (seq != store.next_seq) {
-                store.stop = "unexpected seq (never written, or header sector lost)";
-                break;
-            }
-            if (len == 0 or len > value_max or key >= key_count) {
-                store.stop = "bad len/key";
-                break;
-            }
-            const size = Record.sectors(len) * sector_size;
-            if (store.log_end + size > disk.durable.len) {
-                store.stop = "record past end of disk";
-                break;
-            }
+            if (h.seq != store.next_seq) break "unexpected seq (never written, or header sector lost)";
+            if (h.len == 0 or h.len > value_max or h.key >= key_count) break "bad len/key";
+            const size = Record.sectors(h.len) * sector_size;
+            if (store.log_end + size > disk.durable.len) break "record past end of disk";
             disk.read(store.log_end, buffer[0..size]);
             if (!bug_no_checksum) {
                 // The checksum proves every byte of the record was written by the same append.
                 // A torn record (new header, stale payload) fails here.
-                if (record_checksum(buffer[8 .. header_size + len]) != checksum) {
-                    store.stop = "checksum mismatch (TORN record)";
-                    break;
-                }
+                if (!checksum_ok(&buffer, h)) break "checksum mismatch (TORN record)";
                 // The hash chain rejects a stale but intact record left behind by an earlier
                 // life of the log, whose seq happens to be the next one expected.
-                if (parent != store.last_checksum) {
-                    store.stop = "parent mismatch (stale record from an earlier life)";
-                    break;
-                }
+                if (h.parent != store.last_checksum) break "parent mismatch (stale record from an earlier life)";
             }
             // BUG (--bug-no-checksum): seq, key and len look fine, so the header is trusted and
             // whatever bytes sit in the payload sectors are replayed as the value.
-            var r: Record = .{ .seq = seq, .key = key, .len = len, .value = undefined };
-            @memcpy(r.value[0..len], buffer[header_size..][0..len]);
+            var r: Record = .{ .seq = h.seq, .key = h.key, .len = h.len, .value = undefined };
+            @memcpy(r.value[0..h.len], buffer[header_size..][0..h.len]);
             try out.append(gpa, r);
-            store.table[key] = r;
-            store.last_checksum = checksum;
+            store.table[h.key] = r;
+            store.last_checksum = h.checksum;
             store.next_seq += 1;
             store.log_end += size;
-        }
+        };
         return store;
     }
 };
@@ -380,30 +379,28 @@ fn print_sectors(
     before: *const Store,
     after: *const Store,
     recovered: []const Record,
-    high_water: u64,
 ) void {
     const p = std.debug.print;
     // The batch appended since the last fsync sits back to back, ending at the old log_end.
     var offset = before.log_end;
     for (before.batch[0..before.batch_len]) |*r| offset -= Record.sectors(r.len) * sector_size;
-    p("  | unsynced (keep {d}%):", .{crash_keep_percent});
+    p("  | unsynced (keep {d}%):", .{disk.last_crash.keep_percent});
     for (before.batch[0..before.batch_len]) |*r| {
         const n = Record.sectors(r.len);
         p(" seq={d}@{d}+{d}", .{ r.seq, offset / sector_size, n });
         offset += n * sector_size;
     }
     p("\n  | cache:", .{});
-    for (crash_log[0..crash_log_len]) |c| p(" {d}={s}", .{ c.sector, if (c.applied) "kept" else "dropped" });
+    for (disk.last_crash.sectors[0..disk.last_crash.len]) |c| p(" {d}={s}", .{ c.sector, if (c.applied) "kept" else "dropped" });
     // The last few replayed records, each re-checked against its checksum on disk.
     p("\n  | scan: {d} records in sectors [0,{d}); last:", .{ recovered.len, after.log_end / sector_size });
-    var buffer: [3 * sector_size]u8 = undefined;
+    var buffer: [record_size_max]u8 = undefined;
     offset = 0;
     for (recovered, 0..) |*r, i| {
         const size = Record.sectors(r.len) * sector_size;
         if (i + 4 >= recovered.len) {
             disk.read(offset, buffer[0..size]);
-            const ok = record_checksum(buffer[8 .. header_size + r.len]) ==
-                std.mem.readInt(u64, buffer[0..8], .little);
+            const ok = checksum_ok(&buffer, decode_header(buffer[0..header_size]));
             p(" seq={d}@{d}+{d}:{s}", .{ r.seq, offset / sector_size, size / sector_size, if (ok) "crc_ok" else "crc_BAD" });
         }
         offset += size;
@@ -412,24 +409,19 @@ fn print_sectors(
     p("\n  | stop @{d}:", .{after.log_end / sector_size});
     if (after.log_end + sector_size <= disk.durable.len) {
         disk.read(after.log_end, buffer[0..sector_size]);
-        const len = buffer[25];
-        p(" seq={d} want={d} key={d} len={d}", .{
-            std.mem.readInt(u64, buffer[16..24], .little), after.next_seq, buffer[24], len,
-        });
-        const size = Record.sectors(len) * sector_size;
-        if (len > 0 and len <= value_max and after.log_end + size <= disk.durable.len) {
+        const h = decode_header(buffer[0..header_size]);
+        p(" seq={d} want={d} key={d} len={d}", .{ h.seq, after.next_seq, h.key, h.len });
+        const size = Record.sectors(h.len) * sector_size;
+        if (h.len > 0 and h.len <= value_max and after.log_end + size <= disk.durable.len) {
             disk.read(after.log_end, buffer[0..size]);
             p(" checksum={x:0>16} computed={x:0>16} parent={x:0>16} want={x:0>16}", .{
-                std.mem.readInt(u64, buffer[0..8], .little),
-                record_checksum(buffer[8 .. header_size + len]),
-                std.mem.readInt(u64, buffer[8..16], .little),
-                after.last_checksum,
+                h.checksum, record_checksum(buffer[8 .. header_size + h.len]), h.parent, after.last_checksum,
             });
         }
         p("\n  | bytes:", .{});
         for (buffer[0..header_size]) |b| p(" {x:0>2}", .{b});
     }
-    p("\n  | high water: sector {d}\n", .{high_water / sector_size});
+    p("\n  | high water: sector {d}\n", .{disk.high_water / sector_size});
 }
 
 fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
@@ -458,7 +450,6 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
     var crashes: u32 = 0;
     var tick: u64 = 0;
     var ok = true;
-    var high_water: u64 = 0; // furthest byte the log has ever reached (only printed by --sectors)
 
     while (tick < ticks_per_seed) : (tick += 1) {
         disk.tick();
@@ -466,7 +457,7 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
         // A crash can land anywhere: between append and fsync, during fsync, right after an ack.
         if (random.uintLessThan(u32, crash_one_in) == 0) {
             crashes += 1;
-            const before = store; // only read by --sectors
+            const before: ?Store = if (verbose and verbose_sectors) store else null;
             const c = disk.crash();
             event('C', c.applied, c.dropped);
             store = try Store.recover(gpa, &disk, &recovered);
@@ -479,7 +470,7 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
                     recovered.items.len, acked.items.len, in_flight.items.len, store.stop,
                 },
             );
-            if (verbose and verbose_sectors) print_sectors(&disk, &before, &store, recovered.items, high_water);
+            if (before) |*b| print_sectors(&disk, b, &store, recovered.items);
             if (!try check_recovery(gpa, verbose, &acked, in_flight.items, recovered.items, &store)) {
                 ok = false;
                 break;
@@ -524,7 +515,6 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
             random.bytes(r.value[0..r.len]);
             event('P', r.seq, r.len);
             const acked_now = try store.put(gpa, &disk, r);
-            high_water = @max(high_water, store.log_end);
             if (acked_now) {
                 try acked.append(gpa, r);
                 event('A', r.seq, 1);
@@ -559,15 +549,6 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(2);
         }
     }
-    const flags: []const u8 = if (bug_ack_before_fsync and bug_no_checksum)
-        " --bug-ack-before-fsync --bug-no-checksum"
-    else if (bug_ack_before_fsync)
-        " --bug-ack-before-fsync"
-    else if (bug_no_checksum)
-        " --bug-no-checksum"
-    else
-        "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = try run_seed(gpa, n, true);
         std.debug.print("seed={d} crashes={d} acked={d} trace={x:0>16} {s}\n", .{
@@ -582,7 +563,11 @@ pub fn main(init: std.process.Init) !void {
         const r = try run_seed(gpa, seed, false);
         if (!r.ok) {
             std.debug.print("FAIL at seed={d} after {d} seeds. Replay with:\n", .{ seed, seed + 1 });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed,
+                if (bug_ack_before_fsync) " --bug-ack-before-fsync" else "",
+                if (bug_no_checksum) " --bug-no-checksum" else "",
+            });
             std.process.exit(1);
         }
     }

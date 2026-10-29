@@ -17,7 +17,6 @@ var bug_enabled = false;
 /// --dump prints every step's inputs, --uniform swaps in a uniform generator (exercise 1).
 var dump_enabled = false;
 var uniform_enabled = false;
-var last_roll: u8 = 0; // Bucket roll of the last gen_value (100 = uniform). Only printed by --dump.
 
 /// System under test.
 fn average(a: u32, b: u32) u32 {
@@ -32,17 +31,16 @@ fn average(a: u32, b: u32) u32 {
 /// Biased generator. Uniform random u32s hit the bug half the time, which is unrealistic.
 /// Real bugs live at edges, so most values are small and a few are "interesting" (near max).
 /// This teaches the most important DST skill: generate the inputs that matter.
-fn gen_value(random: std.Random) u32 {
-    if (uniform_enabled) {
-        last_roll = 100;
-        return random.int(u32);
-    }
-    last_roll = random.uintLessThan(u8, 100);
-    return switch (last_roll) {
+/// Returns the bucket roll (100 = uniform; only printed by --dump) and the value.
+fn gen_value(random: std.Random) struct { u8, u32 } {
+    if (uniform_enabled) return .{ 100, random.int(u32) };
+    const roll = random.uintLessThan(u8, 100);
+    const value = switch (roll) {
         0...97 => random.uintAtMost(u32, 1_000_000), // typical
         98 => random.int(u32), // anywhere
         else => std.math.maxInt(u32) - random.uintAtMost(u32, 16), // edge
     };
+    return .{ roll, value };
 }
 
 const Result = struct { ok: bool, trace_hash: u64, steps: u32 };
@@ -56,10 +54,8 @@ fn run_seed(seed: u64, verbose: bool) Result {
     const steps: u32 = 1 + random.uintLessThan(u32, 8);
     var i: u32 = 0;
     while (i < steps) : (i += 1) {
-        const a = gen_value(random);
-        const roll_a = last_roll;
-        const b = gen_value(random);
-        const roll_b = last_roll;
+        const roll_a, const a = gen_value(random);
+        const roll_b, const b = gen_value(random);
         const got = average(a, b);
         // Oracle: compute the obviously-correct answer in a wider type.
         const want: u32 = @intCast((@as(u64, a) + @as(u64, b)) / 2);

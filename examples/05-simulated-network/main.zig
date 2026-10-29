@@ -59,12 +59,6 @@ fn log(tick: u64, comptime fmt: []const u8, args: anytype) void {
     if (verbose) std.debug.print("  [{d:>5}] " ++ fmt ++ "\n", .{tick} ++ args);
 }
 
-fn log_packet(tick: u64, comptime what: []const u8, path: Path, p: LinkPacket, comptime fmt: []const u8, args: anytype) void {
-    if (verbose_packets) log(tick, "pkt: " ++ what ++ " seq={d} {d}->{d} {s} c{d} r{d}" ++ fmt, .{
-        p.sequence, path.source, path.target, @tagName(p.message.command), p.message.client, p.message.request,
-    } ++ args);
-}
-
 const clients_max = 4;
 const process_count_max = clients_max + 1;
 const requests_per_client_max = 30;
@@ -105,6 +99,9 @@ const NetworkOptions = struct {
 };
 
 const LinkPacket = struct { ready_at: u64, sequence: u64, message: Message };
+
+/// What happened to a packet. The value is the tag folded into the trace.
+const PacketEvent = enum(u8) { send = 1, capacity_drop = 2, lost = 3, replay = 4, deliver = 5 };
 
 /// Key = delivery tick. Ties are broken by a send sequence number so the order is a total order
 /// that depends only on what happened, never on heap internals.
@@ -190,9 +187,7 @@ const Network = struct {
             // Full buffer: drop a random in-flight packet (not necessarily the oldest).
             const index = network.prng.random().uintLessThan(usize, link.queue.count());
             const dropped = link.queue.popIndex(index);
-            network.stats.capacity_dropped += 1;
-            dropped.message.fold(2);
-            log_packet(network.ticks, "capacity_drop", path, dropped, "", .{});
+            network.packet_event(.capacity_drop, path, dropped, "", .{});
             log(network.ticks, "net: path {d}->{d} full, dropped {s} c{d} r{d}", .{
                 path.source, path.target, @tagName(dropped.message.command), dropped.message.client, dropped.message.request,
             });
@@ -205,9 +200,7 @@ const Network = struct {
             .message = message,
         };
         link.queue.push(network.gpa, packet) catch unreachable; // capacity was reserved in init()
-        log_packet(network.ticks, "send", path, packet, " delay={d} ready_at={d} queued={d}", .{ delay, packet.ready_at, link.queue.count() });
-        network.stats.sent += 1;
-        message.fold(1);
+        network.packet_event(.send, path, packet, " delay={d} ready_at={d} queued={d}", .{ delay, packet.ready_at, link.queue.count() });
     }
 
     /// Pop the next deliverable message on `path`, applying loss and replay, or null if nothing
@@ -220,21 +213,31 @@ const Network = struct {
             if (top.ready_at > network.ticks) return null;
             _ = link.queue.pop();
             if (network.chance_percent(network.options.packet_loss_percent)) {
-                network.stats.lost += 1;
-                top.message.fold(3);
-                log_packet(network.ticks, "lost", path, top, "", .{});
+                network.packet_event(.lost, path, top, "", .{});
                 continue;
             }
             if (network.chance_percent(network.options.packet_replay_percent)) {
-                network.stats.replayed += 1;
-                top.message.fold(4);
-                log_packet(network.ticks, "replay", path, top, "", .{});
+                network.packet_event(.replay, path, top, "", .{});
                 network.submit(path, top.message); // the copy arrives again, later
             }
-            top.message.fold(5);
-            log_packet(network.ticks, "deliver", path, top, "", .{});
+            network.packet_event(.deliver, path, top, "", .{});
             return top.message;
         }
+    }
+
+    /// Count the event, fold it into the trace and, with --packets, log it.
+    fn packet_event(network: *Network, comptime kind: PacketEvent, path: Path, p: LinkPacket, comptime fmt: []const u8, args: anytype) void {
+        switch (kind) {
+            .send => network.stats.sent += 1,
+            .capacity_drop => network.stats.capacity_dropped += 1,
+            .lost => network.stats.lost += 1,
+            .replay => network.stats.replayed += 1,
+            .deliver => {},
+        }
+        p.message.fold(@backingInt(kind));
+        if (verbose_packets) log(network.ticks, "pkt: " ++ @tagName(kind) ++ " seq={d} {d}->{d} {s} c{d} r{d}" ++ fmt, .{
+            p.sequence, path.source, path.target, @tagName(p.message.command), p.message.client, p.message.request,
+        } ++ args);
     }
 
     /// Like testing/cluster/network.zig transition_to_liveness_mode(): no more loss or replay,
@@ -321,7 +324,6 @@ const Client = struct {
     inflight: ?Message = null,
     deadline: u64 = 0,
     attempts: u32 = 0,
-    replies: u32 = 0,
 
     /// Exponential backoff with jitter, like vsr.Timeout.backoff() in vsr/client.zig.
     fn timeout(client: *Client) u64 {
@@ -365,13 +367,17 @@ const Client = struct {
         if (reply.request < inflight.request) return;
         assert(reply.request == inflight.request);
         client.inflight = null;
-        client.replies += 1;
         trace_event(12, client.index, reply.request, reply.balance);
         log(now, "client {d}: reply r{d} balance={d}", .{ client.index, reply.request, reply.balance });
     }
 
+    /// Replies received so far: every issued request except the one still in flight.
+    fn replies(client: *const Client) u32 {
+        return client.request_number - @intFromBool(client.inflight != null);
+    }
+
     fn done(client: *const Client) bool {
-        return client.replies == client.requests_total;
+        return client.replies() == client.requests_total;
     }
 };
 
@@ -543,7 +549,7 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose_: bool) !Result {
     while (!sim.all_done()) {
         if (sim.network.ticks - convergence_start >= ticks_max_convergence) {
             for (sim.clients[0..client_count]) |*client| if (!client.done()) {
-                log(sim.network.ticks, "LIVENESS VIOLATED: client {d} has {d}/{d} replies", .{ client.index, client.replies, client.requests_total });
+                log(sim.network.ticks, "LIVENESS VIOLATED: client {d} has {d}/{d} replies", .{ client.index, client.replies(), client.requests_total });
             };
             return .{ .ok = false, .trace_hash = trace.final(), .ticks = sim.network.ticks };
         }
@@ -575,15 +581,6 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(2);
         }
     }
-    const flags: []const u8 = if (bug_no_dedup and bug_reply_stale)
-        " --bug-no-dedup --bug-reply-stale"
-    else if (bug_no_dedup)
-        " --bug-no-dedup"
-    else if (bug_reply_stale)
-        " --bug-reply-stale"
-    else
-        "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = try run_seed(init.gpa, n, true);
         std.debug.print("seed={d} ticks={d} trace={x:0>16} {s}\n", .{
@@ -598,7 +595,11 @@ pub fn main(init: std.process.Init) !void {
         const r = try run_seed(init.gpa, seed, false);
         if (!r.ok) {
             std.debug.print("FAIL at seed={d} after {d} seeds. Replay with:\n", .{ seed, seed + 1 });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed,
+                if (bug_no_dedup) " --bug-no-dedup" else "",
+                if (bug_reply_stale) " --bug-reply-stale" else "",
+            });
             std.process.exit(1);
         }
     }

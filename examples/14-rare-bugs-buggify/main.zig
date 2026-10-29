@@ -139,7 +139,7 @@ const Flush = struct { id: u32, offset: u32, count: u8, deadline: u64, after_sho
 
 const MsgKind = enum(u8) { request, ack };
 const Msg = struct {
-    deliver_at: u64,
+    deliver_at: u64 = 0, // set by `net_send`
     epoch: u32, // connection incarnation; a reset kills all messages of the old one
     kind: MsgKind,
     id: u32,
@@ -281,6 +281,11 @@ const Sim = struct {
         return true;
     }
 
+    fn take_id(sim: *Sim) u32 {
+        defer sim.next_id += 1;
+        return sim.next_id;
+    }
+
     fn hit(sim: *Sim, path: Path) void {
         sim.hits[@backingInt(path)] += 1;
     }
@@ -324,13 +329,14 @@ const Sim = struct {
         return sim.net_prng.random().intRangeAtMost(u64, 4, 20);
     }
 
-    fn net_send(sim: *Sim, msg: Msg) void {
+    /// `extra` ticks are added to the network's delay.
+    fn net_send(sim: *Sim, msg: Msg, extra: u64) void {
         var m = msg;
         const delay = sim.env_delay(m.kind) orelse {
             sim.event(.lost, m.id, @backingInt(m.kind), 0);
             return;
         };
-        m.deliver_at = sim.tick + delay;
+        m.deliver_at = sim.tick + delay + extra;
         assert(sim.msgs_len < msgs_max);
         sim.msgs[sim.msgs_len] = m;
         sim.msgs_len += 1;
@@ -381,8 +387,9 @@ const Sim = struct {
         while (sim.contiguous < records_max and sim.disk[sim.contiguous] == sim.contiguous) sim.contiguous += 1;
         sim.event(.write, m.offset, n, m.count);
 
-        var ack: Msg = .{
-            .deliver_at = 0,
+        // BUGGIFY in the reply path: a slow ack (GC pause, slow fsync, busy event loop).
+        const extra: u64 = if (sim.buggify(.delay_ack)) sim.bug_prng.random().intRangeAtMost(u64, 10, 20) else 0;
+        sim.net_send(.{
             .epoch = m.epoch,
             .kind = .ack,
             .id = m.id,
@@ -390,20 +397,7 @@ const Sim = struct {
             .count = m.count,
             .written = n,
             .records = undefined,
-        };
-        // BUGGIFY in the reply path: a slow ack (GC pause, slow fsync, busy event loop).
-        if (sim.buggify(.delay_ack)) {
-            ack.deliver_at = sim.bug_prng.random().intRangeAtMost(u64, 10, 20);
-        }
-        const extra = ack.deliver_at;
-        const delay = sim.env_delay(.ack) orelse {
-            sim.event(.lost, ack.id, @backingInt(MsgKind.ack), 0);
-            return;
-        };
-        ack.deliver_at = sim.tick + delay + extra;
-        assert(sim.msgs_len < msgs_max);
-        sim.msgs[sim.msgs_len] = ack;
-        sim.msgs_len += 1;
+        }, extra);
     }
 
     // ---- Production code: the application and the batching writer -----------------------------
@@ -449,8 +443,7 @@ const Sim = struct {
             sim.hit(.timeout_in_flush);
             if (flush.after_short) sim.hit(.short_retry_then_timeout);
             sim.event(.timeout, flush.id, 0, 0);
-            flush.id = sim.next_id;
-            sim.next_id += 1;
+            flush.id = sim.take_id();
             // Resend the flush we are waiting on, to the offset recorded in it.
             sim.send_request(flush.offset, .resend);
             return;
@@ -458,13 +451,12 @@ const Sim = struct {
         if (!sim.conn_up or sim.buf_len == 0) return;
         if (sim.buf_len < sim.options.batch_max and sim.tick < sim.linger_until) return;
         sim.flush = .{
-            .id = sim.next_id,
+            .id = sim.take_id(),
             .offset = sim.base,
             .count = @min(sim.buf_len, sim.options.batch_max),
             .deadline = 0,
             .after_short = false,
         };
-        sim.next_id += 1;
         sim.send_request(sim.base, .first);
     }
 
@@ -479,7 +471,6 @@ const Sim = struct {
             return;
         }
         var m: Msg = .{
-            .deliver_at = 0,
             .epoch = sim.epoch,
             .kind = .request,
             .id = flush.id,
@@ -489,7 +480,7 @@ const Sim = struct {
             .records = undefined,
         };
         @memcpy(m.records[0..flush.count], sim.buf[0..flush.count]);
-        sim.net_send(m);
+        sim.net_send(m, 0);
     }
 
     fn connection_reset(sim: *Sim) void {
@@ -505,16 +496,13 @@ const Sim = struct {
     }
 
     fn writer_on_ack(sim: *Sim, m: *const Msg) void {
-        const flush = if (sim.flush) |*f| f else {
-            sim.event(.stale_ack, m.id, m.written, 0);
-            return;
-        };
-        if (m.id != flush.id) {
-            // An ack of an attempt we already gave up on (timed out). Ignoring it is safe:
-            // the current attempt covers the same records.
+        if (sim.flush == null or m.id != sim.flush.?.id) {
+            // No flush in progress, or an ack of an attempt we already gave up on (timed out).
+            // Ignoring it is safe: the current attempt covers the same records.
             sim.event(.stale_ack, m.id, m.written, 0);
             return;
         }
+        const flush = &sim.flush.?;
         const written = m.written;
         assert(written >= 1 and written <= flush.count);
         // Records [base, base + written) are durable: drop them and free buffer space.
@@ -542,8 +530,7 @@ const Sim = struct {
         // `base`); only the timeout path in writer_tick reads flush.offset.
         if (!bug_stale_offset) flush.offset += written;
         flush.after_short = true;
-        flush.id = sim.next_id;
-        sim.next_id += 1;
+        flush.id = sim.take_id();
         sim.send_request(sim.base, .retry);
     }
 
@@ -665,12 +652,12 @@ const Sim = struct {
 
     fn print_paths(sim: *const Sim) void {
         std.debug.print("paths:", .{});
-        for (sim.hits, 0..) |h, i| std.debug.print(" {s}={d}", .{ @tagName(@as(Path, @fromBackingInt(@intCast(i)))), h });
+        for (sim.hits, std.enums.values(Path)) |h, path| std.debug.print(" {s}={d}", .{ @tagName(path), h });
         std.debug.print("\n", .{});
         if (!buggify_enabled) return;
         std.debug.print("buggify fired:", .{});
-        for (sim.fired, 0..) |f, i| {
-            if (sim.active[i]) std.debug.print(" {s}={d}", .{ @tagName(@as(Point, @fromBackingInt(@intCast(i)))), f });
+        for (sim.fired, sim.active, std.enums.values(Point)) |f, active, point| {
+            if (active) std.debug.print(" {s}={d}", .{ @tagName(point), f });
         }
         std.debug.print("\n", .{});
     }
@@ -693,8 +680,8 @@ fn run_seed(seed: u64, verbose: bool, stats: ?*Stats) Result {
         if (buggify_enabled) {
             std.debug.print("  buggify: active =", .{});
             var any = false;
-            for (sim.active, 0..) |a, i| if (a) {
-                std.debug.print(" {s}", .{@tagName(@as(Point, @fromBackingInt(@intCast(i))))});
+            for (sim.active, std.enums.values(Point)) |a, point| if (a) {
+                std.debug.print(" {s}", .{@tagName(point)});
                 any = true;
             };
             std.debug.print("{s} (each fires with probability 1/4 when reached)\n", .{if (any) "" else " (none)"});
@@ -856,14 +843,14 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     // Rare-path frequencies over the seeds that ran: total hits, and seeds with at least one hit.
-    for (0..path_count) |p| {
+    for (stats.hits, stats.seeds, std.enums.values(Path)) |hits, seeds, path| {
         std.debug.print("path {s} hits={d} seeds={d} of={d}\n", .{
-            @tagName(@as(Path, @fromBackingInt(@intCast(p)))), stats.hits[p], stats.seeds[p], i,
+            @tagName(path), hits, seeds, i,
         });
     }
-    if (buggify_enabled) for (0..point_count) |p| {
+    if (buggify_enabled) for (stats.active, stats.fired, std.enums.values(Point)) |active, fired, point| {
         std.debug.print("buggify {s} active_seeds={d} fired={d} of={d}\n", .{
-            @tagName(@as(Point, @fromBackingInt(@intCast(p)))), stats.active[p], stats.fired[p], i,
+            @tagName(point), active, fired, i,
         });
     };
     if (failed) |f| {

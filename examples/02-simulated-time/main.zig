@@ -53,6 +53,10 @@ const TimeSim = struct {
 
     fn vtable_monotonic_ms(context: *anyopaque) u64 {
         const self: *TimeSim = @ptrCast(@alignCast(context));
+        return self.now_ms();
+    }
+
+    fn now_ms(self: *const TimeSim) u64 {
         return self.ticks * tick_ms;
     }
 
@@ -202,7 +206,7 @@ fn run_seed(seed: u64, verbose: bool) Result {
     const steps: u32 = 50 + random.uintLessThan(u32, 200);
     var step: u32 = 0;
     while (step < steps) : (step += 1) {
-        const now_ms = time_sim.ticks * TimeSim.tick_ms;
+        const now_ms = time_sim.now_ms();
         const key = random.uintLessThan(u8, key_count);
         var event = [4]u64{ 0, key, now_ms, 0 };
         var ok = true;
@@ -257,7 +261,7 @@ fn run_seed(seed: u64, verbose: bool) Result {
         if (dump_enabled) dump_step(seed, step, event, &cache);
         if (!ok) return .{ .ok = false, .trace_hash = trace.final(), .steps = step + 1, .sim_ms = now_ms };
     }
-    return .{ .ok = true, .trace_hash = trace.final(), .steps = steps, .sim_ms = time_sim.ticks * TimeSim.tick_ms };
+    return .{ .ok = true, .trace_hash = trace.final(), .steps = steps, .sim_ms = time_sim.now_ms() };
 }
 
 /// --dump line: seed, step, op (1 put, 2 get, 3 evict, 4+kind advance), key, now (before the

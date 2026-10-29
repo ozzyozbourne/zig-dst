@@ -71,8 +71,11 @@ const Task = struct {
     // what a callback-style program does with its context struct.
     seen_from: i64 = 0,
     seen_to: i64 = 0,
+
     /// Debited `from` but not yet credited `to`: money is legitimately "in the air".
-    in_flight: bool = false,
+    fn in_flight(task: *const Task) bool {
+        return task.pc == .write_to;
+    }
 
     fn current(task: *const Task) Transfer {
         assert(task.transfer_index < task.transfer_count);
@@ -128,6 +131,11 @@ const World = struct {
         task.pc = if (task.transfer_index == task.transfer_count) .done else Task.first_pc();
     }
 
+    /// Leave the critical section: release the locks, or (no locks) go straight to the next transfer.
+    fn end_critical_section(task: *Task) void {
+        if (bug_no_lock) finish_transfer(task) else task.pc = .unlock;
+    }
+
     /// Run ONE atomic slice of `task`, then yield back to the scheduler.
     fn step(world: *World, task: *Task) Event {
         assert(world.runnable(task));
@@ -150,7 +158,7 @@ const World = struct {
                 task.seen_to = world.balances[t.to];
                 if (task.seen_from < t.amount) {
                     // Insufficient funds: abort this transfer (still releasing the locks).
-                    if (bug_no_lock) finish_transfer(task) else task.pc = .unlock;
+                    end_critical_section(task);
                     return .{ .task = task.id, .pc = pc, .account = t.to, .value = -1 };
                 }
                 task.pc = .write_from;
@@ -160,14 +168,12 @@ const World = struct {
                 // Writes a value computed from a read made one or more yields ago. Without a
                 // lock, another task may have written in between: that is the lost update.
                 world.balances[t.from] = task.seen_from - t.amount;
-                task.in_flight = true;
                 task.pc = .write_to;
                 return .{ .task = task.id, .pc = pc, .account = t.from, .value = world.balances[t.from] };
             },
             .write_to => {
                 world.balances[t.to] = task.seen_to + t.amount;
-                task.in_flight = false;
-                if (bug_no_lock) finish_transfer(task) else task.pc = .unlock;
+                end_critical_section(task);
                 return .{ .task = task.id, .pc = pc, .account = t.to, .value = world.balances[t.to] };
             },
             .unlock => {
@@ -185,14 +191,12 @@ const World = struct {
     /// The invariant checker. Runs after every single step, so a violation is reported at the
     /// exact tick it happens rather than as a confusing wrong total at the end.
     fn check(world: *const World) ?Failure {
-        var sum: i64 = 0;
         for (world.balances[0..world.account_count]) |b| {
             if (b < 0) return .negative_balance;
-            sum += b;
         }
         var in_flight = false;
         for (world.tasks[0..world.task_count]) |*task| {
-            in_flight = in_flight or task.in_flight;
+            in_flight = in_flight or task.in_flight();
             // Lock discipline: in the locking designs, touching an account requires its lock.
             // (The --bug design has no locks, so it has no such assertion either — that is
             // precisely how the bug got written.)
@@ -205,8 +209,7 @@ const World = struct {
                 else => {},
             };
         }
-        const expected = initial_balance * @as(i64, world.account_count);
-        if (!in_flight and sum != expected) return .money_not_conserved;
+        if (!in_flight and world.total() != world.expected_total()) return .money_not_conserved;
         return null;
     }
 
@@ -214,6 +217,10 @@ const World = struct {
         var sum: i64 = 0;
         for (world.balances[0..world.account_count]) |b| sum += b;
         return sum;
+    }
+
+    fn expected_total(world: *const World) i64 {
+        return initial_balance * @as(i64, world.account_count);
     }
 };
 
@@ -313,9 +320,7 @@ fn run_seed(seed: u64, verbose: bool) Result {
         for (schedule[0..tick]) |id| std.debug.print(" {d}", .{id});
         std.debug.print("\nbalances:", .{});
         for (world.balances[0..world.account_count]) |b| std.debug.print(" {d}", .{b});
-        std.debug.print("  total={d} expected={d}\n", .{
-            world.total(), initial_balance * @as(i64, world.account_count),
-        });
+        std.debug.print("  total={d} expected={d}\n", .{ world.total(), world.expected_total() });
         if (failure) |f| {
             std.debug.print("FAILURE: {s} at tick {d}\n", .{ @tagName(f), tick });
             if (f == .deadlock) print_wait_for(&world);
@@ -331,14 +336,10 @@ fn print_event(tick: u32, e: Event) void {
             .{ tick, e.task, e.account },
         ),
         .unlock => std.debug.print("  t={d:>3} T{d} unlock\n", .{ tick, e.task }),
-        .read_to => if (e.value < 0) std.debug.print(
+        .read_from, .read_to => if (e.pc == .read_to and e.value < 0) std.debug.print(
             "  t={d:>3} T{d} insufficient funds, abort\n",
             .{ tick, e.task },
         ) else std.debug.print(
-            "  t={d:>3} T{d} read    acct{d} = {d}\n",
-            .{ tick, e.task, e.account, e.value },
-        ),
-        .read_from => std.debug.print(
             "  t={d:>3} T{d} read    acct{d} = {d}\n",
             .{ tick, e.task, e.account, e.value },
         ),
@@ -368,15 +369,6 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--bug")) bug_no_lock = true;
         if (std.mem.eql(u8, arg, "--bug-deadlock")) bug_deadlock = true;
     }
-    const flags: []const u8 = if (bug_no_lock and bug_deadlock)
-        " --bug --bug-deadlock"
-    else if (bug_no_lock)
-        " --bug"
-    else if (bug_deadlock)
-        " --bug-deadlock"
-    else
-        "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(n, true);
         std.debug.print("seed={d} ticks={d} trace={x:0>16} {s}\n", .{
@@ -393,7 +385,9 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("FAIL at seed={d} ({s}) after {d} seeds. Replay with:\n", .{
                 seed, @tagName(f), seed + 1,
             });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed, if (bug_no_lock) " --bug" else "", if (bug_deadlock) " --bug-deadlock" else "",
+            });
             std.process.exit(1);
         }
     }

@@ -68,6 +68,8 @@ const nodes_max = 5;
 const clients_max = 3;
 const addresses_max = nodes_max + clients_max; // clients are network addresses n..n+c-1
 const none: u8 = 0xff;
+/// A set of replicas, bit k = node k.
+const NodeSet = std.bit_set.Integer(nodes_max);
 
 // Protocol timing, in ticks.
 const election_timeout_mean = 30;
@@ -141,7 +143,7 @@ const Kind = enum(u8) {
 };
 
 const Message = struct {
-    deliver_at: u64,
+    deliver_at: u64 = 0, // set by send()
     from: u8,
     to: u8,
     kind: Kind,
@@ -179,7 +181,7 @@ const Node = struct {
     // Volatile: reset by a crash. The state machine is rebuilt by re-applying committed entries.
     role: Role = .follower,
     leader: u8 = none,
-    votes: u8 = 0, // bitset of nodes that granted us a vote in current_term
+    votes: NodeSet = .empty, // nodes that granted us a vote in current_term
     election_deadline: u64 = 0,
     next_heartbeat: u64 = 0,
     next_vote_retry: u64 = 0,
@@ -203,10 +205,6 @@ const Node = struct {
         return node.log.items.len;
     }
 
-    fn last_term(node: *const Node) u64 {
-        return if (node.log.items.len == 0) 0 else node.log.items[node.log.items.len - 1].term;
-    }
-
     fn term_at(node: *const Node, index: u64) u64 {
         return if (index == 0) 0 else node.log.items[index - 1].term;
     }
@@ -222,11 +220,7 @@ const Client = struct {
     submitted_at: u64 = 0,
     last_sent_at: u64 = 0,
     // Set by an `accepted` message; this is what the buggy client trusts too much.
-    accepted: bool = false,
-    accepted_by: u8 = none,
-    accepted_term: u64 = 0,
-    accepted_index: u64 = 0,
-    accepted_at: u64 = 0,
+    accepted: ?struct { by: u8, term: u64, index: u64, at: u64 } = null,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -238,9 +232,9 @@ const Failure = enum { none, election_safety, prefix_rewritten, no_stable_leader
 /// One record per term in which somebody stood for election (the election "rounds").
 const Round = struct {
     term: u64,
-    candidates: u8 = 0, // bitset
-    votes: [nodes_max]u8 = @splat(0), // per candidate: bitset of voters (itself included)
-    log_refused: u8 = 0, // voters that refused because the candidate's log was behind theirs
+    candidates: NodeSet = .empty,
+    votes: [nodes_max]NodeSet = @splat(.empty), // per candidate: its voters (itself included)
+    log_refused: NodeSet = .empty, // voters that refused because the candidate's log was behind theirs
     leader: u8 = none,
     first_tick: u64,
     last_tick: u64,
@@ -262,7 +256,7 @@ const Stats = struct {
     max_pending: u64 = 0, // longest a request has waited (ticks), at the end
 };
 
-const Result = struct { failure: Failure, trace_hash: u64, ticks: u64, stats: Stats, leaders: u64, committed: u64, nodes: u8, core: u8 };
+const Result = struct { failure: Failure, trace_hash: u64, ticks: u64, stats: Stats, nodes: u8, core: usize };
 
 const Simulator = struct {
     gpa: std.mem.Allocator,
@@ -283,7 +277,7 @@ const Simulator = struct {
     stability: u32 = 0,
 
     // Liveness phase.
-    core: u8 = 0, // bitset; 0 during the safety phase
+    core: NodeSet = .empty, // empty during the safety phase
     heal_tick: u64 = 0,
     stats: Stats = .{},
 
@@ -350,11 +344,11 @@ const Simulator = struct {
     }
 
     fn in_core(sim: *const Simulator, i: usize) bool {
-        return sim.core & (@as(u8, 1) << @intCast(i)) != 0;
+        return sim.core.isSet(i);
     }
 
     fn liveness_mode(sim: *const Simulator) bool {
-        return sim.core != 0;
+        return sim.core.mask != 0;
     }
 
     fn chance(prng: *std.Random.DefaultPrng, numerator: u32, denominator: u32) bool {
@@ -382,6 +376,20 @@ const Simulator = struct {
 
     fn event(sim: *Simulator, i: u8, ev: u8) void {
         const node = &sim.nodes[i];
+        // Election rounds (diagnosis only, never hashed): '?' stands, '*' wins, 'v' votes.
+        switch (ev) {
+            '?' => if (!sim.liveness_mode() or sim.in_core(i)) {
+                const round = sim.round_for(node.current_term);
+                round.candidates.set(i);
+                round.votes[i].set(i);
+                round.last_tick = sim.tick;
+            },
+            '*' => if (sim.round_find(node.current_term)) |round| {
+                round.leader = i;
+            },
+            'v' => if (sim.round_find(node.current_term)) |round| round.votes[node.voted_for].set(i),
+            else => {},
+        }
         var cluster: [nodes_max]u8 = undefined;
         var bits: u64 = 0;
         for (sim.nodes[0..sim.n()], 0..) |*x, k| {
@@ -410,35 +418,36 @@ const Simulator = struct {
     fn phase_event(sim: *Simulator, ev: u8) void {
         sim.hash(.{ sim.tick, 0xFA, ev });
         if (!sim.verbose) return;
-        var buf: [nodes_max * 2 + 1]u8 = undefined;
-        var len: usize = 0;
+        var a: [2 * nodes_max]u8 = undefined;
+        var b: [2 * nodes_max]u8 = undefined;
         if (ev == 'P') {
-            for (0..sim.n()) |k| if (sim.partition[k]) {
-                buf[len] = '0' + @as(u8, @intCast(k));
-                len += 1;
-            };
-            buf[len] = '|';
-            len += 1;
-            for (0..sim.n()) |k| if (!sim.partition[k]) {
-                buf[len] = '0' + @as(u8, @intCast(k));
-                len += 1;
-            };
-            std.debug.print("{d:>6} - P partition {s}\n", .{ sim.tick, buf[0..len] });
+            var side: NodeSet = .empty;
+            for (0..sim.n()) |k| side.setValue(k, sim.partition[k]);
+            std.debug.print("{d:>6} - P partition {s}|{s}\n", .{
+                sim.tick, sim.node_list(&a, side, ""), sim.node_list(&b, side.complement(), ""),
+            });
         } else if (ev == 'H') {
             std.debug.print("{d:>6} - H heal\n", .{sim.tick});
         } else {
-            for (0..sim.n()) |k| if (sim.in_core(k)) {
-                buf[len] = '0' + @as(u8, @intCast(k));
-                len += 1;
-            };
-            std.debug.print("{d:>6} - L liveness mode: core={s} (cut off for good: ", .{ sim.tick, buf[0..len] });
-            var any = false;
-            for (0..sim.n()) |k| if (!sim.in_core(k)) {
-                std.debug.print("{d}", .{k});
-                any = true;
-            };
-            std.debug.print("{s})\n", .{if (any) "" else "none"});
+            const cut = sim.node_list(&b, sim.core.complement(), "");
+            std.debug.print("{d:>6} - L liveness mode: core={s} (cut off for good: {s})\n", .{
+                sim.tick, sim.node_list(&a, sim.core, ""), if (cut.len == 0) "none" else cut,
+            });
         }
+    }
+
+    /// The members of `set` among this cluster's nodes, as digits joined by `sep`.
+    fn node_list(sim: *const Simulator, buf: *[2 * nodes_max]u8, set: NodeSet, sep: []const u8) []const u8 {
+        var len: usize = 0;
+        for (0..sim.n()) |k| if (set.isSet(k)) {
+            if (len > 0) {
+                @memcpy(buf[len..][0..sep.len], sep);
+                len += sep.len;
+            }
+            buf[len] = '0' + @as(u8, @intCast(k));
+            len += 1;
+        };
+        return buf[0..len];
     }
 
     // ---- Network ---------------------------------------------------------------------------
@@ -562,20 +571,19 @@ const Simulator = struct {
         node.voted_for = none;
         node.role = .follower;
         node.leader = none;
-        node.votes = 0;
+        node.votes = .empty;
         node.arm_election_timer(sim.tick);
         sim.event(node.id, '>');
     }
 
     fn request_vote(sim: *Simulator, node: *Node, to: u8) void {
         sim.send(.{
-            .deliver_at = 0,
             .from = node.id,
             .to = to,
             .kind = .request_vote,
             .term = node.current_term,
             .index = node.last_index(),
-            .log_term = node.last_term(),
+            .log_term = node.term_at(node.last_index()),
         });
     }
 
@@ -584,15 +592,10 @@ const Simulator = struct {
         node.role = .candidate;
         node.leader = none;
         node.voted_for = node.id;
-        node.votes = @as(u8, 1) << @intCast(node.id);
+        node.votes = .empty;
+        node.votes.set(node.id);
         node.arm_election_timer(sim.tick);
         node.next_vote_retry = sim.tick + request_vote_retry;
-        if (!sim.liveness_mode() or sim.in_core(node.id)) {
-            const round = sim.round_for(node.current_term);
-            round.candidates |= @as(u8, 1) << @intCast(node.id);
-            round.votes[node.id] |= @as(u8, 1) << @intCast(node.id);
-            round.last_tick = sim.tick;
-        }
         sim.event(node.id, '?');
         for (0..sim.n()) |to| if (to != node.id) sim.request_vote(node, @intCast(to));
         sim.maybe_become_leader(node);
@@ -600,13 +603,12 @@ const Simulator = struct {
 
     fn maybe_become_leader(sim: *Simulator, node: *Node) void {
         if (node.role != .candidate) return;
-        if (@popCount(node.votes) < sim.quorum()) return;
+        if (node.votes.count() < sim.quorum()) return;
         node.role = .leader;
         node.leader = node.id;
         node.next_index = @splat(node.last_index() + 1);
         node.match_index = @splat(0);
         node.match_index[node.id] = node.last_index();
-        if (sim.round_find(node.current_term)) |round| round.leader = node.id;
         sim.event(node.id, '*');
         // The no-op: entries from older terms can only commit together with one of ours.
         sim.append_local(node, .{ .term = node.current_term, .client = none, .request = 0 });
@@ -624,7 +626,6 @@ const Simulator = struct {
         const next = node.next_index[to];
         assert(next >= 1 and next <= node.last_index() + 1);
         var m: Message = .{
-            .deliver_at = 0,
             .from = node.id,
             .to = to,
             .kind = .append,
@@ -673,7 +674,6 @@ const Simulator = struct {
             sim.check_commit(node, node.applied, e);
             if (e.client != none and node.role == .leader) {
                 sim.send(.{
-                    .deliver_at = 0,
                     .from = node.id,
                     .to = sim.n() + e.client,
                     .kind = .reply,
@@ -699,23 +699,23 @@ const Simulator = struct {
         sim.observe_term(node, m.term);
         switch (m.kind) {
             .request_vote => {
-                const up_to_date = m.log_term > node.last_term() or
-                    (m.log_term == node.last_term() and m.index >= node.last_index());
+                const last_term = node.term_at(node.last_index());
+                const up_to_date = m.log_term > last_term or
+                    (m.log_term == last_term and m.index >= node.last_index());
                 const grant = m.term == node.current_term and up_to_date and
                     (node.voted_for == none or node.voted_for == m.from);
                 if (sim.round_find(m.term)) |round| {
-                    if (m.term == node.current_term and !up_to_date) round.log_refused |= @as(u8, 1) << @intCast(node.id);
+                    if (m.term == node.current_term and !up_to_date) round.log_refused.set(node.id);
                 }
                 if (grant and node.voted_for == none) {
-                    if (sim.round_find(m.term)) |round| round.votes[m.from] |= @as(u8, 1) << @intCast(node.id);
                     node.voted_for = m.from;
                     node.arm_election_timer(sim.tick);
                     sim.event(node.id, 'v');
                 }
-                sim.send(.{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .vote, .term = node.current_term, .granted = grant });
+                sim.send(.{ .from = node.id, .to = m.from, .kind = .vote, .term = node.current_term, .granted = grant });
             },
             .vote => if (node.role == .candidate and m.term == node.current_term and m.granted) {
-                node.votes |= @as(u8, 1) << @intCast(m.from);
+                node.votes.set(m.from);
                 sim.maybe_become_leader(node);
             },
             .append => sim.on_append(node, m),
@@ -733,12 +733,12 @@ const Simulator = struct {
     }
 
     fn on_append(sim: *Simulator, node: *Node, m: Message) void {
-        var reply: Message = .{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .append_reply, .term = node.current_term };
+        var reply: Message = .{ .from = node.id, .to = m.from, .kind = .append_reply, .term = node.current_term };
         if (m.term < node.current_term) return sim.send(reply);
         // A leader exists for our term: follow it and stay quiet.
         node.role = .follower;
         node.leader = m.from;
-        node.votes = 0;
+        node.votes = .empty;
         node.arm_election_timer(sim.tick);
         if (m.index > node.last_index() or node.term_at(m.index) != m.log_term) {
             reply.index = @min(node.last_index(), m.index -| 1); // retry hint
@@ -769,7 +769,7 @@ const Simulator = struct {
 
     fn on_request(sim: *Simulator, node: *Node, m: Message) void {
         const c = m.client;
-        var out: Message = .{ .deliver_at = 0, .from = node.id, .to = m.from, .kind = .redirect, .term = node.current_term, .client = c, .request = m.request };
+        var out: Message = .{ .from = node.id, .to = m.from, .kind = .redirect, .term = node.current_term, .client = c, .request = m.request };
         if (node.role != .leader) {
             out.leader_hint = node.leader;
             return sim.send(out);
@@ -804,7 +804,7 @@ const Simulator = struct {
         cl.deadline = sim.tick + client_timeout;
         cl.last_sent_at = sim.tick;
         sim.client_event(c, ev, cl.request, cl.leader_guess);
-        sim.send(.{ .deliver_at = 0, .from = sim.n() + c, .to = cl.leader_guess, .kind = .request, .client = c, .request = cl.request });
+        sim.send(.{ .from = sim.n() + c, .to = cl.leader_guess, .kind = .request, .client = c, .request = cl.request });
     }
 
     fn tick_client(sim: *Simulator, c: u8) void {
@@ -814,14 +814,14 @@ const Simulator = struct {
             // committed; just wait for the reply." True only while that leader stays leader.
             // If it is deposed first, the new leader's log wins and the entry is discarded;
             // no retry ever re-submits it. Nothing wrong is committed — nothing is committed.
-            if (bug_no_retry and cl.accepted) return;
+            if (bug_no_retry and cl.accepted != null) return;
             if (sim.tick < cl.deadline) return;
             cl.leader_guess = (cl.leader_guess + 1) % sim.n();
             sim.client_send(c, 'R');
         } else if (cl.next_request <= sim.options.requests_per_client and sim.tick >= cl.idle_until) {
             cl.inflight = true;
             cl.request = cl.next_request;
-            cl.accepted = false;
+            cl.accepted = null;
             cl.submitted_at = sim.tick;
             sim.client_send(c, 'S');
         }
@@ -836,11 +836,7 @@ const Simulator = struct {
                 sim.client_send(c, 'R');
             },
             .accepted => {
-                cl.accepted = true;
-                cl.accepted_by = m.from;
-                cl.accepted_term = m.log_term;
-                cl.accepted_index = m.index;
-                cl.accepted_at = sim.tick;
+                cl.accepted = .{ .by = m.from, .term = m.log_term, .index = m.index, .at = sim.tick };
                 sim.client_event(c, 'A', cl.request, m.from);
             },
             .reply => {
@@ -874,7 +870,7 @@ const Simulator = struct {
                 sim.start_election(node);
             } else if (node.role == .candidate and sim.tick >= node.next_vote_retry) {
                 for (0..sim.n()) |peer| {
-                    if ((node.votes >> @intCast(peer)) & 1 == 0) sim.request_vote(node, @intCast(peer));
+                    if (!node.votes.isSet(peer)) sim.request_vote(node, @intCast(peer));
                 }
                 node.next_vote_retry = sim.tick + request_vote_retry;
             },
@@ -901,7 +897,10 @@ const Simulator = struct {
             if (e.client != none) {
                 var seen = false;
                 for (sim.canonical.items) |x| {
-                    if (x.client == e.client and x.request == e.request) seen = true;
+                    if (x.client == e.client and x.request == e.request) {
+                        seen = true;
+                        break;
+                    }
                 }
                 if (!seen) expected += 1;
             }
@@ -934,6 +933,7 @@ const Simulator = struct {
                     sim.failure = .election_safety;
                     return;
                 }
+                break;
             }
             if (!known) sim.term_leaders.append(sim.gpa, .{ .term = node.current_term, .node = node.id }) catch @panic("OOM");
         }
@@ -948,7 +948,7 @@ const Simulator = struct {
         const random = sim.fault_prng.random();
         random.shuffleWithIndex(u8, order[0..sim.n()], u32);
         const size = random.intRangeAtMost(u8, sim.quorum(), sim.n());
-        for (order[0..size]) |i| sim.core |= @as(u8, 1) << @intCast(i);
+        for (order[0..size]) |i| sim.core.set(i);
         sim.heal_tick = sim.tick;
         sim.partition_active = false;
         for (0..addresses_max) |a| for (0..addresses_max) |b| {
@@ -999,7 +999,7 @@ const Simulator = struct {
     /// fault, not a bug. (By construction here the answer is always yes; the check documents
     /// and asserts the precondition, the way core_missing_quorum() does.)
     fn cluster_recoverable(sim: *const Simulator) bool {
-        if (@popCount(sim.core) < sim.quorum()) return false;
+        if (sim.core.count() < sim.quorum()) return false;
         for (0..sim.n()) |a| if (sim.in_core(a)) {
             if (!sim.nodes[a].up) return false;
             for (0..sim.n()) |b| if (sim.in_core(b) and !sim.links[a][b]) return false;
@@ -1018,7 +1018,7 @@ const Simulator = struct {
             if (r.first_tick < sim.heal_tick) continue;
             sim.stats.rounds += 1;
             if (r.leader != none or r.term == current) continue; // won, or still open
-            if (@popCount(r.candidates) >= 2) {
+            if (r.candidates.count() >= 2) {
                 sim.stats.splits += 1;
                 if (r.last_tick - r.first_tick < simultaneous_window) sim.stats.simultaneous += 1;
             } else sim.stats.refused += 1;
@@ -1034,7 +1034,7 @@ const Simulator = struct {
         sim.compute_stats();
         const s = sim.stats;
         say("cluster_recoverable: {s} (core={d}/{d} nodes, quorum={d}, all up, all core links healthy)\n", .{
-            if (sim.cluster_recoverable()) "yes" else "NO", @popCount(sim.core), sim.n(), sim.quorum(),
+            if (sim.cluster_recoverable()) "yes" else "NO", sim.core.count(), sim.n(), sim.quorum(),
         });
         if (sim.stable_leader() == null) {
             say(
@@ -1048,24 +1048,11 @@ const Simulator = struct {
             const first = sim.rounds.items.len -| 6;
             for (sim.rounds.items[first..]) |r| {
                 say("  term {d}: timed out at ticks {d}..{d}, quorum {d}, votes:", .{ r.term, r.first_tick, r.last_tick, sim.quorum() });
-                for (0..sim.n()) |k| if ((r.candidates >> @intCast(k)) & 1 == 1) {
-                    say(" {d}<-{{", .{k});
-                    var sep = false;
-                    for (0..sim.n()) |v| if ((r.votes[k] >> @intCast(v)) & 1 == 1) {
-                        say("{s}{d}", .{ if (sep) "," else "", v });
-                        sep = true;
-                    };
-                    say("}}", .{});
+                var buf: [2 * nodes_max]u8 = undefined;
+                for (0..sim.n()) |k| if (r.candidates.isSet(k)) {
+                    say(" {d}<-{{{s}}}", .{ k, sim.node_list(&buf, r.votes[k], ",") });
                 };
-                if (r.log_refused != 0) {
-                    say(" refused-for-log:{{", .{});
-                    var sep = false;
-                    for (0..sim.n()) |v| if ((r.log_refused >> @intCast(v)) & 1 == 1) {
-                        say("{s}{d}", .{ if (sep) "," else "", v });
-                        sep = true;
-                    };
-                    say("}}", .{});
-                }
+                if (r.log_refused.mask != 0) say(" refused-for-log:{{{s}}}", .{sim.node_list(&buf, r.log_refused, ",")});
                 say(" leader={s}\n", .{if (r.leader == none) "none" else "elected"});
             }
             return .no_stable_leader;
@@ -1077,20 +1064,18 @@ const Simulator = struct {
             say("LIVENESS VIOLATED: request c{d}#{d} pending for {d} ticks (submitted at tick {d}, last sent at tick {d})\n", .{
                 c, cl.request, sim.tick - cl.submitted_at, cl.submitted_at, cl.last_sent_at,
             });
-            if (cl.accepted) {
-                say("  accepted by node {d} in term {d} as index {d} at tick {d}; ", .{
-                    cl.accepted_by, cl.accepted_term, cl.accepted_index, cl.accepted_at,
-                });
+            if (cl.accepted) |a| {
+                say("  accepted by node {d} in term {d} as index {d} at tick {d}; ", .{ a.by, a.term, a.index, a.at });
                 var committed_at: u64 = 0;
                 for (sim.canonical.items, 1..) |x, k| {
                     if (x.client == c and x.request == cl.request) committed_at = k;
                 }
                 if (committed_at != 0) {
                     say("it committed as index {d}, but the reply never arrived and the client never asked again\n", .{committed_at});
-                } else if (cl.accepted_index <= sim.canonical.items.len) {
-                    const x = sim.canonical.items[cl.accepted_index - 1];
+                } else if (a.index <= sim.canonical.items.len) {
+                    const x = sim.canonical.items[a.index - 1];
                     say("index {d} was committed with a term-{d} {s} instead: the entry was discarded by a later leader, and the client never re-sent it\n", .{
-                        cl.accepted_index, x.term, if (x.client == none) "no-op" else "entry",
+                        a.index, x.term, if (x.client == none) "no-op" else "entry",
                     });
                 } else {
                     say("the entry is in no committed log (commit={d}); the client never re-sent it\n", .{sim.canonical.items.len});
@@ -1128,13 +1113,13 @@ const Simulator = struct {
         while (sim.tick < fault_ticks + convergence_ticks) : (sim.tick += 1) {
             sim.step();
             if (sim.failure != .none) return sim.failure;
-            if (sim.stats.ticks_to_leader == null and sim.stable_leader() != null) {
+            if (sim.stats.ticks_to_leader == null) if (sim.stable_leader()) |leader| {
                 sim.stats.ticks_to_leader = sim.tick - sim.heal_tick;
                 sim.hash(.{ sim.tick, 0x5AB1E });
                 if (sim.verbose) std.debug.print("{d:>6} - stable leader: node {d} in term {d}, {d} ticks after heal\n", .{
-                    sim.tick, sim.stable_leader().?, sim.nodes[sim.stable_leader().?].current_term, sim.tick - sim.heal_tick,
+                    sim.tick, leader, sim.nodes[leader].current_term, sim.tick - sim.heal_tick,
                 });
-            }
+            };
             if (sim.converged()) {
                 sim.compute_stats();
                 if (sim.verbose) std.debug.print("{d:>6} - converged: every request committed and applied by the core, {d} ticks after heal\n", .{
@@ -1187,10 +1172,8 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) Result {
         .trace_hash = sim.trace.final(),
         .ticks = sim.tick,
         .stats = sim.stats,
-        .leaders = sim.term_leaders.items.len,
-        .committed = sim.canonical.items.len,
         .nodes = sim.n(),
-        .core = @popCount(sim.core),
+        .core = sim.core.count(),
     };
 }
 
@@ -1205,8 +1188,8 @@ pub fn main(init: std.process.Init) !void {
             bug_fixed_timeout = true;
         } else if (std.mem.eql(u8, arg, "--bug-no-retry-on-leader-change")) {
             bug_no_retry = true;
-        } else if (std.mem.startsWith(u8, arg, "--spread=")) {
-            timeout_spread = try std.fmt.parseInt(u64, arg["--spread=".len..], 10);
+        } else if (std.mem.cutPrefix(u8, arg, "--spread=")) |value| {
+            timeout_spread = try std.fmt.parseInt(u64, value, 10);
             if (timeout_spread > 2 * (election_timeout_mean - heartbeat_interval)) {
                 std.debug.print("--spread must be at most {d}\n", .{2 * (election_timeout_mean - heartbeat_interval)});
                 std.process.exit(2);
@@ -1224,10 +1207,6 @@ pub fn main(init: std.process.Init) !void {
         }
         timeout_spread = 0;
     }
-    const flags = if (bug_fixed_timeout and bug_no_retry)
-        " --bug-fixed-timeout --bug-no-retry-on-leader-change"
-    else if (bug_fixed_timeout) " --bug-fixed-timeout" else if (bug_no_retry) " --bug-no-retry-on-leader-change" else "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(init.gpa, count, true);
         std.debug.print("seed={d} ticks={d} trace={x:0>16} {s}{s}{s}\n", .{
@@ -1246,15 +1225,11 @@ pub fn main(init: std.process.Init) !void {
         while (seed < count) : (seed += 1) {
             const r = run_seed(init.gpa, seed, false);
             const s = r.stats;
-            if (s.ticks_to_leader) |t| {
-                std.debug.print("{d}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
-                    seed, r.nodes, r.core, @tagName(r.failure), t, s.rounds, s.splits, s.simultaneous, s.refused, s.term_at_heal, s.term_end, s.max_pending,
-                });
-            } else {
-                std.debug.print("{d}\t{d}\t{d}\t{s}\t-\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
-                    seed, r.nodes, r.core, @tagName(r.failure), s.rounds, s.splits, s.simultaneous, s.refused, s.term_at_heal, s.term_end, s.max_pending,
-                });
-            }
+            std.debug.print("{d}\t{d}\t{d}\t{s}\t", .{ seed, r.nodes, r.core, @tagName(r.failure) });
+            if (s.ticks_to_leader) |t| std.debug.print("{d}", .{t}) else std.debug.print("-", .{});
+            std.debug.print("\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
+                s.rounds, s.splits, s.simultaneous, s.refused, s.term_at_heal, s.term_end, s.max_pending,
+            });
         }
         return;
     }
@@ -1266,7 +1241,11 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("FAIL at seed={d} ({s}) after {d} seeds. Replay with:\n", .{
                 seed, @tagName(r.failure), seed + 1,
             });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed,
+                if (bug_fixed_timeout) " --bug-fixed-timeout" else "",
+                if (bug_no_retry) " --bug-no-retry-on-leader-change" else "",
+            });
             std.process.exit(1);
         }
     }

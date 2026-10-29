@@ -136,6 +136,15 @@ const Model = struct {
         return value;
     }
 
+    fn peek(m: *const Model) ?u32 {
+        if (m.len == 0) return null;
+        return m.items[0];
+    }
+
+    fn clear(m: *Model) void {
+        m.len = 0;
+    }
+
     fn resize(m: *Model, new_cap: u32) bool {
         if (new_cap < m.len) return false;
         m.cap = new_cap;
@@ -184,18 +193,6 @@ fn gen_weights(random: std.Random) Weights {
     return weights;
 }
 
-fn pick_kind(random: std.Random, weights: Weights) Kind {
-    var total: u32 = 0;
-    for (weights) |w| total += w;
-    assert(total > 0);
-    var pick = random.uintLessThan(u32, total);
-    for (weights, 0..) |w, i| {
-        if (pick < w) return @fromBackingInt(@intCast(i));
-        pick -= w;
-    }
-    unreachable;
-}
-
 fn generate(seed: u64, case: *Case) Weights {
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
@@ -204,7 +201,7 @@ fn generate(seed: u64, case: *Case) Weights {
     case.len = ops_per_seed;
     for (&case.orig, 0..) |*o, i| o.* = @intCast(i);
     for (&case.ops) |*op| {
-        const kind = pick_kind(random, weights);
+        const kind: Kind = @fromBackingInt(@intCast(random.weightedIndex(u32, &weights)));
         op.* = switch (kind) {
             .push => .{ .kind = kind, .arg = random.int(u32) },
             .resize => .{ .kind = kind, .arg = random.intRangeAtMost(u32, cap_min, cap_max) },
@@ -255,10 +252,10 @@ fn execute(case: *const Case, verbose: bool) Result {
         const got: u64, const want: u64 = switch (op.kind) {
             .push => .{ @intFromBool(q.push(op.arg)), @intFromBool(m.push(op.arg)) },
             .pop => .{ opt(q.pop()), opt(m.pop()) },
-            .peek => .{ opt(q.peek()), opt(if (m.len == 0) null else m.items[0]) },
+            .peek => .{ opt(q.peek()), opt(m.peek()) },
             .clear => blk: {
                 q.clear();
-                m.len = 0;
+                m.clear();
                 break :blk .{ 0, 0 };
             },
             .resize => blk: {
@@ -285,7 +282,7 @@ fn execute(case: *const Case, verbose: bool) Result {
         if (failure) |f| return .{ .failure = f, .trace_hash = trace.final(), .max_count = max_count };
 
         max_count = @max(max_count, q.count);
-        if (verbose and !was_full and q.count == q.cap and q.cap > 0)
+        if (verbose and !was_full and q.count == q.cap)
             std.debug.print("  op {d}: queue became full (count=cap={d})\n", .{ i, q.cap });
     }
     return .{ .failure = null, .trace_hash = trace.final(), .max_count = max_count };
@@ -319,12 +316,12 @@ fn shrink_delete(case: *Case, kind: FailureKind) void {
             var candidate = case.*;
             const tail = case.ops[end..case.len];
             @memcpy(candidate.ops[start..][0..tail.len], tail);
-            std.mem.copyForwards(u16, candidate.orig[start..][0..tail.len], case.orig[end..case.len]);
+            @memcpy(candidate.orig[start..][0..tail.len], case.orig[end..case.len]);
             candidate.len = case.len - (end - start);
             if (still_fails(&candidate, kind)) {
                 if (print_ops) {
                     std.debug.print("  deleted chunk={d} orig=", .{chunk});
-                    for (case.orig[start..end], 0..) |o, k| std.debug.print("{s}{d}", .{ if (k == 0) "" else ",", o });
+                    print_orig(case.orig[start..end]);
                     std.debug.print(" -> {d} ops\n", .{candidate.len});
                 }
                 case.* = candidate; // keep `start`: the next chunk slid into this position
@@ -343,35 +340,29 @@ fn shrink_delete(case: *Case, kind: FailureKind) void {
 fn shrink_args(case: *Case, kind: FailureKind) u32 {
     var changed: u32 = 0;
     // The initial capacity is part of the input too.
-    for ([_]u32{ cap_min, cap_min + (case.initial_cap - cap_min) / 2 }) |c| {
-        if (c >= case.initial_cap) continue;
-        var candidate = case.*;
-        candidate.initial_cap = c;
-        if (still_fails(&candidate, kind)) {
-            case.* = candidate;
-            changed += 1;
-            break;
-        }
-    }
-    for (0..case.len) |i| {
-        const op = case.ops[i];
+    changed += @intFromBool(shrink_arg(case, kind, &case.initial_cap, cap_min));
+    for (case.ops[0..case.len]) |*op| {
         const min: u32 = switch (op.kind) {
             .push => 0,
             .resize => cap_min,
             else => continue, // no argument
         };
-        for ([_]u32{ min, min + (op.arg - min) / 2 }) |a| {
-            if (a >= op.arg) continue;
-            var candidate = case.*;
-            candidate.ops[i].arg = a;
-            if (still_fails(&candidate, kind)) {
-                case.* = candidate;
-                changed += 1;
-                break;
-            }
-        }
+        changed += @intFromBool(shrink_arg(case, kind, &op.arg, min));
     }
     return changed;
+}
+
+/// Try `min`, then halfway between `min` and the current value, for one number inside `case`.
+/// Keeps the first that still fails; otherwise restores the original. Returns whether it changed.
+fn shrink_arg(case: *const Case, kind: FailureKind, arg: *u32, min: u32) bool {
+    const original = arg.*;
+    for ([_]u32{ min, min + (original - min) / 2 }) |a| {
+        if (a >= original) continue;
+        arg.* = a;
+        if (still_fails(case, kind)) return true;
+    }
+    arg.* = original;
+    return false;
 }
 
 fn shrink(seed: u64) void {
@@ -420,11 +411,16 @@ fn shrink(seed: u64) void {
     }
     if (print_ops) {
         std.debug.print("  kept orig=", .{});
-        for (case.orig[0..case.len], 0..) |o, k| std.debug.print("{s}{d}", .{ if (k == 0) "" else ",", o });
+        print_orig(case.orig[0..case.len]);
         std.debug.print("\n", .{});
     }
     std.debug.print("seed={d} shrunk trace={x:0>16} FAIL\n", .{ seed, final.trace_hash });
     std.process.exit(1);
+}
+
+/// Comma-separated original op indices (for --ops).
+fn print_orig(orig: []const u16) void {
+    for (orig, 0..) |o, k| std.debug.print("{s}{d}", .{ if (k == 0) "" else ",", o });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -434,7 +430,7 @@ fn run_seed(seed: u64, verbose: bool) Result {
     const weights = generate(seed, &case);
     if (verbose) {
         std.debug.print("seed={d} initial_cap={d} weights:", .{ seed, case.initial_cap });
-        for (weights, 0..) |w, k| std.debug.print(" {s}={d}", .{ @tagName(@as(Kind, @fromBackingInt(@intCast(k)))), w });
+        for (std.enums.values(Kind), weights) |kind, w| std.debug.print(" {s}={d}", .{ @tagName(kind), w });
         std.debug.print("\n", .{});
     }
     const r = execute(&case, verbose);
@@ -452,11 +448,7 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--no-swarm")) swarm_enabled = false;
         if (std.mem.eql(u8, arg, "--ops")) print_ops = true;
     }
-    const flags = if (bug_enabled and !swarm_enabled)
-        " --bug --no-swarm"
-    else if (bug_enabled)
-        " --bug"
-    else if (!swarm_enabled) " --no-swarm" else "";
+    const flags = .{ if (bug_enabled) " --bug" else "", if (!swarm_enabled) " --no-swarm" else "" };
 
     if (std.mem.eql(u8, mode, "shrink")) return shrink(n);
 
@@ -477,8 +469,8 @@ pub fn main(init: std.process.Init) !void {
         const r = run_seed(seed, false);
         if (r.failure != null) {
             std.debug.print("FAIL at seed={d} after {d} seeds. Replay with:\n", .{ seed, seed + 1 });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
-            std.debug.print("  zig run main.zig -- shrink {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{seed} ++ flags);
+            std.debug.print("  zig run main.zig -- shrink {d}{s}{s}\n", .{seed} ++ flags);
             std.process.exit(1);
         }
         if (r.max_count >= cap_min) deep_seeds += 1;

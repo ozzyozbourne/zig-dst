@@ -151,6 +151,8 @@ const Sim = struct {
     disks: [replica_count][block_count]Block,
     /// Test oracle (not visible to the system under test): what each address must contain.
     expected: [block_count]Payload,
+    /// The same oracle as whole blocks (`block_make` of `expected`), cached for check_atlas.
+    expected_block: [block_count]Block,
     log_len: u32 = 0,
     tick: u64 = 0,
     /// false during checkpoint sweeps and in the final liveness phase.
@@ -189,11 +191,12 @@ const Sim = struct {
         return sim.random.uintLessThan(u8, 100) < pct;
     }
 
-    fn flip_bit(sim: *Sim, block: *Block) u64 {
+    /// Flip one random bit of `block` and record the fault event `e`, with the bit index as extra.
+    fn inject_flip(sim: *Sim, e: Event, replica: u8, address: u32, block: *Block) void {
         const byte = sim.random.uintLessThan(u32, block_size);
         const bit = sim.random.int(u3);
         block[byte] ^= @as(u8, 1) << bit;
-        return byte * 8 + bit;
+        sim.event(e, replica, address, byte * 8 + bit);
     }
 
     // ---- Simulated disk ------------------------------------------------------------------
@@ -212,8 +215,7 @@ const Sim = struct {
         }
         sim.disks[replica][address] = block.*;
         if (sim.eligible(replica, address) and sim.chance(sim.write_fault_pct)) {
-            const bit = sim.flip_bit(&sim.disks[replica][address]);
-            sim.event(.fault_write_flip, replica, address, bit);
+            sim.inject_flip(.fault_write_flip, replica, address, &sim.disks[replica][address]);
         }
     }
 
@@ -237,8 +239,7 @@ const Sim = struct {
     fn disk_read(sim: *Sim, replica: u8, address: u32) Block {
         var block = sim.disks[replica][address];
         if (sim.eligible(replica, address) and sim.chance(sim.read_fault_pct)) {
-            const bit = sim.flip_bit(&block);
-            sim.event(.fault_read_flip, replica, address, bit);
+            sim.inject_flip(.fault_read_flip, replica, address, &block);
         }
         return block;
     }
@@ -248,10 +249,11 @@ const Sim = struct {
     fn append(sim: *Sim) void {
         const address = sim.log_len;
         sim.random.bytes(&sim.expected[address]);
-        const block = block_make(address, &sim.expected[address]);
+        const block = &sim.expected_block[address];
+        block.* = block_make(address, &sim.expected[address]);
         sim.log_len += 1;
-        for (0..replica_count) |r| sim.disk_write(@intCast(r), address, &block);
-        sim.event(.append, 0, address, std.hash.Wyhash.hash(0, &block));
+        for (0..replica_count) |r| sim.disk_write(@intCast(r), address, block);
+        sim.event(.append, 0, address, std.hash.Wyhash.hash(0, block));
     }
 
     /// Ask the peers for a verified copy. The repairing replica always verifies what it gets
@@ -343,15 +345,15 @@ const Sim = struct {
     /// be a test bug, so it panics instead of reporting a FAIL against the system.
     fn check_atlas(sim: *const Sim) void {
         for (0..sim.log_len) |a| {
-            const want = block_make(a, &sim.expected[a]);
             for (0..replica_count) |r| {
-                if (std.mem.eql(u8, &sim.disks[r][a], &want)) break;
+                if (std.mem.eql(u8, &sim.disks[r][a], &sim.expected_block[a])) break;
             } else std.debug.panic("harness bug: block {d} has no good copy anywhere", .{a});
         }
     }
 };
 
-const Result = struct { ok: bool, trace_hash: u64, reason: []const u8 };
+/// `reason` is the failure's error name, or null if the seed passed.
+const Result = struct { trace_hash: u64, reason: ?[]const u8 };
 
 fn run_seed(seed: u64, verbose: bool) Result {
     var prng = std.Random.DefaultPrng.init(seed);
@@ -366,6 +368,7 @@ fn run_seed(seed: u64, verbose: bool) Result {
         .atlas = FaultAtlas.init(atlas_prng.random()),
         .disks = std.mem.zeroes([replica_count][block_count]Block), // all-zero = never written
         .expected = undefined,
+        .expected_block = undefined,
         .read_fault_pct = random.uintAtMost(u8, 20),
         .write_fault_pct = random.uintAtMost(u8, 20),
         .misdirect_pct = random.uintAtMost(u8, 15),
@@ -383,16 +386,16 @@ fn run_seed(seed: u64, verbose: bool) Result {
     }
 
     simulate(&sim) catch |err| {
-        return .{ .ok = false, .trace_hash = sim.trace.final(), .reason = @errorName(err) };
+        return .{ .trace_hash = sim.trace.final(), .reason = @errorName(err) };
     };
-    return .{ .ok = true, .trace_hash = sim.trace.final(), .reason = "" };
+    return .{ .trace_hash = sim.trace.final(), .reason = null };
 }
 
 fn simulate(sim: *Sim) Failure!void {
     const random = sim.random;
     while (sim.tick < ticks_max) : (sim.tick += 1) {
         // Workload: append until the log is full, interleaved with client reads.
-        if (sim.log_len < block_count and random.uintLessThan(u8, 100) < 15) {
+        if (sim.log_len < block_count and sim.chance(15)) {
             sim.append();
         } else if (sim.log_len > 0) {
             const replica = random.uintLessThan(u8, replica_count);
@@ -405,8 +408,7 @@ fn simulate(sim: *Sim) Failure!void {
             const replica = random.uintLessThan(u8, replica_count);
             const address = random.uintLessThan(u32, sim.log_len);
             if (sim.eligible(replica, address)) {
-                const bit = sim.flip_bit(&sim.disks[replica][address]);
-                sim.event(.fault_rot, replica, address, bit);
+                sim.inject_flip(.fault_rot, replica, address, &sim.disks[replica][address]);
             }
         }
 
@@ -440,34 +442,27 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(2);
         }
     }
-    const flags: []const u8 = if (bug_trust_read and bug_misdirect)
-        " --bug-trust-read --bug-misdirect"
-    else if (bug_trust_read)
-        " --bug-trust-read"
-    else if (bug_misdirect)
-        " --bug-misdirect"
-    else
-        "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(n, true);
-        std.debug.print("seed={d} trace={x:0>16} {s}{s}{s}\n", .{
-            n,                            r.trace_hash,
-            if (r.ok) "PASS" else "FAIL", if (r.ok) "" else " ",
-            r.reason,
+        std.debug.print("seed={d} trace={x:0>16} {s}{s}\n", .{
+            n, r.trace_hash, if (r.reason == null) "PASS" else "FAIL ", r.reason orelse "",
         });
-        if (!r.ok) std.process.exit(1);
+        if (r.reason != null) std.process.exit(1);
         return;
     }
 
     var seed: u64 = 0;
     while (seed < n) : (seed += 1) {
         const r = run_seed(seed, false);
-        if (!r.ok) {
+        if (r.reason) |reason| {
             std.debug.print("FAIL at seed={d} ({s}) after {d} seeds. Replay with:\n", .{
-                seed, r.reason, seed + 1,
+                seed, reason, seed + 1,
             });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed,
+                if (bug_trust_read) " --bug-trust-read" else "",
+                if (bug_misdirect) " --bug-misdirect" else "",
+            });
             std.process.exit(1);
         }
     }

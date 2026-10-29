@@ -282,45 +282,33 @@ const Sim = struct {
     fn issue(sim: *Sim, client: u8) !void {
         const op_index = sim.history_len;
         const key = sim.random.uintLessThan(u8, keys_count);
-        const is_write = sim.random.uintLessThan(u8, 100) < 40;
         var op: Op = .{
             .client = client,
-            .kind = if (is_write) .write else .read,
+            .kind = if (sim.random.uintLessThan(u8, 100) < 40) .write else .read,
             .key = key,
             .value = 0,
             .invoke = sim.now,
             .target = primary,
         };
-        if (is_write) {
-            op.value = sim.next_value;
-            sim.next_value += 1;
-        } else {
-            op.target = if (sim.random.boolean()) primary else backup;
-        }
+        const body: Body = switch (op.kind) {
+            .write => body: {
+                op.value = sim.next_value;
+                sim.next_value += 1;
+                log(sim, "c{d} invoke W({c}:={d}) -> primary", .{ client, key_names[key], op.value });
+                break :body .{ .write = .{ .op = op_index, .key = key, .value = op.value } };
+            },
+            .read => body: {
+                op.target = if (sim.random.boolean()) primary else backup;
+                const last_seen = sim.clients[client].last_seen;
+                log(sim, "c{d} invoke R({c}) -> {s} (session token v{d})", .{ client, key_names[key], replica_name(op.target), last_seen });
+                break :body .{ .read = .{ .op = op_index, .key = key, .min_version = last_seen } };
+            },
+        };
         sim.history[op_index] = op;
         sim.history_len += 1;
         sim.clients[client].busy = true;
         sim.event(2, client, @backingInt(op.kind), op.value);
-
-        if (sim.verbose) {
-            if (is_write) {
-                std.debug.print("  t={d:>3} c{d} invoke W({c}:={d}) -> primary\n", .{ sim.now, client, key_names[key], op.value });
-            } else {
-                std.debug.print("  t={d:>3} c{d} invoke R({c}) -> {s} (session token v{d})\n", .{
-                    sim.now, client, key_names[key], replica_name(op.target), sim.clients[client].last_seen,
-                });
-            }
-        }
-
-        if (is_write) {
-            try sim.send(client_node(client), primary, .{ .write = .{ .op = op_index, .key = key, .value = op.value } });
-        } else {
-            try sim.send(client_node(client), op.target, .{ .read = .{
-                .op = op_index,
-                .key = key,
-                .min_version = sim.clients[client].last_seen,
-            } });
-        }
+        try sim.send(client_node(client), op.target, body);
     }
 
     fn deliver(sim: *Sim, msg: Message) !void {
@@ -387,9 +375,7 @@ const Sim = struct {
                     sim.backup_log[sim.backup_applied] = entry;
                     sim.backup_state[entry.key] = entry.value;
                     sim.event(4, sim.backup_applied, entry.key, entry.value);
-                    if (sim.verbose) std.debug.print("  t={d:>3}    backup applies v{d} ({c}:={d})\n", .{
-                        sim.now, sim.backup_applied, key_names[entry.key], entry.value,
-                    });
+                    log(sim, "   backup applies v{d} ({c}:={d})", .{ sim.backup_applied, key_names[entry.key], entry.value });
                 }
                 sim.check_replicas();
                 try sim.backup_serve_reads();
@@ -448,15 +434,11 @@ const Sim = struct {
         const client = &sim.clients[op.client];
         sim.event(5, op.client, op.value, version);
 
-        if (sim.verbose) {
-            switch (op.kind) {
-                .write => std.debug.print("  t={d:>3} c{d} ok     W({c}:={d}) at v{d}\n", .{
-                    sim.now, op.client, key_names[op.key], op.value, version,
-                }),
-                .read => std.debug.print("  t={d:>3} c{d} ok     R({c})={d} from {s} at v{d}\n", .{
-                    sim.now, op.client, key_names[op.key], op.value, replica_name(op.target), version,
-                }),
-            }
+        switch (op.kind) {
+            .write => log(sim, "c{d} ok     W({c}:={d}) at v{d}", .{ op.client, key_names[op.key], op.value, version }),
+            .read => log(sim, "c{d} ok     R({c})={d} from {s} at v{d}", .{
+                op.client, key_names[op.key], op.value, replica_name(op.target), version,
+            }),
         }
 
         // Per-operation checks. These are what an ordinary test would assert, and they hold even
@@ -489,6 +471,11 @@ const Sim = struct {
     }
 };
 
+/// Verbose-only event line, prefixed with the current tick.
+fn log(sim: *const Sim, comptime fmt: []const u8, args: anytype) void {
+    if (sim.verbose) std.debug.print("  t={d:>3} " ++ fmt ++ "\n", .{sim.now} ++ args);
+}
+
 fn replica_name(node: u8) []const u8 {
     return if (node == primary) "primary" else "backup";
 }
@@ -511,16 +498,14 @@ fn print_failure(f: Failure, now: u64) void {
         .{ key_names[f.key], ops.len, f.full_len },
     );
 
-    // Sort by invoke tick (insertion sort; tiny and deterministic).
+    // Sort by invoke tick (insertion sort: stable, tiny and deterministic).
     var order: [ops_max]usize = undefined;
     for (0..ops.len) |i| order[i] = i;
-    var i: usize = 1;
-    while (i < ops.len) : (i += 1) {
-        var j = i;
-        while (j > 0 and ops[order[j - 1]].invoke > ops[order[j]].invoke) : (j -= 1) {
-            std.mem.swap(usize, &order[j - 1], &order[j]);
+    std.sort.insertion(usize, order[0..ops.len], ops, struct {
+        fn invoked_before(o: []const Op, a: usize, b: usize) bool {
+            return o[a].invoke < o[b].invoke;
         }
-    }
+    }.invoked_before);
 
     var t0: u64 = std.math.maxInt(u64);
     var t1: u64 = 0;
@@ -583,16 +568,17 @@ const Result = struct { ok: bool, trace_hash: u64, ops: u32 };
 
 fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
     var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+    const ops_budget = 6 + random.uintAtMost(u8, ops_max - 6);
+    assert(ops_budget <= ops_max);
     var sim: Sim = .{
         .gpa = gpa,
-        .random = prng.random(),
+        .random = random,
         .trace = std.hash.Wyhash.init(0),
         .verbose = verbose,
-        .ops_budget = 0,
+        .ops_budget = ops_budget,
     };
     defer sim.deinit();
-    sim.ops_budget = 6 + sim.random.uintAtMost(u8, ops_max - 6);
-    assert(sim.ops_budget <= ops_max);
 
     while (!sim.done()) : (sim.now += 1) {
         // Liveness: with no message loss, every operation must finish quickly.

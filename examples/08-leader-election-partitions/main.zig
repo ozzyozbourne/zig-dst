@@ -128,7 +128,7 @@ const Node = struct {
     voted_for: u8 = none,
     role: Role = .follower,
     leader: u8 = none,
-    votes: u8 = 0, // bitset of nodes that granted us a vote in current_term
+    votes: std.bit_set.Integer(nodes_max) = .empty, // who granted us a vote in current_term
     election_deadline: u64 = 0,
     next_heartbeat: u64 = 0,
     next_vote_retry: u64 = 0,
@@ -146,6 +146,15 @@ const Node = struct {
         node.disk.current_term = node.current_term;
         // THE BUG: votedFor never reaches the disk, so a restart forgets who we voted for.
         node.disk.voted_for = if (bug_volatile_vote) none else node.voted_for;
+    }
+
+    /// The term an observer sees: the live value while up, the durable one while crashed.
+    fn visible_term(node: *const Node) u64 {
+        return if (node.up) node.current_term else node.disk.current_term;
+    }
+
+    fn visible_vote(node: *const Node) u8 {
+        return if (node.up) node.voted_for else node.disk.voted_for;
     }
 };
 
@@ -165,11 +174,10 @@ const Simulator = struct {
     tick: u64 = 0,
     trace: std.hash.Wyhash = std.hash.Wyhash.init(0),
 
-    // Network state. `links[from][to]` is false while a partition filters that path.
+    // Network state. `link_up(from, to)` is false while a partition filters that path.
     fault_prng: std.Random.DefaultPrng,
     net_prng: std.Random.DefaultPrng,
     messages: std.ArrayList(Message) = .empty,
-    links: [nodes_max][nodes_max]bool = @splat(@splat(true)),
     partition: [nodes_max]bool = @splat(false),
     partition_active: bool = false,
     asymmetric_side: bool = false,
@@ -250,16 +258,16 @@ const Simulator = struct {
         } else {
             // Left side: the side that can send in an asymmetric partition.
             const left = if (sim.options.partition_symmetry == .asymmetric) sim.asymmetric_side else true;
-            for (0..sim.n()) |i| if (sim.partition[i] == left) {
-                net_buf[net_len] = '0' + @as(u8, @intCast(i));
-                net_len += 1;
-            };
-            net_buf[net_len] = if (sim.options.partition_symmetry == .asymmetric) '>' else '|';
-            net_len += 1;
-            for (0..sim.n()) |i| if (sim.partition[i] != left) {
-                net_buf[net_len] = '0' + @as(u8, @intCast(i));
-                net_len += 1;
-            };
+            for ([_]bool{ left, !left }, 0..) |side, k| {
+                if (k == 1) {
+                    net_buf[net_len] = if (sim.options.partition_symmetry == .asymmetric) '>' else '|';
+                    net_len += 1;
+                }
+                for (0..sim.n()) |i| if (sim.partition[i] == side) {
+                    net_buf[net_len] = '0' + @as(u8, @intCast(i));
+                    net_len += 1;
+                };
+            }
         }
 
         var term: u64 = 0;
@@ -267,8 +275,8 @@ const Simulator = struct {
         var leader: u8 = none;
         if (node_index != none) {
             const node = &sim.nodes[node_index];
-            term = if (node.up) node.current_term else node.disk.current_term;
-            voted = if (node.up) node.voted_for else node.disk.voted_for;
+            term = node.visible_term();
+            voted = node.visible_vote();
             leader = if (node.up) node.leader else none;
         }
         sim.trace.update(std.mem.asBytes(&[_]u64{ sim.tick, node_index, ev, term, voted, leader }));
@@ -291,10 +299,18 @@ const Simulator = struct {
 
     // ---- Network ---------------------------------------------------------------------------
 
+    /// Same sides on both ends, or an asymmetric partition and `from` is on the side that can
+    /// still send. With no partition every node is on the same side, so every link is up.
+    fn link_up(sim: *const Simulator, from: u8, to: u8) bool {
+        return sim.partition[from] == sim.partition[to] or
+            (sim.options.partition_symmetry == .asymmetric and
+                sim.partition[from] == sim.asymmetric_side);
+    }
+
     fn send(sim: *Simulator, from: u8, to: u8, kind: Kind, term: u64, granted: bool) void {
         // Like PacketSimulator: the link filter applies when a packet is submitted, so packets
         // already in flight when a partition starts can still arrive.
-        if (!sim.links[from][to]) return;
+        if (!sim.link_up(from, to)) return;
         if (sim.faults_enabled and chance(&sim.net_prng, sim.options.loss_probability, 1000)) return;
         const delay = sim.net_prng.random().intRangeAtMost(u64, 1, sim.options.delay_max);
         sim.messages.append(sim.gpa, .{
@@ -311,7 +327,7 @@ const Simulator = struct {
         for (0..sim.n()) |to| if (to != from) sim.send(from, @intCast(to), kind, term, false);
     }
 
-    /// Mirrors PacketSimulator.auto_partition_network: choose two sides, then filter links.
+    /// Mirrors PacketSimulator.auto_partition_network: choose two sides (link_up filters links).
     fn partition_network(sim: *Simulator) void {
         const random = sim.fault_prng.random();
         const count = sim.n();
@@ -340,18 +356,12 @@ const Simulator = struct {
             },
         }
         sim.asymmetric_side = random.boolean();
-        for (0..count) |from| for (0..count) |to| {
-            sim.links[from][to] = sim.partition[from] == sim.partition[to] or
-                (sim.options.partition_symmetry == .asymmetric and
-                    sim.partition[from] == sim.asymmetric_side);
-        };
         sim.partition_active = true;
         sim.stability = sim.options.partition_stability;
         sim.event(none, 'P');
     }
 
     fn heal_network(sim: *Simulator) void {
-        sim.links = @splat(@splat(true));
         sim.partition = @splat(false);
         sim.partition_active = false;
         sim.stability = sim.options.unpartition_stability;
@@ -406,7 +416,7 @@ const Simulator = struct {
         node.voted_for = none;
         node.role = .follower;
         node.leader = none;
-        node.votes = 0;
+        node.votes = .empty;
         node.persist();
         sim.event(node.id, '>');
     }
@@ -416,7 +426,8 @@ const Simulator = struct {
         node.role = .candidate;
         node.leader = none;
         node.voted_for = node.id;
-        node.votes = @as(u8, 1) << @intCast(node.id);
+        node.votes = .empty;
+        node.votes.set(node.id);
         node.persist();
         node.reset_election_timer(sim.tick);
         node.next_vote_retry = sim.tick + request_vote_retry;
@@ -439,7 +450,7 @@ const Simulator = struct {
 
     fn maybe_become_leader(sim: *Simulator, node: *Node) void {
         if (node.role != .candidate) return;
-        if (@popCount(node.votes) < sim.votes_needed(node)) return;
+        if (node.votes.count() < sim.votes_needed(node)) return;
         node.role = .leader;
         node.leader = node.id;
         sim.event(node.id, '*');
@@ -468,7 +479,7 @@ const Simulator = struct {
             },
             .request_vote_reply => {
                 if (node.role == .candidate and m.term == node.current_term and m.granted) {
-                    node.votes |= @as(u8, 1) << @intCast(m.from);
+                    node.votes.set(m.from);
                     sim.maybe_become_leader(node);
                 }
             },
@@ -479,7 +490,7 @@ const Simulator = struct {
                     if (node.role != .leader) {
                         node.role = .follower;
                         node.leader = m.from;
-                        node.votes = 0;
+                        node.votes = .empty;
                     }
                     node.reset_election_timer(sim.tick);
                 }
@@ -501,7 +512,7 @@ const Simulator = struct {
             } else if (node.role == .candidate and sim.tick >= node.next_vote_retry) {
                 // Retry RequestVote to peers that have not granted yet (lost/partitioned/crashed).
                 for (0..sim.n()) |peer| {
-                    if ((node.votes >> @intCast(peer)) & 1 == 0) {
+                    if (!node.votes.isSet(peer)) {
                         sim.send(node.id, @intCast(peer), .request_vote, node.current_term, false);
                     }
                 }
@@ -515,7 +526,7 @@ const Simulator = struct {
     fn check_safety(sim: *Simulator) Failure {
         for (sim.nodes[0..sim.n()], 0..) |*node, i| {
             // currentTerm never decreases, including across crashes: read the disk if down.
-            const term = if (node.up) node.current_term else node.disk.current_term;
+            const term = node.visible_term();
             if (term < sim.term_seen[i]) {
                 std.debug.print("TERM REGRESSED: node {d} term {d} -> {d} at tick {d}\n", .{
                     i, sim.term_seen[i], term, sim.tick,
@@ -527,19 +538,19 @@ const Simulator = struct {
 
             // Election Safety: one leader per term, over the whole history.
             if (!node.up or node.role != .leader) continue;
-            var known = false;
-            for (sim.term_leaders.items) |entry| {
-                if (entry.term != node.current_term) continue;
-                known = true;
-                if (entry.node != node.id) {
+            // Each term appears at most once in the list, so stop at the first match.
+            const known = for (sim.term_leaders.items) |entry| {
+                if (entry.term == node.current_term) break entry.node;
+            } else null;
+            if (known) |leader| {
+                if (leader != node.id) {
                     std.debug.print(
                         "ELECTION SAFETY VIOLATED: term {d} has two leaders: node {d} and node {d} (tick {d})\n",
-                        .{ node.current_term, entry.node, node.id, sim.tick },
+                        .{ node.current_term, leader, node.id, sim.tick },
                     );
                     return .election_safety;
                 }
-            }
-            if (!known) sim.term_leaders.append(sim.gpa, .{
+            } else sim.term_leaders.append(sim.gpa, .{
                 .term = node.current_term,
                 .node = node.id,
             }) catch @panic("OOM");
@@ -548,18 +559,19 @@ const Simulator = struct {
     }
 
     /// Converged = every node is up, in the same term, and following the same leader.
-    fn converged(sim: *const Simulator) bool {
+    /// Returns that leader, or null if not converged.
+    fn converged(sim: *const Simulator) ?u8 {
         var leader: u8 = none;
         for (sim.nodes[0..sim.n()]) |*node| if (node.up and node.role == .leader) {
-            if (leader != none) return false;
+            if (leader != none) return null;
             leader = node.id;
         };
-        if (leader == none) return false;
+        if (leader == none) return null;
         const term = sim.nodes[leader].current_term;
         for (sim.nodes[0..sim.n()]) |*node| {
-            if (!node.up or node.current_term != term or node.leader != leader) return false;
+            if (!node.up or node.current_term != term or node.leader != leader) return null;
         }
-        return true;
+        return leader;
     }
 
     fn enter_liveness_mode(sim: *Simulator) void {
@@ -589,10 +601,7 @@ const Simulator = struct {
             if (failure != .none) return failure;
 
             if (!sim.faults_enabled) {
-                if (sim.converged()) {
-                    const leader = for (sim.nodes[0..sim.n()]) |*node| {
-                        if (node.role == .leader) break node.id;
-                    } else unreachable;
+                if (sim.converged()) |leader| {
                     sim.trace.update(std.mem.asBytes(&sim.tick));
                     if (sim.verbose) std.debug.print(
                         "liveness: node {d} leads term {d}, agreed by all, {d} ticks after heal\n",
@@ -647,10 +656,6 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(2);
         }
     }
-    const flags = if (bug_volatile_vote and bug_no_quorum)
-        " --bug-volatile-vote --bug-no-quorum"
-    else if (bug_volatile_vote) " --bug-volatile-vote" else if (bug_no_quorum) " --bug-no-quorum" else "";
-
     if (std.mem.eql(u8, mode, "run")) {
         const r = run_seed(init.gpa, count, true);
         std.debug.print("seed={d} ticks={d} trace={x:0>16} {s}\n", .{
@@ -667,7 +672,11 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("FAIL at seed={d} ({s}) after {d} seeds. Replay with:\n", .{
                 seed, @tagName(r.failure), seed + 1,
             });
-            std.debug.print("  zig run main.zig -- run {d}{s}\n", .{ seed, flags });
+            std.debug.print("  zig run main.zig -- run {d}{s}{s}\n", .{
+                seed,
+                if (bug_volatile_vote) " --bug-volatile-vote" else "",
+                if (bug_no_quorum) " --bug-no-quorum" else "",
+            });
             std.process.exit(1);
         }
     }
