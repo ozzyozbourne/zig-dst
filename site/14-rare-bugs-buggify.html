@@ -1,0 +1,1275 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>14 · Rare bugs &amp; BUGGIFY — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .rp-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px; margin-top: 10px; }
+  @media (max-width: 960px) { .rp-grid { grid-template-columns: 1fr; } }
+  .rp-now { font-family: var(--mono); font-size: 0.85rem; padding: 8px 10px; border-radius: 8px; background: #0b111d; border: 1px solid var(--line); margin-top: 8px; min-height: 2.6em; }
+  .rp-now b { color: var(--yellow); }
+  .loglist { max-height: 330px; overflow: auto; background: #070b12; border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; }
+  .loglist .tl-row { grid-template-columns: 44px 1fr; white-space: pre; font-size: .74rem; }
+  .loglist .tl-row.cur { background: rgba(245,230,99,.12); }
+  .loglist .tl-row.fut { opacity: .32; }
+  .loglist .tl-row.bad { color: var(--bug); }
+  .loglist .tl-row.bug { color: var(--yellow); }
+  pre.code { font-size: 0.76rem; }
+  .pick button.on { background: var(--accent); color: #0b0f17; }
+  .optdiff td.diff { color: var(--warn); font-weight: 700; }
+  .res-pass { color: var(--ok); font-weight: 700; } .res-fail { color: var(--bug); font-weight: 700; }
+  .steps { font-family: var(--mono); font-size: .8rem; }
+  .steps div { padding: 3px 8px; border-left: 3px solid var(--accent); margin: 4px 0; background: #0b111d; border-radius: 0 6px 6px 0; }
+</style>
+</head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag hard">Hard</span><span class="tag">Example 14</span><span class="tag">rare paths · BUGGIFY · seed stability · pinned scenarios</span></div>
+    <h1>Rare bugs &amp; BUGGIFY</h1>
+    <p class="lede">A batching writer with retries, running over a simulated disk and network. It has three error paths that
+      rarely run. Its bug needs two of them, in order, on the same flush: a <b>short write</b>, then a <b>timeout</b> on the retry.
+      At realistic fault rates a plain random search needs tens to hundreds of thousands of seeds to find it. FoundationDB-style
+      <b>BUGGIFY</b> points in the production code find the same bug in tens of seeds. Then we fix the bug and find that the
+      failing seed no longer means anything, so we pin it as a hand-written scenario.</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>The system, its rare paths, and where BUGGIFY lives</h2>
+    <p>The app appends numbered records. The writer buffers them and flushes batches. The server stores record <code>seq</code> at
+      file offset <code>seq</code> with a positional write, so a retry is idempotent <i>if it goes to the right offset</i>.
+      The grey boxes are simulated. The teal boxes are the code under test. The yellow tags are the BUGGIFY points
+      compiled into that code. The environment's fault rates below are the same in every seed and are parsed from the replay header.</p>
+    <div class="viz" id="arch"></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--accent2)"></i>production code (writer, server)</span>
+      <span><i class="sw" style="background:var(--dim)"></i>simulated environment</span>
+      <span><i class="sw" style="background:var(--yellow)"></i>BUGGIFY point: active in 1/4 of seeds, fires 1/4 of the times it is reached</span>
+      <span><i class="sw" style="background:var(--warn)"></i>PRNG streams</span>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>Seeds to first failure: realistic rates vs BUGGIFY</h2>
+    <p>One sweep from seed 0 gives one number, and that number is mostly luck. To see the real distribution, the capture runs
+      independent <b>search orders</b>: order <i>k</i> sweeps <code>--start k·10<sup>12</sup></code>, <code>k·10<sup>12</sup>+1</code>, …
+      until the first failure. Each dot below is one order. The x axis is logarithmic. Hover a dot to see its exact seed.</p>
+    <div class="viz"><div id="dist"></div><div class="cap" id="dist-cap"></div></div>
+    <div class="grid g2">
+      <div class="viz"><h4 style="margin:0 0 6px">Fraction of search orders that found the bug, by number of seeds tried</h4><div id="cdf"></div></div>
+      <div class="viz"><h4 style="margin:0 0 6px">Summary of the captured orders</h4><table class="data" id="dist-table"></table>
+        <p class="cap" id="dist-why"></p></div>
+    </div>
+    <h3>Model check (JS re-implementation, not the Zig program)</h3>
+    <p>If the bug fires exactly when a seed takes the combined path <code>short_retry_then_timeout</code>, the number of seeds to
+      the first failure is geometric with <i>p</i> = (seeds that took the combined path) / (seeds swept). Both rates come from the
+      correct-code sweeps below. This in-browser model draws search orders from those two geometric distributions with
+      <code>DST.Rand</code>. Compare its medians with the real ones above. Dashed lines are the model, solid lines are the captured runs.</p>
+    <div class="controls"><label>model seed <input type="number" id="ms-seed" value="1" style="width:90px"></label>
+      <button class="primary" id="ms-go">draw 100 orders each</button><span class="out" id="ms-out"></span></div>
+    <div class="viz"><div id="ms-chart"></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>How often each rare path runs, per 1000 seeds</h2>
+    <p>Counts from the correct code: <code>sweep</code> (realistic rates) vs <code>sweep 100000 --buggify</code>. The scale is
+      logarithmic. The bars show how many times the path ran per 1000 seeds. Hover a bar to see in how many seeds it ran at least once.
+      The last row is the bug's trigger: a short write and then a timeout on the same flush.</p>
+    <div class="viz"><div id="paths"></div></div>
+    <div class="grid g2">
+      <div class="viz"><h4 style="margin:0 0 6px">BUGGIFY points over 100,000 seeds: seeds where the point was active</h4><div id="pts-active"></div>
+        <div class="cap">About 1/4 of seeds for each point: activation is one coin flip per point per seed.</div></div>
+      <div class="viz"><h4 style="margin:0 0 6px">…and how many times it fired</h4><div id="pts-fired"></div>
+        <div class="cap">A point that sits on a hot path (every send, every write) fires far more often than a once-per-run knob
+          like <code>small_buffer</code>.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>Replay of a real failing run</h2>
+    <p>Pick a run and step through its log. The top row is the server's file: green means the right record is at that offset,
+      red <code>X</code> means a wrong one. The row above it holds the records in the writer's buffer, each drawn above the offset
+      it belongs at. The bracket is the <b>file region the current flush targets</b> (<code>flush.offset … +count</code>). The bracket
+      turns red when <code>flush.offset ≠ base</code>, which is the stale offset the bug leaves behind.</p>
+    <div class="controls pick" id="rp-pick"></div>
+    <div class="rp-grid">
+      <div><div class="viz" id="rp-state" style="margin:0"></div><div class="rp-now" id="rp-now"></div></div>
+      <div class="loglist tl" id="rp-log"></div>
+    </div>
+    <div id="rp-player"></div>
+    <h3>Which BUGGIFY points fired in the failing run</h3>
+    <p id="bt-cap"></p>
+    <div class="viz"><div id="btl"></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>The bug: one missing line, read by one rare path</h2>
+    <div class="grid g2">
+      <div><h4>Short-write handling in <code>writer_on_ack</code></h4>
+<pre class="code"><span class="c">// Rare path 1: a short write. Retry the rest of the batch.</span>
+sim.hit(.short_write_retry);
+sim.event(.short_ack, m.id, written, flush.count);
+flush.count -= written;
+<span class="c">// THE BUG: the offset is not advanced. The retry below does not notice (it sends from</span>
+<span class="c">// `base`); only the timeout path in writer_tick reads flush.offset.</span>
+<span class="bad"><span class="kw">if</span> (!bug_stale_offset) flush.offset += written;</span>
+flush.after_short = <span class="kw">true</span>;
+flush.id = sim.next_id;
+sim.next_id += <span class="n">1</span>;
+<span class="good">sim.send_request(sim.base, .retry);</span></pre></div>
+      <div><h4>The only reader of <code>flush.offset</code>: the timeout in <code>writer_tick</code></h4>
+<pre class="code"><span class="kw">if</span> (sim.flush) |*flush| {
+    <span class="kw">if</span> (sim.tick &lt; flush.deadline) <span class="kw">return</span>;
+    <span class="c">// Rare path 2: the timeout fires while the flush is still in progress.</span>
+    sim.hit(.timeout_in_flush);
+    <span class="kw">if</span> (flush.after_short) sim.hit(.short_retry_then_timeout);
+    sim.event(.timeout, flush.id, <span class="n">0</span>, <span class="n">0</span>);
+    flush.id = sim.next_id;
+    sim.next_id += <span class="n">1</span>;
+    <span class="c">// Resend the flush we are waiting on, to the offset recorded in it.</span>
+<span class="bad">    sim.send_request(flush.offset, .resend);</span>
+    <span class="kw">return</span>;
+}</pre></div>
+    </div>
+    <div class="callout bug"><strong>Why tests miss it</strong><span id="why"></span></div>
+    <h3>The BUGGIFY macro of this example</h3>
+<pre class="code"><span class="c">/// `if (sim.buggify(.point))` is this example's BUGGIFY macro. Off unless --buggify; then</span>
+<span class="c">/// true with probability 1/4 at points that are active for this seed.</span>
+<span class="kw">fn</span> <span class="fn">buggify</span>(sim: *Sim, point: Point) bool {
+    <span class="kw">if</span> (!buggify_enabled <span class="kw">or</span> !sim.active[@backingInt(point)]) <span class="kw">return false</span>;
+    <span class="kw">if</span> (sim.bug_prng.random().uintLessThan(u32, <span class="n">4</span>) != <span class="n">0</span>) <span class="kw">return false</span>;
+    sim.fired[@backingInt(point)] += <span class="n">1</span>;
+    sim.event(.buggify, @backingInt(point), <span class="n">0</span>, <span class="n">0</span>);
+    <span class="kw">return true</span>;
+}
+<span class="c">// in the server's write path (production code):</span>
+<span class="kw">if</span> (n == m.count <span class="kw">and</span> m.count > <span class="n">1</span> <span class="kw">and</span> sim.buggify(.short_write)) {
+    n = sim.bug_prng.random().intRangeAtMost(u8, <span class="n">1</span>, m.count - <span class="n">1</span>);
+}
+<span class="c">// when arming the flush timeout:</span>
+<span class="kw">const</span> timeout: u64 = <span class="kw">if</span> (sim.buggify(.tiny_timeout)) timeout_ticks_buggified <span class="kw">else</span> timeout_ticks;</pre>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Seed stability: the failing seed stops meaning anything</h2>
+    <p><code>--extra-draw</code> adds one <code>random.int(u64)</code> before <code>Options.generate</code>, as if someone had added a field
+      to <code>Options</code>. The logic does not change at all. The same seed number, run three ways:</p>
+    <div class="viz"><table class="data optdiff" id="stab"></table></div>
+    <div class="grid g2">
+      <div class="viz"><h4 style="margin:0 0 6px">The disk at the end of each run</h4><div id="stab-disk"></div></div>
+      <div class="callout warn" style="margin:16px 0"><strong>A seed is a pointer into the PRNG, not a test</strong><span id="stab-text"></span></div>
+    </div>
+    <h3>The fix: pin the failure as a scenario with no PRNG</h3>
+    <p>The <code>scenario</code> mode replays a fixed list of steps against the same production code. Every delay is 1 tick and every
+      fault is named. This follows the tests in TigerBeetle's <code>src/vsr/replica_test.zig</code>.</p>
+    <div class="grid g2">
+      <div><h4>The scenario (from <code>main.zig</code>)</h4>
+<pre class="code"><span class="kw">const</span> scenario_name = <span class="s">"short-write-then-timeout"</span>;
+<span class="kw">const</span> scenario = [_]Step{
+    .{ .append = <span class="n">4</span> },
+    .{ .short_write_next = <span class="n">2</span> },
+    .{ .run = <span class="n">3</span> },
+    .{ .drop_acks = <span class="n">1</span> },
+    .{ .run = <span class="n">20</span> },
+    .{ .expect_durable = <span class="n">4</span> },
+};</pre>
+        <h4>TigerBeetle: <span class="src"><a class="file">src/vsr/replica_test.zig</a> · "Cluster: repair: corrupt reply"</span></h4>
+<pre class="code"><span class="kw">const</span> t = <span class="kw">try</span> TestContext.init(.{ .replica_count = <span class="n">3</span> });
+<span class="kw">defer</span> t.deinit();
+
+<span class="kw">var</span> c = t.clients(.{});
+<span class="kw">try</span> c.request(<span class="n">2</span>, <span class="n">2</span>);
+<span class="kw">try</span> expectEqual(t.replica(.R_).commit(), <span class="n">2</span>);
+
+<span class="c">// Prevent any view changes, to ensure A0 repairs its corrupt prepare.</span>
+t.replica(.R_).drop(.R_, .bidirectional, .join_view);
+
+<span class="c">// Block the client from seeing the reply from the cluster.</span>
+t.replica(.R_).drop(.C_, .outgoing, .reply);
+<span class="kw">try</span> c.request(<span class="n">3</span>, <span class="n">2</span>);
+...
+t.replica(.A0).pass(.C_, .outgoing, .reply);
+t.run();
+
+<span class="kw">try</span> expectEqual(c.replies(), <span class="n">3</span>);</pre></div>
+      <div><h4>The scenario, step by step (bug on), parsed from <code>scenario --bug-stale-offset</code></h4>
+        <div class="viz" id="sc-viz" style="margin-top:4px"></div>
+        <table class="data" id="sc-table"></table>
+        <div class="callout ok"><strong>Immune to <code>--extra-draw</code></strong><span id="sc-text"></span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Determinism: replay twice, get the same bytes</h2>
+    <div class="grid g2" id="det"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>How TigerBeetle (and FoundationDB) do this</h2>
+    <div class="grid g2">
+      <div class="card"><h4><span class="src"><a class="file">src/vopr.zig</a> · options_swarm</span></h4>
+<pre class="code">.packet_loss_probability = ratio(prng.int_inclusive(u8, <span class="n">30</span>), <span class="n">100</span>),
+.path_clog_probability = ratio(prng.int_inclusive(u8, <span class="n">2</span>), <span class="n">100</span>),
+.packet_replay_probability = ratio(prng.int_inclusive(u8, <span class="n">50</span>), <span class="n">100</span>),
+...
+.read_fault_probability = ratio(prng.range_inclusive(u8, <span class="n">0</span>, <span class="n">10</span>), <span class="n">100</span>),
+.write_fault_probability = ratio(prng.range_inclusive(u8, <span class="n">0</span>, <span class="n">10</span>), <span class="n">100</span>),
+.write_misdirect_probability = ratio(prng.range_inclusive(u8, <span class="n">0</span>, <span class="n">10</span>), <span class="n">100</span>),
+.crash_fault_probability = ratio(prng.range_inclusive(u8, <span class="n">80</span>, <span class="n">100</span>), <span class="n">100</span>),</pre>
+        <p style="font-size:.9rem"><b>Swarm testing</b> draws the <i>environment's</i> fault rates per seed, so some seeds are far more
+          hostile than production and rare environment events become common there. It does not reach rare branches that depend on
+          the code's own knobs (a 2-tick timeout, a one-batch buffer). BUGGIFY reaches those.</p></div>
+      <div class="card"><h4><span class="src">FoundationDB · <code>BUGGIFY</code></span></h4>
+<pre class="code"><span class="kw">if</span> (BUGGIFY) bufferSize = <span class="n">1</span>;
+<span class="kw">if</span> ( randomize &amp;&amp; BUGGIFY ) DD_SHARD_METRICS_TIMEOUT = <span class="n">0.1</span>;</pre>
+        <p style="font-size:.9rem">Fault points written into the production code that are true only in simulation. On first evaluation
+          each line is enabled or disabled for the whole run (25%). An enabled line evaluates to true 25% of the time.
+          <code>BUGGIFY_WITH_PROB(x)</code> sets a custom firing rate. See <a href="https://apple.github.io/foundationdb/testing.html">FoundationDB: Simulation and Testing</a>
+          and <a href="https://transactional.blog/simulation/buggify">transactional.blog/simulation/buggify</a>. TigerBeetle mentions it once, as a
+          TODO in <code>src/vsr/replica.zig</code>: <code>// TODO(Buggify): skip updating the JV, since it isn't required for correctness.</code></p></div>
+      <div class="card"><h4><span class="src"><a class="file">src/testing/storage.zig</a> · write_sectors_finish</span></h4>
+<pre class="code"><span class="kw">if</span> (storage.prng.chance(storage.options.write_fault_probability)) {
+    <span class="kw">if</span> (storage.pick_faulty_sector(write.zone, write.offset, write.buffer.len)) |sector| {
+        storage.fault_sector(write.zone, sector);
+    }
+}</pre>
+        <p style="font-size:.9rem">Storage faults are injected at the moment a write completes. The <code>StorageFaultAtlas</code> keeps them within what
+          the cluster can repair. <code>env_write_len</code> in this example works the same way: when the disk finishes a write, it
+          may report a short one.</p></div>
+      <div class="card"><h4><span class="src"><a class="file">src/vsr/replica_test.zig</a> · TestContext.init</span></h4>
+<pre class="code">seed: u64 = <span class="n">123</span>,
+...
+.path_clog_probability = Ratio.zero(),
+...
+.storage_fault_atlas = .{
+    .faulty_superblock = <span class="kw">false</span>,
+    .faulty_wal_headers = <span class="kw">false</span>,
+    .faulty_wal_prepares = <span class="kw">false</span>,
+    .faulty_client_replies = <span class="kw">false</span>,
+    .faulty_grid = <span class="kw">false</span>,
+},</pre>
+        <p style="font-size:.9rem">Random faults are switched off and the seed is fixed. Faults happen only where a test names them
+          (<code>drop_all</code>, <code>drop</code>, <code>corrupt</code>). <code>src/testing/marks.zig</code> then checks that the test really took the rare path
+          (<code>marks.check("send_commit: primary abdicating")</code> … <code>mark.expect_hit()</code>). This example's scenario prints
+          <code>short_retry_then_timeout=1</code> for the same reason.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/14-rare-bugs-buggify</span>
+<span class="p">$ zig run main.zig -- sweep</span>                                          <span class="d"># 2,000,000 seeds, correct code</span>
+<span class="p">$ zig run main.zig -- sweep 2000000 --bug-stale-offset</span>               <span class="d"># realistic fault rates</span>
+<span class="p">$ zig run main.zig -- sweep 2000000 --bug-stale-offset --buggify</span>     <span class="d"># BUGGIFY points on</span>
+<span class="p">$ zig run main.zig -- sweep 5000000 --bug-stale-offset --start 1000000000000</span>   <span class="d"># another search order</span>
+<span class="p">$ zig run main.zig -- run 290087 --bug-stale-offset</span>
+<span class="p">$ zig run main.zig -- run 290087 --bug-stale-offset --extra-draw</span>   <span class="d"># same seed, one extra PRNG draw</span>
+<span class="p">$ zig run main.zig -- scenario --bug-stale-offset</span>                    <span class="d"># the pinned regression test</span>
+<span class="p">$ site/tools/capture.sh 14</span>                                         <span class="d"># regenerate every number on this page</span></pre>
+    <p class="cap">Use ReleaseSafe (<code>zig build-exe -OReleaseSafe main.zig</code>) for the big sweeps. Debug mode gives the same trace hashes but runs much slower.</p>
+    <h3>Captured output</h3>
+    <div class="controls pick" id="raw-pick"></div>
+    <div id="raw"></div>
+  </section>
+</main>
+<script type="text/plain" id="log-sweep" data-src="data/14/sweep.txt">
+path short_write_retry hits=4489 seeds=4486 of=2000000
+path timeout_in_flush hits=76406 seeds=75118 of=2000000
+path full_while_reconnect hits=1243 seeds=1243 of=2000000
+path short_retry_then_timeout hits=18 seeds=18 of=2000000
+PASS: 2000000 seeds (from seed 0)
+
+real	0m6.166s
+user	0m6.162s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/14/sweep-bug.txt">
+CORRUPTION: file offset 6 now holds record 7 (tick 27, request #5)
+path short_write_retry hits=653 seeds=653 of=290088
+path timeout_in_flush hits=11202 seeds=11020 of=290088
+path full_while_reconnect hits=177 seeds=177 of=290088
+path short_retry_then_timeout hits=1 seeds=1 of=290088
+FAIL at seed=290087 (corruption) after 290088 seeds. Replay with:
+  zig run main.zig -- run 290087 --bug-stale-offset
+
+real	0m0.877s
+user	0m0.876s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-bug-buggify" data-src="data/14/sweep-bug-buggify.txt">
+CORRUPTION: file offset 2 now holds record 3 (tick 40, request #5)
+path short_write_retry hits=20 seeds=12 of=41
+path timeout_in_flush hits=48 seeds=14 of=41
+path full_while_reconnect hits=12 seeds=6 of=41
+path short_retry_then_timeout hits=1 seeds=1 of=41
+buggify short_write active_seeds=14 fired=24 of=41
+buggify tiny_timeout active_seeds=4 fired=19 of=41
+buggify delay_ack active_seeds=11 fired=37 of=41
+buggify drop_connection active_seeds=13 fired=54 of=41
+buggify small_buffer active_seeds=6 fired=2 of=41
+buggify slow_reconnect active_seeds=14 fired=10 of=41
+FAIL at seed=40 (corruption) after 41 seeds. Replay with:
+  zig run main.zig -- run 40 --bug-stale-offset --buggify
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-buggify" data-src="data/14/sweep-buggify.txt">
+path short_write_retry hits=45608 seeds=20725 of=100000
+path timeout_in_flush hits=146843 seeds=39049 of=100000
+path full_while_reconnect hits=16804 seeds=10831 of=100000
+path short_retry_then_timeout hits=6198 seeds=3582 of=100000
+buggify short_write active_seeds=25249 fired=51829 of=100000
+buggify tiny_timeout active_seeds=24997 fired=103163 of=100000
+buggify delay_ack active_seeds=25038 fired=87953 of=100000
+buggify drop_connection active_seeds=24955 fired=89015 of=100000
+buggify small_buffer active_seeds=24926 fired=6321 of=100000
+buggify slow_reconnect active_seeds=24773 fired=5329 of=100000
+PASS: 100000 seeds (from seed 0)
+
+real	0m0.380s
+user	0m0.380s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-extra" data-src="data/14/sweep-bug-extra-draw.txt">
+CORRUPTION: file offset 15 now holds record 16 (tick 31, request #11)
+path short_write_retry hits=480 seeds=480 of=229450
+path timeout_in_flush hits=8818 seeds=8657 of=229450
+path full_while_reconnect hits=148 seeds=148 of=229450
+path short_retry_then_timeout hits=1 seeds=1 of=229450
+FAIL at seed=229449 (corruption) after 229450 seeds. Replay with:
+  zig run main.zig -- run 229449 --bug-stale-offset --extra-draw
+
+real	0m0.734s
+user	0m0.734s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-orders-plain" data-src="data/14/orders-plain.txt">
+order=0 start=0 FAIL at seed=290087 (corruption) after 290088 seeds. Replay with:
+order=1 start=1000000000000 FAIL at seed=1000000024232 (corruption) after 24233 seeds. Replay with:
+order=2 start=2000000000000 FAIL at seed=2000000145631 (corruption) after 145632 seeds. Replay with:
+order=3 start=3000000000000 FAIL at seed=3000000038826 (corruption) after 38827 seeds. Replay with:
+order=4 start=4000000000000 FAIL at seed=4000000061632 (corruption) after 61633 seeds. Replay with:
+order=5 start=5000000000000 FAIL at seed=5000000073645 (corruption) after 73646 seeds. Replay with:
+order=6 start=6000000000000 FAIL at seed=6000000098199 (corruption) after 98200 seeds. Replay with:
+order=7 start=7000000000000 FAIL at seed=7000000065689 (corruption) after 65690 seeds. Replay with:
+order=8 start=8000000000000 FAIL at seed=8000000073603 (corruption) after 73604 seeds. Replay with:
+order=9 start=9000000000000 FAIL at seed=9000000131644 (corruption) after 131645 seeds. Replay with:
+order=10 start=10000000000000 FAIL at seed=10000000108214 (corruption) after 108215 seeds. Replay with:
+order=11 start=11000000000000 FAIL at seed=11000000274732 (corruption) after 274733 seeds. Replay with:
+order=12 start=12000000000000 FAIL at seed=12000000317411 (corruption) after 317412 seeds. Replay with:
+order=13 start=13000000000000 FAIL at seed=13000000001791 (corruption) after 1792 seeds. Replay with:
+order=14 start=14000000000000 FAIL at seed=14000000340121 (corruption) after 340122 seeds. Replay with:
+order=15 start=15000000000000 FAIL at seed=15000000414064 (corruption) after 414065 seeds. Replay with:
+order=16 start=16000000000000 FAIL at seed=16000000080017 (corruption) after 80018 seeds. Replay with:
+order=17 start=17000000000000 FAIL at seed=17000000047986 (corruption) after 47987 seeds. Replay with:
+order=18 start=18000000000000 FAIL at seed=18000000062823 (corruption) after 62824 seeds. Replay with:
+order=19 start=19000000000000 FAIL at seed=19000000086179 (corruption) after 86180 seeds. Replay with:
+order=20 start=20000000000000 FAIL at seed=20000000017049 (corruption) after 17050 seeds. Replay with:
+order=21 start=21000000000000 FAIL at seed=21000000103204 (corruption) after 103205 seeds. Replay with:
+order=22 start=22000000000000 FAIL at seed=22000000351756 (corruption) after 351757 seeds. Replay with:
+order=23 start=23000000000000 FAIL at seed=23000000199938 (corruption) after 199939 seeds. Replay with:
+</script>
+<script type="text/plain" id="log-orders-buggify" data-src="data/14/orders-buggify.txt">
+order=0 start=0 FAIL at seed=40 (corruption) after 41 seeds. Replay with:
+order=1 start=1000000000000 FAIL at seed=1000000000012 (corruption) after 13 seeds. Replay with:
+order=2 start=2000000000000 FAIL at seed=2000000000076 (corruption) after 77 seeds. Replay with:
+order=3 start=3000000000000 FAIL at seed=3000000000009 (corruption) after 10 seeds. Replay with:
+order=4 start=4000000000000 FAIL at seed=4000000000020 (corruption) after 21 seeds. Replay with:
+order=5 start=5000000000000 FAIL at seed=5000000000065 (corruption) after 66 seeds. Replay with:
+order=6 start=6000000000000 FAIL at seed=6000000000005 (corruption) after 6 seeds. Replay with:
+order=7 start=7000000000000 FAIL at seed=7000000000000 (corruption) after 1 seeds. Replay with:
+order=8 start=8000000000000 FAIL at seed=8000000000020 (corruption) after 21 seeds. Replay with:
+order=9 start=9000000000000 FAIL at seed=9000000000007 (corruption) after 8 seeds. Replay with:
+order=10 start=10000000000000 FAIL at seed=10000000000082 (corruption) after 83 seeds. Replay with:
+order=11 start=11000000000000 FAIL at seed=11000000000069 (corruption) after 70 seeds. Replay with:
+order=12 start=12000000000000 FAIL at seed=12000000000040 (corruption) after 41 seeds. Replay with:
+order=13 start=13000000000000 FAIL at seed=13000000000022 (corruption) after 23 seeds. Replay with:
+order=14 start=14000000000000 FAIL at seed=14000000000013 (corruption) after 14 seeds. Replay with:
+order=15 start=15000000000000 FAIL at seed=15000000000007 (corruption) after 8 seeds. Replay with:
+order=16 start=16000000000000 FAIL at seed=16000000000002 (corruption) after 3 seeds. Replay with:
+order=17 start=17000000000000 FAIL at seed=17000000000033 (corruption) after 34 seeds. Replay with:
+order=18 start=18000000000000 FAIL at seed=18000000000008 (corruption) after 9 seeds. Replay with:
+order=19 start=19000000000000 FAIL at seed=19000000000032 (corruption) after 33 seeds. Replay with:
+order=20 start=20000000000000 FAIL at seed=20000000000023 (corruption) after 24 seeds. Replay with:
+order=21 start=21000000000000 FAIL at seed=21000000000058 (corruption) after 59 seeds. Replay with:
+order=22 start=22000000000000 FAIL at seed=22000000000048 (corruption) after 49 seeds. Replay with:
+order=23 start=23000000000000 FAIL at seed=23000000000056 (corruption) after 57 seeds. Replay with:
+order=24 start=24000000000000 FAIL at seed=24000000000081 (corruption) after 82 seeds. Replay with:
+order=25 start=25000000000000 FAIL at seed=25000000000005 (corruption) after 6 seeds. Replay with:
+order=26 start=26000000000000 FAIL at seed=26000000000030 (corruption) after 31 seeds. Replay with:
+order=27 start=27000000000000 FAIL at seed=27000000000057 (corruption) after 58 seeds. Replay with:
+order=28 start=28000000000000 FAIL at seed=28000000000011 (corruption) after 12 seeds. Replay with:
+order=29 start=29000000000000 FAIL at seed=29000000000024 (corruption) after 25 seeds. Replay with:
+order=30 start=30000000000000 FAIL at seed=30000000000053 (corruption) after 54 seeds. Replay with:
+order=31 start=31000000000000 FAIL at seed=31000000000003 (corruption) after 4 seeds. Replay with:
+order=32 start=32000000000000 FAIL at seed=32000000000017 (corruption) after 18 seeds. Replay with:
+order=33 start=33000000000000 FAIL at seed=33000000000013 (corruption) after 14 seeds. Replay with:
+order=34 start=34000000000000 FAIL at seed=34000000000109 (corruption) after 110 seeds. Replay with:
+order=35 start=35000000000000 FAIL at seed=35000000000001 (corruption) after 2 seeds. Replay with:
+order=36 start=36000000000000 FAIL at seed=36000000000011 (corruption) after 12 seeds. Replay with:
+order=37 start=37000000000000 FAIL at seed=37000000000005 (corruption) after 6 seeds. Replay with:
+order=38 start=38000000000000 FAIL at seed=38000000000007 (corruption) after 8 seeds. Replay with:
+order=39 start=39000000000000 FAIL at seed=39000000000025 (corruption) after 26 seeds. Replay with:
+order=40 start=40000000000000 FAIL at seed=40000000000004 (corruption) after 5 seeds. Replay with:
+order=41 start=41000000000000 FAIL at seed=41000000000051 (corruption) after 52 seeds. Replay with:
+order=42 start=42000000000000 FAIL at seed=42000000000057 (corruption) after 58 seeds. Replay with:
+order=43 start=43000000000000 FAIL at seed=43000000000014 (corruption) after 15 seeds. Replay with:
+order=44 start=44000000000000 FAIL at seed=44000000000010 (corruption) after 11 seeds. Replay with:
+order=45 start=45000000000000 FAIL at seed=45000000000006 (corruption) after 7 seeds. Replay with:
+order=46 start=46000000000000 FAIL at seed=46000000000022 (corruption) after 23 seeds. Replay with:
+order=47 start=47000000000000 FAIL at seed=47000000000019 (corruption) after 20 seeds. Replay with:
+order=48 start=48000000000000 FAIL at seed=48000000000026 (corruption) after 27 seeds. Replay with:
+order=49 start=49000000000000 FAIL at seed=49000000000017 (corruption) after 18 seeds. Replay with:
+order=50 start=50000000000000 FAIL at seed=50000000000094 (corruption) after 95 seeds. Replay with:
+order=51 start=51000000000000 FAIL at seed=51000000000079 (corruption) after 80 seeds. Replay with:
+order=52 start=52000000000000 FAIL at seed=52000000000004 (corruption) after 5 seeds. Replay with:
+order=53 start=53000000000000 FAIL at seed=53000000000007 (corruption) after 8 seeds. Replay with:
+order=54 start=54000000000000 FAIL at seed=54000000000048 (corruption) after 49 seeds. Replay with:
+order=55 start=55000000000000 FAIL at seed=55000000000013 (corruption) after 14 seeds. Replay with:
+order=56 start=56000000000000 FAIL at seed=56000000000072 (corruption) after 73 seeds. Replay with:
+order=57 start=57000000000000 FAIL at seed=57000000000004 (corruption) after 5 seeds. Replay with:
+order=58 start=58000000000000 FAIL at seed=58000000000021 (corruption) after 22 seeds. Replay with:
+order=59 start=59000000000000 FAIL at seed=59000000000004 (corruption) after 5 seeds. Replay with:
+order=60 start=60000000000000 FAIL at seed=60000000000099 (corruption) after 100 seeds. Replay with:
+order=61 start=61000000000000 FAIL at seed=61000000000024 (corruption) after 25 seeds. Replay with:
+order=62 start=62000000000000 FAIL at seed=62000000000002 (corruption) after 3 seeds. Replay with:
+order=63 start=63000000000000 FAIL at seed=63000000000047 (corruption) after 48 seeds. Replay with:
+order=64 start=64000000000000 FAIL at seed=64000000000019 (corruption) after 20 seeds. Replay with:
+order=65 start=65000000000000 FAIL at seed=65000000000085 (corruption) after 86 seeds. Replay with:
+order=66 start=66000000000000 FAIL at seed=66000000000054 (corruption) after 55 seeds. Replay with:
+order=67 start=67000000000000 FAIL at seed=67000000000000 (corruption) after 1 seeds. Replay with:
+order=68 start=68000000000000 FAIL at seed=68000000000027 (corruption) after 28 seeds. Replay with:
+order=69 start=69000000000000 FAIL at seed=69000000000005 (corruption) after 6 seeds. Replay with:
+order=70 start=70000000000000 FAIL at seed=70000000000002 (corruption) after 3 seeds. Replay with:
+order=71 start=71000000000000 FAIL at seed=71000000000024 (corruption) after 25 seeds. Replay with:
+order=72 start=72000000000000 FAIL at seed=72000000000000 (corruption) after 1 seeds. Replay with:
+order=73 start=73000000000000 FAIL at seed=73000000000022 (corruption) after 23 seeds. Replay with:
+order=74 start=74000000000000 FAIL at seed=74000000000008 (corruption) after 9 seeds. Replay with:
+order=75 start=75000000000000 FAIL at seed=75000000000037 (corruption) after 38 seeds. Replay with:
+order=76 start=76000000000000 FAIL at seed=76000000000104 (corruption) after 105 seeds. Replay with:
+order=77 start=77000000000000 FAIL at seed=77000000000016 (corruption) after 17 seeds. Replay with:
+order=78 start=78000000000000 FAIL at seed=78000000000010 (corruption) after 11 seeds. Replay with:
+order=79 start=79000000000000 FAIL at seed=79000000000082 (corruption) after 83 seeds. Replay with:
+order=80 start=80000000000000 FAIL at seed=80000000000014 (corruption) after 15 seeds. Replay with:
+order=81 start=81000000000000 FAIL at seed=81000000000035 (corruption) after 36 seeds. Replay with:
+order=82 start=82000000000000 FAIL at seed=82000000000019 (corruption) after 20 seeds. Replay with:
+order=83 start=83000000000000 FAIL at seed=83000000000039 (corruption) after 40 seeds. Replay with:
+order=84 start=84000000000000 FAIL at seed=84000000000015 (corruption) after 16 seeds. Replay with:
+order=85 start=85000000000000 FAIL at seed=85000000000001 (corruption) after 2 seeds. Replay with:
+order=86 start=86000000000000 FAIL at seed=86000000000016 (corruption) after 17 seeds. Replay with:
+order=87 start=87000000000000 FAIL at seed=87000000000018 (corruption) after 19 seeds. Replay with:
+order=88 start=88000000000000 FAIL at seed=88000000000000 (corruption) after 1 seeds. Replay with:
+order=89 start=89000000000000 FAIL at seed=89000000000044 (corruption) after 45 seeds. Replay with:
+order=90 start=90000000000000 FAIL at seed=90000000000061 (corruption) after 62 seeds. Replay with:
+order=91 start=91000000000000 FAIL at seed=91000000000006 (corruption) after 7 seeds. Replay with:
+order=92 start=92000000000000 FAIL at seed=92000000000080 (corruption) after 81 seeds. Replay with:
+order=93 start=93000000000000 FAIL at seed=93000000000033 (corruption) after 34 seeds. Replay with:
+order=94 start=94000000000000 FAIL at seed=94000000000012 (corruption) after 13 seeds. Replay with:
+order=95 start=95000000000000 FAIL at seed=95000000000024 (corruption) after 25 seeds. Replay with:
+order=96 start=96000000000000 FAIL at seed=96000000000058 (corruption) after 59 seeds. Replay with:
+order=97 start=97000000000000 FAIL at seed=97000000000115 (corruption) after 116 seeds. Replay with:
+order=98 start=98000000000000 FAIL at seed=98000000000041 (corruption) after 42 seeds. Replay with:
+order=99 start=99000000000000 FAIL at seed=99000000000027 (corruption) after 28 seeds. Replay with:
+</script>
+<script type="text/plain" id="log-run-plain" data-src="data/14/run-plain.txt">
+seed=290087 records=19 append_gap=1..3 batch_max=5 capacity=16 linger=2 delay=1..3
+  faults: short_write=1/3000 per write, loss=1/1500, spike=1/1500 (15..40 ticks), reset=1/2000 per send, timeout=12 ticks
+  buggify: off
+ tick event      detail                         | state after the event
+    0 append     seq=0                          | base=0 buf=0..0 cap=16 flush=- conn=up net=- disk=...................
+    2 append     seq=1                          | base=0 buf=0..1 cap=16 flush=- conn=up net=- disk=...................
+    2 send       #1 off=0 n=2 first             | base=0 buf=0..1 cap=16 flush=#1@0+2 dl=14 conn=up net=- disk=...................
+    3 append     seq=2                          | base=0 buf=0..2 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    4 append     seq=3                          | base=0 buf=0..3 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    5 append     seq=4                          | base=0 buf=0..4 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    5 write      off=0 wrote 2/2                | base=0 buf=0..4 cap=16 flush=#1@0+2 dl=14 conn=up net=- disk=01.................
+    6 append     seq=5                          | base=0 buf=0..5 cap=16 flush=#1@0+2 dl=14 conn=up net=a1 disk=01.................
+    6 ack        #1 written=2                   | base=2 buf=2..5 cap=16 flush=- conn=up net=- disk=01.................
+    6 send       #2 off=2 n=4 first             | base=2 buf=2..5 cap=16 flush=#2@2+4 dl=18 conn=up net=- disk=01.................
+    7 append     seq=6                          | base=2 buf=2..6 cap=16 flush=#2@2+4 dl=18 conn=up net=q2 disk=01.................
+    9 append     seq=7                          | base=2 buf=2..7 cap=16 flush=#2@2+4 dl=18 conn=up net=q2 disk=01.................
+    9 write      off=2 wrote 4/4                | base=2 buf=2..7 cap=16 flush=#2@2+4 dl=18 conn=up net=- disk=012345.............
+   10 append     seq=8                          | base=2 buf=2..8 cap=16 flush=#2@2+4 dl=18 conn=up net=a2 disk=012345.............
+   12 append     seq=9                          | base=2 buf=2..9 cap=16 flush=#2@2+4 dl=18 conn=up net=a2 disk=012345.............
+   12 ack        #2 written=4                   | base=6 buf=6..9 cap=16 flush=- conn=up net=- disk=012345.............
+   12 send       #3 off=6 n=4 first             | base=6 buf=6..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=012345.............
+   13 write      off=6 wrote 1/4 SHORT          | base=6 buf=6..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=0123456............
+   14 short_ack  #3 written=1 of 4              | base=7 buf=7..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=0123456............
+   14 send       #4 off=7 n=3 retry             | base=7 buf=7..9 cap=16 flush=#4@6+3 dl=26 conn=up net=- disk=0123456............
+   15 append     seq=10                         | base=7 buf=7..10 cap=16 flush=#4@6+3 dl=26 conn=up net=q4 disk=0123456............
+   16 write      off=7 wrote 3/3                | base=7 buf=7..10 cap=16 flush=#4@6+3 dl=26 conn=up net=- disk=0123456789.........
+   17 append     seq=11                         | base=7 buf=7..11 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   20 append     seq=12                         | base=7 buf=7..12 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   21 append     seq=13                         | base=7 buf=7..13 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   22 append     seq=14                         | base=7 buf=7..14 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   25 append     seq=15                         | base=7 buf=7..15 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   26 timeout    #4 not acked                   | base=7 buf=7..15 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   26 send       #5 off=6 n=3 resend            | base=7 buf=7..15 cap=16 flush=#5@6+3 dl=38 conn=up net=a4 disk=0123456789.........
+   27 corrupt    offset 6 <- record 7           | base=7 buf=7..15 cap=16 flush=#5@6+3 dl=38 conn=up net=a4 disk=012345X789.........
+CORRUPTION: file offset 6 now holds record 7 (tick 27, request #5)
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+seed=290087 ticks=28 trace=75ece4944c1a73ff FAIL
+</script>
+<script type="text/plain" id="log-run-plain-again" data-src="data/14/run-plain-again.txt">
+seed=290087 records=19 append_gap=1..3 batch_max=5 capacity=16 linger=2 delay=1..3
+  faults: short_write=1/3000 per write, loss=1/1500, spike=1/1500 (15..40 ticks), reset=1/2000 per send, timeout=12 ticks
+  buggify: off
+ tick event      detail                         | state after the event
+    0 append     seq=0                          | base=0 buf=0..0 cap=16 flush=- conn=up net=- disk=...................
+    2 append     seq=1                          | base=0 buf=0..1 cap=16 flush=- conn=up net=- disk=...................
+    2 send       #1 off=0 n=2 first             | base=0 buf=0..1 cap=16 flush=#1@0+2 dl=14 conn=up net=- disk=...................
+    3 append     seq=2                          | base=0 buf=0..2 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    4 append     seq=3                          | base=0 buf=0..3 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    5 append     seq=4                          | base=0 buf=0..4 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    5 write      off=0 wrote 2/2                | base=0 buf=0..4 cap=16 flush=#1@0+2 dl=14 conn=up net=- disk=01.................
+    6 append     seq=5                          | base=0 buf=0..5 cap=16 flush=#1@0+2 dl=14 conn=up net=a1 disk=01.................
+    6 ack        #1 written=2                   | base=2 buf=2..5 cap=16 flush=- conn=up net=- disk=01.................
+    6 send       #2 off=2 n=4 first             | base=2 buf=2..5 cap=16 flush=#2@2+4 dl=18 conn=up net=- disk=01.................
+    7 append     seq=6                          | base=2 buf=2..6 cap=16 flush=#2@2+4 dl=18 conn=up net=q2 disk=01.................
+    9 append     seq=7                          | base=2 buf=2..7 cap=16 flush=#2@2+4 dl=18 conn=up net=q2 disk=01.................
+    9 write      off=2 wrote 4/4                | base=2 buf=2..7 cap=16 flush=#2@2+4 dl=18 conn=up net=- disk=012345.............
+   10 append     seq=8                          | base=2 buf=2..8 cap=16 flush=#2@2+4 dl=18 conn=up net=a2 disk=012345.............
+   12 append     seq=9                          | base=2 buf=2..9 cap=16 flush=#2@2+4 dl=18 conn=up net=a2 disk=012345.............
+   12 ack        #2 written=4                   | base=6 buf=6..9 cap=16 flush=- conn=up net=- disk=012345.............
+   12 send       #3 off=6 n=4 first             | base=6 buf=6..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=012345.............
+   13 write      off=6 wrote 1/4 SHORT          | base=6 buf=6..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=0123456............
+   14 short_ack  #3 written=1 of 4              | base=7 buf=7..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=0123456............
+   14 send       #4 off=7 n=3 retry             | base=7 buf=7..9 cap=16 flush=#4@6+3 dl=26 conn=up net=- disk=0123456............
+   15 append     seq=10                         | base=7 buf=7..10 cap=16 flush=#4@6+3 dl=26 conn=up net=q4 disk=0123456............
+   16 write      off=7 wrote 3/3                | base=7 buf=7..10 cap=16 flush=#4@6+3 dl=26 conn=up net=- disk=0123456789.........
+   17 append     seq=11                         | base=7 buf=7..11 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   20 append     seq=12                         | base=7 buf=7..12 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   21 append     seq=13                         | base=7 buf=7..13 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   22 append     seq=14                         | base=7 buf=7..14 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   25 append     seq=15                         | base=7 buf=7..15 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   26 timeout    #4 not acked                   | base=7 buf=7..15 cap=16 flush=#4@6+3 dl=26 conn=up net=a4 disk=0123456789.........
+   26 send       #5 off=6 n=3 resend            | base=7 buf=7..15 cap=16 flush=#5@6+3 dl=38 conn=up net=a4 disk=0123456789.........
+   27 corrupt    offset 6 <- record 7           | base=7 buf=7..15 cap=16 flush=#5@6+3 dl=38 conn=up net=a4 disk=012345X789.........
+CORRUPTION: file offset 6 now holds record 7 (tick 27, request #5)
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+seed=290087 ticks=28 trace=75ece4944c1a73ff FAIL
+</script>
+<script type="text/plain" id="log-run-plain-sha" data-src="data/14/run-plain-sha.txt">
+afee9e4ddd126af9e058a05cae9b31f049b1784caa97178720078452456107ca  run-plain.txt
+afee9e4ddd126af9e058a05cae9b31f049b1784caa97178720078452456107ca  run-plain-again.txt
+</script>
+<script type="text/plain" id="log-run-buggify" data-src="data/14/run-buggify.txt">
+seed=40 records=18 append_gap=1..1 batch_max=3 capacity=9 linger=1 delay=1..4
+  faults: short_write=1/3000 per write, loss=1/1500, spike=1/1500 (15..40 ticks), reset=1/2000 per send, timeout=12 ticks
+  buggify: active = short_write delay_ack small_buffer (each fires with probability 1/4 when reached)
+ tick event      detail                         | state after the event
+    0 append     seq=0                          | base=0 buf=0..0 cap=9 flush=- conn=up net=- disk=..................
+    1 append     seq=1                          | base=0 buf=0..1 cap=9 flush=- conn=up net=- disk=..................
+    1 send       #1 off=0 n=2 first             | base=0 buf=0..1 cap=9 flush=#1@0+2 dl=13 conn=up net=- disk=..................
+    2 append     seq=2                          | base=0 buf=0..2 cap=9 flush=#1@0+2 dl=13 conn=up net=q1 disk=..................
+    3 append     seq=3                          | base=0 buf=0..3 cap=9 flush=#1@0+2 dl=13 conn=up net=q1 disk=..................
+    4 append     seq=4                          | base=0 buf=0..4 cap=9 flush=#1@0+2 dl=13 conn=up net=q1 disk=..................
+    4 write      off=0 wrote 2/2                | base=0 buf=0..4 cap=9 flush=#1@0+2 dl=13 conn=up net=- disk=01................
+    4 buggify    delay_ack                      | base=0 buf=0..4 cap=9 flush=#1@0+2 dl=13 conn=up net=- disk=01................
+    5 append     seq=5                          | base=0 buf=0..5 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+    6 append     seq=6                          | base=0 buf=0..6 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+    7 append     seq=7                          | base=0 buf=0..7 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+    8 append     seq=8                          | base=0 buf=0..8 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+    9 full       buffer full (9): app blocks    | base=0 buf=0..8 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+   13 timeout    #1 not acked                   | base=0 buf=0..8 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+   13 send       #2 off=0 n=2 resend            | base=0 buf=0..8 cap=9 flush=#2@0+2 dl=25 conn=up net=a1 disk=01................
+   15 write      off=0 wrote 2/2                | base=0 buf=0..8 cap=9 flush=#2@0+2 dl=25 conn=up net=a1 disk=01................
+   18 ack        #2 written=2                   | base=2 buf=2..8 cap=9 flush=- conn=up net=a1 disk=01................
+   18 send       #3 off=2 n=3 first             | base=2 buf=2..8 cap=9 flush=#3@2+3 dl=30 conn=up net=a1 disk=01................
+   19 append     seq=9                          | base=2 buf=2..9 cap=9 flush=#3@2+3 dl=30 conn=up net=a1,q3 disk=01................
+   20 append     seq=10                         | base=2 buf=2..10 cap=9 flush=#3@2+3 dl=30 conn=up net=a1,q3 disk=01................
+   21 full       buffer full (9): app blocks    | base=2 buf=2..10 cap=9 flush=#3@2+3 dl=30 conn=up net=a1,q3 disk=01................
+   21 buggify    short_write                    | base=2 buf=2..10 cap=9 flush=#3@2+3 dl=30 conn=up net=a1 disk=01................
+   21 write      off=2 wrote 1/3 SHORT          | base=2 buf=2..10 cap=9 flush=#3@2+3 dl=30 conn=up net=a1 disk=012...............
+   22 stale_ack  #1 written=2 ignored           | base=2 buf=2..10 cap=9 flush=#3@2+3 dl=30 conn=up net=a3 disk=012...............
+   24 short_ack  #3 written=1 of 3              | base=3 buf=3..10 cap=9 flush=#3@2+3 dl=30 conn=up net=- disk=012...............
+   24 send       #4 off=3 n=2 retry             | base=3 buf=3..10 cap=9 flush=#4@2+2 dl=36 conn=up net=- disk=012...............
+   25 append     seq=11                         | base=3 buf=3..11 cap=9 flush=#4@2+2 dl=36 conn=up net=q4 disk=012...............
+   25 write      off=3 wrote 2/2                | base=3 buf=3..11 cap=9 flush=#4@2+2 dl=36 conn=up net=- disk=01234.............
+   25 buggify    delay_ack                      | base=3 buf=3..11 cap=9 flush=#4@2+2 dl=36 conn=up net=- disk=01234.............
+   26 full       buffer full (9): app blocks    | base=3 buf=3..11 cap=9 flush=#4@2+2 dl=36 conn=up net=a4 disk=01234.............
+   36 timeout    #4 not acked                   | base=3 buf=3..11 cap=9 flush=#4@2+2 dl=36 conn=up net=a4 disk=01234.............
+   36 send       #5 off=2 n=2 resend            | base=3 buf=3..11 cap=9 flush=#5@2+2 dl=48 conn=up net=a4 disk=01234.............
+   40 buggify    short_write                    | base=3 buf=3..11 cap=9 flush=#5@2+2 dl=48 conn=up net=a4 disk=01234.............
+   40 corrupt    offset 2 <- record 3           | base=3 buf=3..11 cap=9 flush=#5@2+2 dl=48 conn=up net=a4 disk=01X34.............
+CORRUPTION: file offset 2 now holds record 3 (tick 40, request #5)
+paths: short_write_retry=1 timeout_in_flush=2 full_while_reconnect=0 short_retry_then_timeout=1
+buggify fired: short_write=2 delay_ack=2 small_buffer=0
+seed=40 ticks=41 trace=e81d6e1afe4aba43 FAIL
+</script>
+<script type="text/plain" id="log-run-40-nobuggify" data-src="data/14/run-40-nobuggify.txt">
+seed=40 records=18 append_gap=1..1 batch_max=3 capacity=9 linger=1 delay=1..4
+  faults: short_write=1/3000 per write, loss=1/1500, spike=1/1500 (15..40 ticks), reset=1/2000 per send, timeout=12 ticks
+  buggify: off
+ tick event      detail                         | state after the event
+    0 append     seq=0                          | base=0 buf=0..0 cap=9 flush=- conn=up net=- disk=..................
+    1 append     seq=1                          | base=0 buf=0..1 cap=9 flush=- conn=up net=- disk=..................
+    1 send       #1 off=0 n=2 first             | base=0 buf=0..1 cap=9 flush=#1@0+2 dl=13 conn=up net=- disk=..................
+    2 append     seq=2                          | base=0 buf=0..2 cap=9 flush=#1@0+2 dl=13 conn=up net=q1 disk=..................
+    3 append     seq=3                          | base=0 buf=0..3 cap=9 flush=#1@0+2 dl=13 conn=up net=q1 disk=..................
+    4 append     seq=4                          | base=0 buf=0..4 cap=9 flush=#1@0+2 dl=13 conn=up net=q1 disk=..................
+    4 write      off=0 wrote 2/2                | base=0 buf=0..4 cap=9 flush=#1@0+2 dl=13 conn=up net=- disk=01................
+    5 append     seq=5                          | base=0 buf=0..5 cap=9 flush=#1@0+2 dl=13 conn=up net=a1 disk=01................
+    5 ack        #1 written=2                   | base=2 buf=2..5 cap=9 flush=- conn=up net=- disk=01................
+    5 send       #2 off=2 n=3 first             | base=2 buf=2..5 cap=9 flush=#2@2+3 dl=17 conn=up net=- disk=01................
+    6 append     seq=6                          | base=2 buf=2..6 cap=9 flush=#2@2+3 dl=17 conn=up net=q2 disk=01................
+    7 append     seq=7                          | base=2 buf=2..7 cap=9 flush=#2@2+3 dl=17 conn=up net=q2 disk=01................
+    7 write      off=2 wrote 3/3                | base=2 buf=2..7 cap=9 flush=#2@2+3 dl=17 conn=up net=- disk=01234.............
+    8 append     seq=8                          | base=2 buf=2..8 cap=9 flush=#2@2+3 dl=17 conn=up net=a2 disk=01234.............
+    9 append     seq=9                          | base=2 buf=2..9 cap=9 flush=#2@2+3 dl=17 conn=up net=a2 disk=01234.............
+   10 append     seq=10                         | base=2 buf=2..10 cap=9 flush=#2@2+3 dl=17 conn=up net=a2 disk=01234.............
+   10 ack        #2 written=3                   | base=5 buf=5..10 cap=9 flush=- conn=up net=- disk=01234.............
+   10 send       #3 off=5 n=3 first             | base=5 buf=5..10 cap=9 flush=#3@5+3 dl=22 conn=up net=- disk=01234.............
+   11 append     seq=11                         | base=5 buf=5..11 cap=9 flush=#3@5+3 dl=22 conn=up net=q3 disk=01234.............
+   12 append     seq=12                         | base=5 buf=5..12 cap=9 flush=#3@5+3 dl=22 conn=up net=q3 disk=01234.............
+   13 append     seq=13                         | base=5 buf=5..13 cap=9 flush=#3@5+3 dl=22 conn=up net=q3 disk=01234.............
+   13 write      off=5 wrote 3/3                | base=5 buf=5..13 cap=9 flush=#3@5+3 dl=22 conn=up net=- disk=01234567..........
+   14 full       buffer full (9): app blocks    | base=5 buf=5..13 cap=9 flush=#3@5+3 dl=22 conn=up net=a3 disk=01234567..........
+   16 ack        #3 written=3                   | base=8 buf=8..13 cap=9 flush=- conn=up net=- disk=01234567..........
+   16 send       #4 off=8 n=3 first             | base=8 buf=8..13 cap=9 flush=#4@8+3 dl=28 conn=up net=- disk=01234567..........
+   17 append     seq=14                         | base=8 buf=8..14 cap=9 flush=#4@8+3 dl=28 conn=up net=q4 disk=01234567..........
+   17 write      off=8 wrote 3/3                | base=8 buf=8..14 cap=9 flush=#4@8+3 dl=28 conn=up net=- disk=01234567890.......
+   18 append     seq=15                         | base=8 buf=8..15 cap=9 flush=#4@8+3 dl=28 conn=up net=a4 disk=01234567890.......
+   19 append     seq=16                         | base=8 buf=8..16 cap=9 flush=#4@8+3 dl=28 conn=up net=a4 disk=01234567890.......
+   19 ack        #4 written=3                   | base=11 buf=11..16 cap=9 flush=- conn=up net=- disk=01234567890.......
+   19 send       #5 off=11 n=3 first            | base=11 buf=11..16 cap=9 flush=#5@11+3 dl=31 conn=up net=- disk=01234567890.......
+   20 append     seq=17                         | base=11 buf=11..17 cap=9 flush=#5@11+3 dl=31 conn=up net=q5 disk=01234567890.......
+   23 write      off=11 wrote 3/3               | base=11 buf=11..17 cap=9 flush=#5@11+3 dl=31 conn=up net=- disk=01234567890123....
+   27 ack        #5 written=3                   | base=14 buf=14..17 cap=9 flush=- conn=up net=- disk=01234567890123....
+   27 send       #6 off=14 n=3 first            | base=14 buf=14..17 cap=9 flush=#6@14+3 dl=39 conn=up net=- disk=01234567890123....
+   31 write      off=14 wrote 3/3               | base=14 buf=14..17 cap=9 flush=#6@14+3 dl=39 conn=up net=- disk=01234567890123456.
+   34 ack        #6 written=3                   | base=17 buf=17..17 cap=9 flush=- conn=up net=- disk=01234567890123456.
+   34 send       #7 off=17 n=1 first            | base=17 buf=17..17 cap=9 flush=#7@17+1 dl=46 conn=up net=- disk=01234567890123456.
+   38 write      off=17 wrote 1/1               | base=17 buf=17..17 cap=9 flush=#7@17+1 dl=46 conn=up net=- disk=012345678901234567
+   40 ack        #7 written=1                   | base=18 buf=- cap=9 flush=- conn=up net=- disk=012345678901234567
+   40 done       18 records durable             | base=18 buf=- cap=9 flush=- conn=up net=- disk=012345678901234567
+paths: short_write_retry=0 timeout_in_flush=0 full_while_reconnect=0 short_retry_then_timeout=0
+seed=40 ticks=40 trace=a8391a5c8714ee05 PASS
+</script>
+<script type="text/plain" id="log-run-extra" data-src="data/14/run-extra-draw.txt">
+seed=290087 records=22 append_gap=1..6 batch_max=8 capacity=8 linger=3 delay=1..4
+  faults: short_write=1/3000 per write, loss=1/1500, spike=1/1500 (15..40 ticks), reset=1/2000 per send, timeout=12 ticks
+  buggify: off
+ tick event      detail                         | state after the event
+    0 append     seq=0                          | base=0 buf=0..0 cap=8 flush=- conn=up net=- disk=......................
+    3 append     seq=1                          | base=0 buf=0..1 cap=8 flush=- conn=up net=- disk=......................
+    3 send       #1 off=0 n=2 first             | base=0 buf=0..1 cap=8 flush=#1@0+2 dl=15 conn=up net=- disk=......................
+    6 append     seq=2                          | base=0 buf=0..2 cap=8 flush=#1@0+2 dl=15 conn=up net=q1 disk=......................
+   11 append     seq=3                          | base=0 buf=0..3 cap=8 flush=#1@0+2 dl=15 conn=up net=q1 disk=......................
+   15 timeout    #1 not acked                   | base=0 buf=0..3 cap=8 flush=#1@0+2 dl=15 conn=up net=q1 disk=......................
+   15 send       #2 off=0 n=2 resend            | base=0 buf=0..3 cap=8 flush=#2@0+2 dl=27 conn=up net=q1 disk=......................
+   16 append     seq=4                          | base=0 buf=0..4 cap=8 flush=#2@0+2 dl=27 conn=up net=q1,q2 disk=......................
+   17 write      off=0 wrote 2/2                | base=0 buf=0..4 cap=8 flush=#2@0+2 dl=27 conn=up net=q1 disk=01....................
+   18 ack        #2 written=2                   | base=2 buf=2..4 cap=8 flush=- conn=up net=q1 disk=01....................
+   18 send       #3 off=2 n=3 first             | base=2 buf=2..4 cap=8 flush=#3@2+3 dl=30 conn=up net=q1 disk=01....................
+   20 write      off=2 wrote 3/3                | base=2 buf=2..4 cap=8 flush=#3@2+3 dl=30 conn=up net=q1 disk=01234.................
+   22 append     seq=5                          | base=2 buf=2..5 cap=8 flush=#3@2+3 dl=30 conn=up net=q1,a3 disk=01234.................
+   22 ack        #3 written=3                   | base=5 buf=5..5 cap=8 flush=- conn=up net=q1 disk=01234.................
+   22 send       #4 off=5 n=1 first             | base=5 buf=5..5 cap=8 flush=#4@5+1 dl=34 conn=up net=q1 disk=01234.................
+   23 append     seq=6                          | base=5 buf=5..6 cap=8 flush=#4@5+1 dl=34 conn=up net=q1,q4 disk=01234.................
+   24 append     seq=7                          | base=5 buf=5..7 cap=8 flush=#4@5+1 dl=34 conn=up net=q1,q4 disk=01234.................
+   24 write      off=5 wrote 1/1                | base=5 buf=5..7 cap=8 flush=#4@5+1 dl=34 conn=up net=q1 disk=012345................
+   25 ack        #4 written=1                   | base=6 buf=6..7 cap=8 flush=- conn=up net=q1 disk=012345................
+   25 send       #5 off=6 n=2 first             | base=6 buf=6..7 cap=8 flush=#5@6+2 dl=37 conn=up net=q1 disk=012345................
+   27 write      off=0 wrote 2/2                | base=6 buf=6..7 cap=8 flush=#5@6+2 dl=37 conn=up net=q5 disk=012345................
+   27 write      off=6 wrote 2/2                | base=6 buf=6..7 cap=8 flush=#5@6+2 dl=37 conn=up net=a1 disk=01234567..............
+   28 append     seq=8                          | base=6 buf=6..8 cap=8 flush=#5@6+2 dl=37 conn=up net=a1,a5 disk=01234567..............
+   29 stale_ack  #1 written=2 ignored           | base=6 buf=6..8 cap=8 flush=#5@6+2 dl=37 conn=up net=a5 disk=01234567..............
+   31 ack        #5 written=2                   | base=8 buf=8..8 cap=8 flush=- conn=up net=- disk=01234567..............
+   31 send       #6 off=8 n=1 first             | base=8 buf=8..8 cap=8 flush=#6@8+1 dl=43 conn=up net=- disk=01234567..............
+   32 append     seq=9                          | base=8 buf=8..9 cap=8 flush=#6@8+1 dl=43 conn=up net=q6 disk=01234567..............
+   33 write      off=8 wrote 1/1                | base=8 buf=8..9 cap=8 flush=#6@8+1 dl=43 conn=up net=- disk=012345678.............
+   34 ack        #6 written=1                   | base=9 buf=9..9 cap=8 flush=- conn=up net=- disk=012345678.............
+   34 send       #7 off=9 n=1 first             | base=9 buf=9..9 cap=8 flush=#7@9+1 dl=46 conn=up net=- disk=012345678.............
+   37 append     seq=10                         | base=9 buf=9..10 cap=8 flush=#7@9+1 dl=46 conn=up net=q7 disk=012345678.............
+   37 write      off=9 wrote 1/1                | base=9 buf=9..10 cap=8 flush=#7@9+1 dl=46 conn=up net=- disk=0123456789............
+   39 ack        #7 written=1                   | base=10 buf=10..10 cap=8 flush=- conn=up net=- disk=0123456789............
+   39 send       #8 off=10 n=1 first            | base=10 buf=10..10 cap=8 flush=#8@10+1 dl=51 conn=up net=- disk=0123456789............
+   42 write      off=10 wrote 1/1               | base=10 buf=10..10 cap=8 flush=#8@10+1 dl=51 conn=up net=- disk=01234567890...........
+   43 append     seq=11                         | base=10 buf=10..11 cap=8 flush=#8@10+1 dl=51 conn=up net=a8 disk=01234567890...........
+   46 ack        #8 written=1                   | base=11 buf=11..11 cap=8 flush=- conn=up net=- disk=01234567890...........
+   46 send       #9 off=11 n=1 first            | base=11 buf=11..11 cap=8 flush=#9@11+1 dl=58 conn=up net=- disk=01234567890...........
+   48 append     seq=12                         | base=11 buf=11..12 cap=8 flush=#9@11+1 dl=58 conn=up net=q9 disk=01234567890...........
+   49 write      off=11 wrote 1/1               | base=11 buf=11..12 cap=8 flush=#9@11+1 dl=58 conn=up net=- disk=012345678901..........
+   50 append     seq=13                         | base=11 buf=11..13 cap=8 flush=#9@11+1 dl=58 conn=up net=a9 disk=012345678901..........
+   50 ack        #9 written=1                   | base=12 buf=12..13 cap=8 flush=- conn=up net=- disk=012345678901..........
+   50 send       #10 off=12 n=2 first           | base=12 buf=12..13 cap=8 flush=#10@12+2 dl=62 conn=up net=- disk=012345678901..........
+   52 write      off=12 wrote 2/2               | base=12 buf=12..13 cap=8 flush=#10@12+2 dl=62 conn=up net=- disk=01234567890123........
+   55 append     seq=14                         | base=12 buf=12..14 cap=8 flush=#10@12+2 dl=62 conn=up net=a10 disk=01234567890123........
+   55 ack        #10 written=2                  | base=14 buf=14..14 cap=8 flush=- conn=up net=- disk=01234567890123........
+   55 send       #11 off=14 n=1 first           | base=14 buf=14..14 cap=8 flush=#11@14+1 dl=67 conn=up net=- disk=01234567890123........
+   56 write      off=14 wrote 1/1               | base=14 buf=14..14 cap=8 flush=#11@14+1 dl=67 conn=up net=- disk=012345678901234.......
+   59 ack        #11 written=1                  | base=15 buf=- cap=8 flush=- conn=up net=- disk=012345678901234.......
+   60 append     seq=15                         | base=15 buf=15..15 cap=8 flush=- conn=up net=- disk=012345678901234.......
+   63 send       #12 off=15 n=1 first           | base=15 buf=15..15 cap=8 flush=#12@15+1 dl=75 conn=up net=- disk=012345678901234.......
+   64 write      off=15 wrote 1/1               | base=15 buf=15..15 cap=8 flush=#12@15+1 dl=75 conn=up net=- disk=0123456789012345......
+   65 append     seq=16                         | base=15 buf=15..16 cap=8 flush=#12@15+1 dl=75 conn=up net=a12 disk=0123456789012345......
+   66 ack        #12 written=1                  | base=16 buf=16..16 cap=8 flush=- conn=up net=- disk=0123456789012345......
+   66 send       #13 off=16 n=1 first           | base=16 buf=16..16 cap=8 flush=#13@16+1 dl=78 conn=up net=- disk=0123456789012345......
+   69 write      off=16 wrote 1/1               | base=16 buf=16..16 cap=8 flush=#13@16+1 dl=78 conn=up net=- disk=01234567890123456.....
+   70 append     seq=17                         | base=16 buf=16..17 cap=8 flush=#13@16+1 dl=78 conn=up net=a13 disk=01234567890123456.....
+   70 ack        #13 written=1                  | base=17 buf=17..17 cap=8 flush=- conn=up net=- disk=01234567890123456.....
+   70 send       #14 off=17 n=1 first           | base=17 buf=17..17 cap=8 flush=#14@17+1 dl=82 conn=up net=- disk=01234567890123456.....
+   72 append     seq=18                         | base=17 buf=17..18 cap=8 flush=#14@17+1 dl=82 conn=up net=q14 disk=01234567890123456.....
+   72 write      off=17 wrote 1/1               | base=17 buf=17..18 cap=8 flush=#14@17+1 dl=82 conn=up net=- disk=012345678901234567....
+   73 ack        #14 written=1                  | base=18 buf=18..18 cap=8 flush=- conn=up net=- disk=012345678901234567....
+   73 send       #15 off=18 n=1 first           | base=18 buf=18..18 cap=8 flush=#15@18+1 dl=85 conn=up net=- disk=012345678901234567....
+   74 write      off=18 wrote 1/1               | base=18 buf=18..18 cap=8 flush=#15@18+1 dl=85 conn=up net=- disk=0123456789012345678...
+   75 ack        #15 written=1                  | base=19 buf=- cap=8 flush=- conn=up net=- disk=0123456789012345678...
+   76 append     seq=19                         | base=19 buf=19..19 cap=8 flush=- conn=up net=- disk=0123456789012345678...
+   79 send       #16 off=19 n=1 first           | base=19 buf=19..19 cap=8 flush=#16@19+1 dl=91 conn=up net=- disk=0123456789012345678...
+   80 append     seq=20                         | base=19 buf=19..20 cap=8 flush=#16@19+1 dl=91 conn=up net=q16 disk=0123456789012345678...
+   81 write      off=19 wrote 1/1               | base=19 buf=19..20 cap=8 flush=#16@19+1 dl=91 conn=up net=- disk=01234567890123456789..
+   82 append     seq=21                         | base=19 buf=19..21 cap=8 flush=#16@19+1 dl=91 conn=up net=a16 disk=01234567890123456789..
+   84 ack        #16 written=1                  | base=20 buf=20..21 cap=8 flush=- conn=up net=- disk=01234567890123456789..
+   84 send       #17 off=20 n=2 first           | base=20 buf=20..21 cap=8 flush=#17@20+2 dl=96 conn=up net=- disk=01234567890123456789..
+   86 write      off=20 wrote 2/2               | base=20 buf=20..21 cap=8 flush=#17@20+2 dl=96 conn=up net=- disk=0123456789012345678901
+   88 ack        #17 written=2                  | base=22 buf=- cap=8 flush=- conn=up net=- disk=0123456789012345678901
+   88 done       22 records durable             | base=22 buf=- cap=8 flush=- conn=up net=- disk=0123456789012345678901
+paths: short_write_retry=0 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=0
+seed=290087 ticks=88 trace=7d78d5b40043be59 PASS
+</script>
+<script type="text/plain" id="log-run-fixed" data-src="data/14/run-fixed.txt">
+seed=290087 records=19 append_gap=1..3 batch_max=5 capacity=16 linger=2 delay=1..3
+  faults: short_write=1/3000 per write, loss=1/1500, spike=1/1500 (15..40 ticks), reset=1/2000 per send, timeout=12 ticks
+  buggify: off
+ tick event      detail                         | state after the event
+    0 append     seq=0                          | base=0 buf=0..0 cap=16 flush=- conn=up net=- disk=...................
+    2 append     seq=1                          | base=0 buf=0..1 cap=16 flush=- conn=up net=- disk=...................
+    2 send       #1 off=0 n=2 first             | base=0 buf=0..1 cap=16 flush=#1@0+2 dl=14 conn=up net=- disk=...................
+    3 append     seq=2                          | base=0 buf=0..2 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    4 append     seq=3                          | base=0 buf=0..3 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    5 append     seq=4                          | base=0 buf=0..4 cap=16 flush=#1@0+2 dl=14 conn=up net=q1 disk=...................
+    5 write      off=0 wrote 2/2                | base=0 buf=0..4 cap=16 flush=#1@0+2 dl=14 conn=up net=- disk=01.................
+    6 append     seq=5                          | base=0 buf=0..5 cap=16 flush=#1@0+2 dl=14 conn=up net=a1 disk=01.................
+    6 ack        #1 written=2                   | base=2 buf=2..5 cap=16 flush=- conn=up net=- disk=01.................
+    6 send       #2 off=2 n=4 first             | base=2 buf=2..5 cap=16 flush=#2@2+4 dl=18 conn=up net=- disk=01.................
+    7 append     seq=6                          | base=2 buf=2..6 cap=16 flush=#2@2+4 dl=18 conn=up net=q2 disk=01.................
+    9 append     seq=7                          | base=2 buf=2..7 cap=16 flush=#2@2+4 dl=18 conn=up net=q2 disk=01.................
+    9 write      off=2 wrote 4/4                | base=2 buf=2..7 cap=16 flush=#2@2+4 dl=18 conn=up net=- disk=012345.............
+   10 append     seq=8                          | base=2 buf=2..8 cap=16 flush=#2@2+4 dl=18 conn=up net=a2 disk=012345.............
+   12 append     seq=9                          | base=2 buf=2..9 cap=16 flush=#2@2+4 dl=18 conn=up net=a2 disk=012345.............
+   12 ack        #2 written=4                   | base=6 buf=6..9 cap=16 flush=- conn=up net=- disk=012345.............
+   12 send       #3 off=6 n=4 first             | base=6 buf=6..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=012345.............
+   13 write      off=6 wrote 1/4 SHORT          | base=6 buf=6..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=0123456............
+   14 short_ack  #3 written=1 of 4              | base=7 buf=7..9 cap=16 flush=#3@6+4 dl=24 conn=up net=- disk=0123456............
+   14 send       #4 off=7 n=3 retry             | base=7 buf=7..9 cap=16 flush=#4@7+3 dl=26 conn=up net=- disk=0123456............
+   15 append     seq=10                         | base=7 buf=7..10 cap=16 flush=#4@7+3 dl=26 conn=up net=q4 disk=0123456............
+   16 write      off=7 wrote 3/3                | base=7 buf=7..10 cap=16 flush=#4@7+3 dl=26 conn=up net=- disk=0123456789.........
+   17 append     seq=11                         | base=7 buf=7..11 cap=16 flush=#4@7+3 dl=26 conn=up net=a4 disk=0123456789.........
+   20 append     seq=12                         | base=7 buf=7..12 cap=16 flush=#4@7+3 dl=26 conn=up net=a4 disk=0123456789.........
+   21 append     seq=13                         | base=7 buf=7..13 cap=16 flush=#4@7+3 dl=26 conn=up net=a4 disk=0123456789.........
+   22 append     seq=14                         | base=7 buf=7..14 cap=16 flush=#4@7+3 dl=26 conn=up net=a4 disk=0123456789.........
+   25 append     seq=15                         | base=7 buf=7..15 cap=16 flush=#4@7+3 dl=26 conn=up net=a4 disk=0123456789.........
+   26 timeout    #4 not acked                   | base=7 buf=7..15 cap=16 flush=#4@7+3 dl=26 conn=up net=a4 disk=0123456789.........
+   26 send       #5 off=7 n=3 resend            | base=7 buf=7..15 cap=16 flush=#5@7+3 dl=38 conn=up net=a4 disk=0123456789.........
+   27 write      off=7 wrote 3/3                | base=7 buf=7..15 cap=16 flush=#5@7+3 dl=38 conn=up net=a4 disk=0123456789.........
+   28 append     seq=16                         | base=7 buf=7..16 cap=16 flush=#5@7+3 dl=38 conn=up net=a4,a5 disk=0123456789.........
+   29 append     seq=17                         | base=7 buf=7..17 cap=16 flush=#5@7+3 dl=38 conn=up net=a4,a5 disk=0123456789.........
+   30 append     seq=18                         | base=7 buf=7..18 cap=16 flush=#5@7+3 dl=38 conn=up net=a4,a5 disk=0123456789.........
+   30 ack        #5 written=3                   | base=10 buf=10..18 cap=16 flush=- conn=up net=a4 disk=0123456789.........
+   30 send       #6 off=10 n=5 first            | base=10 buf=10..18 cap=16 flush=#6@10+5 dl=42 conn=up net=a4 disk=0123456789.........
+   31 write      off=10 wrote 5/5               | base=10 buf=10..18 cap=16 flush=#6@10+5 dl=42 conn=up net=a4 disk=012345678901234....
+   33 ack        #6 written=5                   | base=15 buf=15..18 cap=16 flush=- conn=up net=a4 disk=012345678901234....
+   33 send       #7 off=15 n=4 first            | base=15 buf=15..18 cap=16 flush=#7@15+4 dl=45 conn=up net=a4 disk=012345678901234....
+   36 write      off=15 wrote 4/4               | base=15 buf=15..18 cap=16 flush=#7@15+4 dl=45 conn=up net=a4 disk=0123456789012345678
+   38 stale_ack  #4 written=3 ignored           | base=15 buf=15..18 cap=16 flush=#7@15+4 dl=45 conn=up net=a7 disk=0123456789012345678
+   39 ack        #7 written=4                   | base=19 buf=- cap=16 flush=- conn=up net=- disk=0123456789012345678
+   39 done       19 records durable             | base=19 buf=- cap=16 flush=- conn=up net=- disk=0123456789012345678
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+seed=290087 ticks=39 trace=c47b797ef48655dd PASS
+</script>
+<script type="text/plain" id="log-scenario" data-src="data/14/scenario.txt">
+scenario short-write-then-timeout: no PRNG; every fault comes from the script
+  step: append 4
+    0 append     seq=0                          | base=0 buf=0..0 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=1                          | base=0 buf=0..1 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=2                          | base=0 buf=0..2 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=3                          | base=0 buf=0..3 cap=8 flush=- conn=up net=- disk=....
+  step: next disk write persists only 2 records
+  step: run 3 ticks
+    0 send       #1 off=0 n=4 first             | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=....
+    1 write      off=0 wrote 2/4 SHORT          | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 short_ack  #1 written=2 of 4              | base=2 buf=2..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 send       #2 off=2 n=2 retry             | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=01..
+  step: drop the next 1 ack(s)
+  step: run 20 ticks
+    3 write      off=2 wrote 2/2                | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=0123
+    3 lost       ack #2 lost                    | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=0123
+   14 timeout    #2 not acked                   | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=0123
+   14 send       #3 off=2 n=2 resend            | base=2 buf=2..3 cap=8 flush=#3@2+2 dl=26 conn=up net=- disk=0123
+   15 write      off=2 wrote 2/2                | base=2 buf=2..3 cap=8 flush=#3@2+2 dl=26 conn=up net=- disk=0123
+   16 ack        #3 written=2                   | base=4 buf=- cap=8 flush=- conn=up net=- disk=0123
+  step: expect 4 records durable (writer base=4, file prefix=4)
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+scenario=short-write-then-timeout ticks=23 trace=ef8e58044952d8e8 PASS
+</script>
+<script type="text/plain" id="log-scenario-bug" data-src="data/14/scenario-bug.txt">
+scenario short-write-then-timeout: no PRNG; every fault comes from the script
+  step: append 4
+    0 append     seq=0                          | base=0 buf=0..0 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=1                          | base=0 buf=0..1 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=2                          | base=0 buf=0..2 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=3                          | base=0 buf=0..3 cap=8 flush=- conn=up net=- disk=....
+  step: next disk write persists only 2 records
+  step: run 3 ticks
+    0 send       #1 off=0 n=4 first             | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=....
+    1 write      off=0 wrote 2/4 SHORT          | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 short_ack  #1 written=2 of 4              | base=2 buf=2..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 send       #2 off=2 n=2 retry             | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=01..
+  step: drop the next 1 ack(s)
+  step: run 20 ticks
+    3 write      off=2 wrote 2/2                | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=0123
+    3 lost       ack #2 lost                    | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=0123
+   14 timeout    #2 not acked                   | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=0123
+   14 send       #3 off=0 n=2 resend            | base=2 buf=2..3 cap=8 flush=#3@0+2 dl=26 conn=up net=- disk=0123
+   15 corrupt    offset 0 <- record 2           | base=2 buf=2..3 cap=8 flush=#3@0+2 dl=26 conn=up net=- disk=X123
+CORRUPTION: file offset 0 now holds record 2 (tick 15, request #3)
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+scenario=short-write-then-timeout ticks=15 trace=eb058ab7f2f28465 FAIL
+</script>
+<script type="text/plain" id="log-scenario-bug-extra" data-src="data/14/scenario-bug-extra-draw.txt">
+scenario short-write-then-timeout: no PRNG; every fault comes from the script
+  step: append 4
+    0 append     seq=0                          | base=0 buf=0..0 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=1                          | base=0 buf=0..1 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=2                          | base=0 buf=0..2 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=3                          | base=0 buf=0..3 cap=8 flush=- conn=up net=- disk=....
+  step: next disk write persists only 2 records
+  step: run 3 ticks
+    0 send       #1 off=0 n=4 first             | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=....
+    1 write      off=0 wrote 2/4 SHORT          | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 short_ack  #1 written=2 of 4              | base=2 buf=2..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 send       #2 off=2 n=2 retry             | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=01..
+  step: drop the next 1 ack(s)
+  step: run 20 ticks
+    3 write      off=2 wrote 2/2                | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=0123
+    3 lost       ack #2 lost                    | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=0123
+   14 timeout    #2 not acked                   | base=2 buf=2..3 cap=8 flush=#2@0+2 dl=14 conn=up net=- disk=0123
+   14 send       #3 off=0 n=2 resend            | base=2 buf=2..3 cap=8 flush=#3@0+2 dl=26 conn=up net=- disk=0123
+   15 corrupt    offset 0 <- record 2           | base=2 buf=2..3 cap=8 flush=#3@0+2 dl=26 conn=up net=- disk=X123
+CORRUPTION: file offset 0 now holds record 2 (tick 15, request #3)
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+scenario=short-write-then-timeout ticks=15 trace=eb058ab7f2f28465 FAIL
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex14" });
+const { el, s, C } = DST;
+const fmt = (n) => Number(n).toLocaleString("en-US");
+
+// ---------------------------------------------------------------- parsing real output
+function parseRun(text) {
+  const r = { hdr: null, faults: {}, active: [], events: [], paths: {}, fired: {}, corrupt: null, final: null, steps: [], text };
+  let step = null;
+  for (const line of text.split("\n")) {
+    let m;
+    if ((m = line.match(/^seed=(\d+) records=(\d+) append_gap=1\.\.(\d+) batch_max=(\d+) capacity=(\d+) linger=(\d+) delay=1\.\.(\d+)/)))
+      r.hdr = { seed: +m[1], records: +m[2], gap: +m[3], batch: +m[4], cap: +m[5], linger: +m[6], delay: +m[7] };
+    else if ((m = line.match(/faults: short_write=(\S+) per write, loss=(\S+), spike=(\S+) \((\S+) ticks\), reset=(\S+) per send, timeout=(\d+) ticks/)))
+      r.faults = { short: m[1], loss: m[2], spike: m[3], spikeRange: m[4], reset: m[5], timeout: +m[6] };
+    else if ((m = line.match(/buggify: active = (.*?) \(each/))) r.active = m[1].trim().split(/\s+/).filter((x) => x && x !== "(none)");
+    else if ((m = line.match(/^  step: (.*)$/))) { step = m[1]; r.steps.push({ text: step, first: r.events.length }); }
+    else if ((m = line.match(/^\s*(\d+) (\w+)\s+(.*?)\s*\| base=(\d+) buf=(\S+) cap=(\d+) flush=(-|#\d+@\d+\+\d+ dl=\d+) conn=(\S+) net=(\S+) disk=(\S+)/))) {
+      const f = m[7] === "-" ? null : m[7].match(/#(\d+)@(\d+)\+(\d+) dl=(\d+)/);
+      const b = m[5] === "-" ? null : m[5].split("..").map(Number);
+      r.events.push({ t: +m[1], ev: m[2], detail: m[3], base: +m[4], buf: b, cap: +m[6],
+        flush: f && { id: +f[1], off: +f[2], count: +f[3], dl: +f[4] }, conn: m[8], net: m[9] === "-" ? [] : m[9].split(","), disk: m[10], line: line.trim(), step });
+    }
+    else if (line.startsWith("paths:")) for (const kv of line.slice(6).trim().split(" ")) { const [k, v] = kv.split("="); r.paths[k] = +v; }
+    else if (line.startsWith("buggify fired:")) for (const kv of line.slice(14).trim().split(" ")) { const [k, v] = kv.split("="); r.fired[k] = +v; }
+    else if ((m = line.match(/^CORRUPTION: file offset (\d+) now holds record (\d+) \(tick (\d+), request #(\d+)\)/))) r.corrupt = { off: +m[1], rec: +m[2], tick: +m[3], req: +m[4], line };
+    else if ((m = line.match(/^(?:seed|scenario)=(\S+) ticks=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/))) r.final = { id: m[1], ticks: +m[2], trace: m[3], result: m[4], line };
+  }
+  return r;
+}
+function parseSweep(text) {
+  const r = { paths: {}, points: {}, fail: null, pass: null, real: null };
+  for (const line of text.split("\n")) {
+    let m;
+    if ((m = line.match(/^path (\w+) hits=(\d+) seeds=(\d+) of=(\d+)/))) r.paths[m[1]] = { hits: +m[2], seeds: +m[3], of: +m[4] };
+    else if ((m = line.match(/^buggify (\w+) active_seeds=(\d+) fired=(\d+) of=(\d+)/))) r.points[m[1]] = { active: +m[2], fired: +m[3], of: +m[4] };
+    else if ((m = line.match(/^FAIL at seed=(\d+) \((\w+)\) after (\d+) seeds/))) r.fail = { seed: +m[1], why: m[2], after: +m[3] };
+    else if ((m = line.match(/^PASS: (\d+) seeds/))) r.pass = +m[1];
+    else if ((m = line.match(/^CORRUPTION: .*/))) r.corrupt = m[0];
+    else if ((m = line.match(/^real\s+(\d+)m([\d.]+)s/))) r.real = +m[1] * 60 + +m[2];
+  }
+  return r;
+}
+function parseOrders(text) {
+  return text.trim().split("\n").map((l) => {
+    const m = l.match(/order=(\d+) start=(\d+) FAIL at seed=(\d+) \(\w+\) after (\d+) seeds/);
+    return m ? { order: +m[1], start: m[2], seed: m[3], n: +m[4] } : null;
+  }).filter(Boolean);
+}
+const short = (t) => (Number.isInteger(t) ? ["1", "10", "100", "1k", "10k", "100k", "1M", "10M"][t] : "");
+const median = (v) => { const a = [...v].sort((x, y) => x - y), h = a.length >> 1; return a.length % 2 ? a[h] : (a[h - 1] + a[h]) / 2; };
+const mean = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+
+const swOk = parseSweep(DST.text("log-sweep")), swBug = parseSweep(DST.text("log-sweep-bug"));
+const swBugB = parseSweep(DST.text("log-sweep-bug-buggify")), swB = parseSweep(DST.text("log-sweep-buggify"));
+const swExtra = parseSweep(DST.text("log-sweep-extra"));
+const ordP = parseOrders(DST.text("log-orders-plain")), ordB = parseOrders(DST.text("log-orders-buggify"));
+const runP = parseRun(DST.text("log-run-plain")), runB = parseRun(DST.text("log-run-buggify")), run40 = parseRun(DST.text("log-run-40-nobuggify"));
+const runX = parseRun(DST.text("log-run-extra")), runF = parseRun(DST.text("log-run-fixed"));
+const scOk = parseRun(DST.text("log-scenario")), scBug = parseRun(DST.text("log-scenario-bug")), scBugX = parseRun(DST.text("log-scenario-bug-extra"));
+const nP = ordP.map((o) => o.n), nB = ordB.map((o) => o.n);
+const medP = median(nP), medB = median(nB);
+
+// ---------------------------------------------------------------- hero stats
+{
+  const stat = (num, lbl, col) => el("div", { class: "stat" }, el("div", { class: "num", style: col ? { color: col } : null }, num), el("div", { class: "lbl", html: lbl }));
+  DST.$("#stats").append(
+    stat(fmt(swOk.pass), `seeds pass, correct code (sweep in ${swOk.real.toFixed(1)} s)`),
+    stat("seed " + fmt(swBug.fail.seed), "first failure from seed 0, realistic rates", C.bug),
+    stat("seed " + fmt(swBugB.fail.seed), "first failure from seed 0, <code>--buggify</code>", C.yellow),
+    stat(Math.round(medP / medB).toLocaleString() + "×", `fewer seeds, median over search orders (${fmt(medP)} vs ${medB})`, C.accent2));
+}
+
+// ---------------------------------------------------------------- 01 architecture
+{
+  const W = 1000, H = 360, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const box = (x, y, w, h, title, sub, col, fill) => {
+    svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: fill || "#0f1726", stroke: col, "stroke-width": 1.5 }));
+    svg.append(s("text", { x: x + w / 2, y: y + 20, "text-anchor": "middle", fill: col, "font-size": 13, "font-weight": 700, "font-family": "monospace" }, title));
+    (sub || []).forEach((t, i) => svg.append(s("text", { x: x + w / 2, y: y + 38 + i * 15, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, t)));
+  };
+  const arrow = (x1, y1, x2, y2, col, dash, label) => {
+    svg.append(s("line", { x1, y1, x2, y2, stroke: col, "stroke-width": 1.5, "stroke-dasharray": dash || null, "marker-end": "url(#ah)" }));
+    if (label) svg.append(s("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 5, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, label));
+  };
+  const tag = (x, y, t) => {
+    const w = t.length * 6.6 + 14;
+    svg.append(s("rect", { x, y, width: w, height: 18, rx: 9, fill: "rgba(245,230,99,.12)", stroke: C.yellow }));
+    svg.append(s("text", { x: x + w / 2, y: y + 13, "text-anchor": "middle", fill: C.yellow, "font-size": 10.5, "font-family": "monospace" }, t));
+  };
+  svg.append(s("defs", {}, s("marker", { id: "ah", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: C.dim }))));
+  const f = runP.faults, h = runP.hdr;
+  // seed -> streams
+  box(20, 14, 120, 50, "seed", ["u64"], C.warn);
+  box(170, 14, 180, 50, "root PRNG", ["+1 draw if --extra-draw"], C.warn);
+  arrow(140, 39, 170, 39, C.warn);
+  const streams = [["Options", "per-seed knobs"], ["app_prng", "append gaps"], ["net_prng", "delay/loss/reset"], ["disk_prng", "short writes"], ["bug_prng", "BUGGIFY coins"]];
+  streams.forEach(([t, sub], i) => { box(380 + i * 122, 14, 114, 50, t, [sub], C.warn); });
+  arrow(350, 39, 380, 39, C.warn);
+  // main row
+  const y = 140;
+  box(20, y, 120, 110, "App", ["appends seq", "0,1,2,…", "blocks if full"], C.accent2);
+  box(180, y, 230, 150, "Batching writer", ["buffer base..base+len", "Flush{offset,count,deadline}", "short write → retry", "timeout → resend", "reset → reconnect backoff"], C.accent2);
+  box(450, y, 150, 110, "Network", [`loss ${f.loss}`, `spike ${f.spike}`, `(${f.spikeRange} ticks)`, `reset ${f.reset}/send`], C.dim, "#111827");
+  box(640, y, 150, 110, "Server", ["pwrite at offset", "ack {written}"], C.accent2);
+  box(830, y, 150, 110, "Disk (file)", [`short write ${f.short}`, "offset p = record p"], C.dim, "#111827");
+  arrow(140, y + 50, 180, y + 50, C.dim, null, "append");
+  arrow(410, y + 40, 450, y + 40, C.dim, null, "request");
+  arrow(600, y + 40, 640, y + 40, C.dim);
+  arrow(640, y + 80, 600, y + 80, C.dim, null, "ack");
+  arrow(450, y + 80, 410, y + 80, C.dim);
+  arrow(790, y + 55, 830, y + 55, C.dim, null, "write");
+  // buggify points
+  tag(190, y + 158, "tiny_timeout"); tag(300, y + 158, "drop_connection");
+  tag(190, y + 182, "small_buffer"); tag(300, y + 182, "slow_reconnect");
+  tag(650, y + 118, "short_write"); tag(650, y + 142, "delay_ack");
+  // checker
+  svg.append(s("text", { x: 830, y: y + 140, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "checked on every write:"));
+  svg.append(s("text", { x: 830, y: y + 156, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "disk[p] == p"));
+  svg.append(s("text", { x: 830, y: y + 176, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "on every ack:"));
+  svg.append(s("text", { x: 830, y: y + 192, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "base ≤ file prefix"));
+  svg.append(s("text", { x: 20, y: H - 6, fill: C.dim, "font-size": 11, "font-family": "monospace" },
+    `seed ${h.seed}: records=${h.records} batch_max=${h.batch} capacity=${h.cap} linger=${h.linger} delay=1..${h.delay} timeout=${f.timeout} ticks`));
+  DST.$("#arch").append(svg);
+}
+
+// ---------------------------------------------------------------- 02 distribution (log axis)
+{
+  const all = [...nP, ...nB], xmax = Math.ceil(Math.log10(Math.max(...all)));
+  const W = 1000, m = { l: 160, r: 50 }, bin = 0.08, R = 4.2, gap = 9;
+  const X = (v) => m.l + (Math.log10(v) / xmax) * (W - m.l - m.r);
+  const stacks = (vals) => { const cnt = {}; return vals.map((v) => { const b = Math.floor(Math.log10(v) / bin); cnt[b] = (cnt[b] || 0) + 1; return cnt[b] - 1; }); };
+  const rows = [{ name: "realistic rates", sub: `${ordP.length} orders`, data: ordP, col: C.bug }, { name: "--buggify", sub: `${ordB.length} orders`, data: ordB, col: C.yellow }];
+  rows.forEach((r) => { r.st = stacks(r.data.map((o) => o.n)); r.h = Math.max(70, (Math.max(...r.st) + 2) * gap + 20); });
+  const H = 26 + rows.reduce((a, r) => a + r.h, 0) + 40;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  for (let d = 0; d <= xmax; d++) {
+    svg.append(s("line", { x1: X(10 ** d), x2: X(10 ** d), y1: 20, y2: H - 30, stroke: C.line }));
+    svg.append(s("text", { x: X(10 ** d), y: H - 12, "text-anchor": "middle", fill: C.dim, "font-size": 11, "font-family": "monospace" }, fmt(10 ** d)));
+  }
+  svg.append(s("text", { x: m.l, y: 12, fill: C.muted, "font-size": 11 }, "each dot = one search order · x = seeds tried until the first failure (log scale)"));
+  let y0 = 26;
+  rows.forEach((r) => {
+    const base = y0 + r.h - 12;
+    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: base + 6, y2: base + 6, stroke: "#33415e" }));
+    svg.append(s("text", { x: m.l - 12, y: base - 14, "text-anchor": "end", fill: r.col, "font-size": 13, "font-family": "monospace", "font-weight": 700 }, r.name));
+    svg.append(s("text", { x: m.l - 12, y: base + 2, "text-anchor": "end", fill: C.muted, "font-size": 11, "font-family": "monospace" }, r.sub));
+    const vals = r.data.map((o) => o.n), md = median(vals);
+    svg.append(s("line", { x1: X(md), x2: X(md), y1: y0 + 2, y2: base + 6, stroke: r.col, "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
+    svg.append(s("text", { x: X(md) + 5, y: y0 + 12, fill: r.col, "font-size": 11, "font-family": "monospace" }, `median ${fmt(md)}`));
+    r.data.forEach((o, i) => {
+      const cx = m.l + (Math.floor(Math.log10(o.n) / bin) + 0.5) * bin / xmax * (W - m.l - m.r);
+      const c = s("circle", { cx, cy: base - r.st[i] * gap, r: 0, fill: r.col, opacity: 0.9 });
+      c.append(s("animate", { attributeName: "r", from: 0, to: R, dur: "0.4s", begin: `${(i % 30) * 0.02}s`, fill: "freeze" }));
+      DST.tip(c, `order ${o.order}: sweep from ${o.start}\nFAIL at seed=${o.seed}\nafter ${fmt(o.n)} seeds`);
+      svg.append(c);
+    });
+    y0 += r.h;
+  });
+  DST.$("#dist").append(svg);
+  DST.$("#dist-cap").innerHTML = `Without BUGGIFY the ${ordP.length} orders spread from ${fmt(Math.min(...nP))} to ${fmt(Math.max(...nP))} seeds. With
+    <code>--buggify</code> all ${ordB.length} orders found it within ${Math.max(...nB)} seeds. The red dot at the left edge of the realistic
+    row is an outlier, not the typical case.`;
+
+  // CDF
+  const cdf = (v) => { const a = [...v].sort((x, y) => x - y); return [[0, 0], ...a.map((x, i) => [Math.log10(x), (i + 1) / a.length])]; };
+  DST.line("#cdf", [{ name: "--buggify", color: C.yellow, points: cdf(nB) }, { name: "realistic rates", color: C.bug, points: cdf(nP) }],
+    { step: true, xmin: 0, xmax, ymin: 0, ymax: 1, width: 520, height: 300, xfmt: short, yfmt: (t) => Math.round(t * 100) + "%", xlabel: "seeds tried (log scale)" });
+
+  const row = (name, v) => el("tr", {}, el("td", {}, name), el("td", { class: "num" }, v.length), el("td", { class: "num" }, fmt(Math.min(...v))),
+    el("td", { class: "num" }, fmt(median(v))), el("td", { class: "num" }, fmt(Math.round(mean(v) * 10) / 10)), el("td", { class: "num" }, fmt(Math.max(...v))));
+  DST.$("#dist-table").append(el("tr", {}, ["", "orders", "min", "median", "mean", "max"].map((t, i) => el("th", { class: i ? "num" : null }, t))),
+    row("realistic", nP), row("--buggify", nB));
+  const tP = swBug.real / swBug.fail.after;
+  DST.$("#dist-why").innerHTML = `A seed costs about ${(tP * 1e6).toFixed(1)} µs here (the order-0 sweep ran ${fmt(swBug.fail.after)} seeds in ${swBug.real.toFixed(2)} s),
+    so even the slow search finishes in under a second. Real systems run seconds to minutes per seed, so the same ratio decides
+    between finding the bug tonight and never finding it.`;
+}
+
+// model check (JS)
+{
+  const pP = swOk.paths.short_retry_then_timeout.seeds / swOk.paths.short_retry_then_timeout.of;
+  const pB = swB.paths.short_retry_then_timeout.seeds / swB.paths.short_retry_then_timeout.of;
+  const draw = () => {
+    const rnd = DST.Rand(+DST.$("#ms-seed").value || 0);
+    const geo = (p) => Math.max(1, Math.ceil(Math.log(1 - rnd.float()) / Math.log(1 - p)));
+    const a = Array.from({ length: 100 }, () => geo(pP)), b = Array.from({ length: 100 }, () => geo(pB));
+    DST.$("#ms-out").textContent = `p_real=${pP.toExponential(2)} p_buggify=${pB.toFixed(4)} → model medians ${fmt(median(a))} vs ${fmt(median(b))} (captured: ${fmt(medP)} vs ${medB})`;
+    const c = DST.$("#ms-chart"); c.innerHTML = "";
+    const cdf = (v) => { const s2 = [...v].sort((x, y) => x - y); return [[0, 0], ...s2.map((x, i) => [Math.log10(x), (i + 1) / s2.length])]; };
+    const xmax = Math.ceil(Math.log10(Math.max(...a, ...nP)));
+    DST.line(c, [
+      { name: "model --buggify", color: C.yellow, dash: "5 4", points: cdf(b) }, { name: "captured --buggify", color: C.yellow, points: cdf(nB) },
+      { name: "model realistic", color: C.bug, dash: "5 4", points: cdf(a) }, { name: "captured realistic", color: C.bug, points: cdf(nP) }],
+      { step: true, xmin: 0, xmax, ymin: 0, ymax: 1, height: 240, xfmt: short, yfmt: (t) => Math.round(t * 100) + "%" });
+  };
+  DST.$("#ms-go").onclick = draw; draw();
+}
+
+// ---------------------------------------------------------------- 03 rare path frequencies
+{
+  const names = Object.keys(swOk.paths);
+  const W = 1000, rowH = 54, m = { l: 230, r: 150 }, H = names.length * rowH + 40;
+  const vmax = Math.max(...names.flatMap((k) => [swOk.paths[k], swB.paths[k]].map((p) => p.hits / p.of * 1000)));
+  const lo = -3, hi = Math.ceil(Math.log10(vmax));
+  const X = (v) => m.l + ((Math.log10(Math.max(v, 10 ** lo)) - lo) / (hi - lo)) * (W - m.l - m.r);
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  for (let d = lo; d <= hi; d++) {
+    svg.append(s("line", { x1: X(10 ** d), x2: X(10 ** d), y1: 6, y2: H - 28, stroke: C.line }));
+    svg.append(s("text", { x: X(10 ** d), y: H - 12, "text-anchor": "middle", fill: C.dim, "font-size": 11, "font-family": "monospace" }, d < 0 ? (10 ** d).toFixed(-d) : fmt(10 ** d)));
+  }
+  names.forEach((k, i) => {
+    const y = 10 + i * rowH;
+    svg.append(s("text", { x: m.l - 10, y: y + 24, "text-anchor": "end", fill: k === "short_retry_then_timeout" ? C.bug : C.text, "font-size": 12.5, "font-family": "monospace" }, k));
+    [[swOk.paths[k], C.accent, "realistic"], [swB.paths[k], C.yellow, "--buggify"]].forEach(([p, col, lbl], j) => {
+      const v = p.hits / p.of * 1000, w = Math.max(2, X(v) - m.l);
+      const r = s("rect", { x: m.l, y: y + 4 + j * 20, width: 0, height: 16, rx: 3, fill: col });
+      r.append(s("animate", { attributeName: "width", from: 0, to: w, dur: "0.8s", fill: "freeze" }));
+      DST.tip(r, `${lbl}: ${fmt(p.hits)} hits in ${fmt(p.of)} seeds\nseeds with ≥1 hit: ${fmt(p.seeds)} (${(p.seeds / p.of * 1000).toPrecision(3)} per 1000)`);
+      svg.append(r);
+      svg.append(s("text", { x: m.l + w + 8, y: y + 16 + j * 20, fill: col, "font-size": 11.5, "font-family": "monospace" }, `${v < 1 ? v.toPrecision(2) : v.toFixed(1)} /1000`));
+    });
+  });
+  DST.$("#paths").append(svg);
+  DST.$("#paths").append(el("div", { class: "legend" }, el("span", {}, el("i", { class: "sw", style: { background: C.accent } }), `realistic (sweep, ${fmt(swOk.paths.short_write_retry.of)} seeds)`),
+    el("span", {}, el("i", { class: "sw", style: { background: C.yellow } }), `--buggify (${fmt(swB.paths.short_write_retry.of)} seeds)`)));
+  const pts = Object.entries(swB.points);
+  DST.bar("#pts-active", pts.map(([k, v]) => ({ label: k, value: v.active, color: C.yellow, note: `${fmt(v.active)} of ${fmt(v.of)} seeds (${(v.active / v.of * 100).toFixed(1)}%)` })), { width: 520, labelW: 120, rowH: 28, fmt: (v) => `${fmt(v)} (${(v / pts[0][1].of * 100).toFixed(1)}%)` });
+  DST.bar("#pts-fired", pts.map(([k, v]) => ({ label: k, value: v.fired, color: C.warn, note: `fired ${fmt(v.fired)} times; ${(v.fired / v.active).toFixed(2)} per active seed` })), { width: 520, labelW: 120, rowH: 28 });
+}
+
+// ---------------------------------------------------------------- 04 replay
+const EVTEXT = {
+  append: "app appends a record", full: "buffer full: app blocks (backpressure)", send: "writer sends a request", lost: "network loses a message",
+  reset: "connection reset", reconnect: "connection back up", write: "server writes to the file", ack: "full ack: flush done",
+  short_ack: "SHORT ack: rare path 1, retry the rest", stale_ack: "ack of an abandoned attempt, ignored", timeout: "TIMEOUT while flushing: rare path 2, resend",
+  buggify: "BUGGIFY point fired", corrupt: "CORRUPTION: wrong record at this offset", done: "all records durable",
+};
+function drawState(r, e) {
+  const n = r.hdr ? r.hdr.records : e.disk.length, W = 640, cw = Math.min(30, (W - 70) / n), x0 = 60, H = 230;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const X = (p) => x0 + p * cw;
+  const lbl = (y, t) => svg.append(s("text", { x: x0 - 8, y, "text-anchor": "end", fill: C.muted, "font-size": 11, "font-family": "monospace" }, t));
+  // buffer row
+  lbl(62, "buffer");
+  if (e.buf) for (let q = e.buf[0]; q <= e.buf[1]; q++) {
+    svg.append(s("rect", { x: X(q) + 1, y: 46, width: cw - 2, height: 24, rx: 4, fill: "#1d2d52", stroke: C.accent }));
+    svg.append(s("text", { x: X(q) + cw / 2, y: 62, "text-anchor": "middle", fill: C.text, "font-size": 10, "font-family": "monospace" }, q));
+  }
+  // flush bracket
+  if (e.flush) {
+    const stale = e.flush.off !== e.base, col = stale ? C.bug : C.accent2, a = X(e.flush.off), b = X(e.flush.off + e.flush.count);
+    svg.append(s("path", { d: `M${a + 2},${98} V90 H${b - 2} V98`, fill: "none", stroke: col, "stroke-width": 2.5 }));
+    const right = a > W / 2;
+    svg.append(s("text", { x: right ? b : a, y: 84, "text-anchor": right ? "end" : "start", fill: col, "font-size": 11, "font-family": "monospace" },
+      `flush #${e.flush.id} → off ${e.flush.off}+${e.flush.count} dl=${e.flush.dl}${stale ? `  STALE (base ${e.base})` : ""}`));
+  }
+  // disk row
+  lbl(122, "file");
+  [...e.disk].forEach((ch, p) => {
+    const fill = ch === "." ? "#0f1726" : ch === "X" ? "rgba(255,92,122,.35)" : "rgba(61,220,132,.22)";
+    const st = ch === "." ? C.line : ch === "X" ? C.bug : C.ok;
+    svg.append(s("rect", { x: X(p) + 1, y: 104, width: cw - 2, height: 28, rx: 4, fill, stroke: st }));
+    svg.append(s("text", { x: X(p) + cw / 2, y: 122, "text-anchor": "middle", fill: ch === "X" ? C.bug : C.text, "font-size": 11, "font-family": "monospace", "font-weight": ch === "X" ? 700 : 400 }, ch === "." ? "" : ch));
+    if (p % 5 === 0) svg.append(s("text", { x: X(p) + cw / 2, y: 146, "text-anchor": "middle", fill: C.dim, "font-size": 9, "font-family": "monospace" }, p));
+  });
+  // base marker
+  svg.append(s("path", { d: `M${X(e.base)},26 V136`, stroke: C.yellow, "stroke-width": 1.5, "stroke-dasharray": "3 3" }));
+  svg.append(s("text", { x: X(e.base) + 3, y: 22, fill: C.yellow, "font-size": 11, "font-family": "monospace" }, `base=${e.base} (durable below)`));
+  // net + conn + cap
+  lbl(178, "net");
+  e.net.forEach((m, i) => {
+    const col = m[0] === "q" ? C.accent : C.violet;
+    svg.append(s("rect", { x: x0 + i * 56, y: 164, width: 50, height: 22, rx: 11, fill: "none", stroke: col }));
+    svg.append(s("text", { x: x0 + i * 56 + 25, y: 179, "text-anchor": "middle", fill: col, "font-size": 10.5, "font-family": "monospace" }, (m[0] === "q" ? "req #" : "ack #") + m.slice(1)));
+  });
+  if (!e.net.length) svg.append(s("text", { x: x0, y: 179, fill: C.dim, "font-size": 11, "font-family": "monospace" }, "(nothing in flight)"));
+  lbl(212, "conn");
+  svg.append(s("text", { x: x0, y: 212, fill: e.conn === "up" ? C.ok : C.warn, "font-size": 11.5, "font-family": "monospace" },
+    `${e.conn === "up" ? "up" : "DOWN, reconnect at t=" + e.conn.slice(3)}   capacity ${e.cap}   buffered ${e.buf ? e.buf[1] - e.buf[0] + 1 : 0}`));
+  return svg;
+}
+function replay(r, { state, now, log, player }) {
+  DST.$(state).innerHTML = ""; DST.$(log).innerHTML = ""; DST.$(player).innerHTML = "";
+  const rows = r.events.map((e) => {
+    const cls = e.ev === "corrupt" ? "bad" : e.ev === "buggify" ? "bug" : "";
+    const row = el("div", { class: "tl-row " + cls }, el("span", { class: "t" }, e.t), el("span", {}, `${e.ev.padEnd(10)} ${e.detail}`));
+    DST.$(log).append(row); return row;
+  });
+  new DST.Player(player, {
+    count: r.events.length, speed: 6, label: (i) => `event ${i + 1}/${r.events.length} · tick ${r.events[i].t}`,
+    onStep(i) {
+      const e = r.events[i];
+      DST.$(state).innerHTML = ""; DST.$(state).append(drawState(r, e));
+      DST.$(now).innerHTML = `<b>t=${e.t}</b> ${DST.esc(e.ev)}: ${DST.esc(e.detail)} <span style="color:var(--muted)">— ${EVTEXT[e.ev] || ""}</span>`;
+      rows.forEach((row, j) => { row.classList.toggle("cur", j === i); row.classList.toggle("fut", j > i); });
+      const L = DST.$(log), row = rows[i]; L.scrollTop = row.offsetTop - L.offsetTop - L.clientHeight / 2;
+    },
+  }).go(r.events.length - 1);
+}
+{
+  const runs = [[`run ${runP.hdr.seed} --bug-stale-offset`, runP], [`run ${runB.hdr.seed} --bug-stale-offset --buggify`, runB]];
+  const btns = runs.map(([name, r], i) => el("button", { class: i ? null : "on", onclick: () => { btns.forEach((b) => b.classList.remove("on")); btns[i].classList.add("on"); replay(r, ids); } }, name));
+  const ids = { state: "#rp-state", now: "#rp-now", log: "#rp-log", player: "#rp-player" };
+  DST.$("#rp-pick").append(...btns);
+  replay(runP, ids);
+}
+// BUGGIFY timeline of the failing --buggify run
+{
+  const r = runB, laneNames = [...r.active, "short write", "timeout", "corrupt"];
+  const evs = [];
+  for (const e of r.events) {
+    if (e.ev === "buggify") evs.push({ lane: e.detail, t: e.t, color: C.yellow, r: 7, tip: `t=${e.t} BUGGIFY ${e.detail} fired` });
+    if (e.ev === "write" && /SHORT/.test(e.detail)) evs.push({ lane: "short write", t: e.t, color: C.accent, tip: `t=${e.t} ${e.detail}` });
+    if (e.ev === "timeout") evs.push({ lane: "timeout", t: e.t, color: C.warn, tip: `t=${e.t} timeout ${e.detail}` });
+    if (e.ev === "corrupt") evs.push({ lane: "corrupt", t: e.t, color: C.bug, kind: "x", tip: `t=${e.t} ${e.detail}` });
+  }
+  const last = r.events[r.events.length - 1].t;
+  const tl = DST.lanes("#btl", laneNames, evs, { tmin: 0, tmax: last + 1, labelW: 120, tlabel: "tick", laneH: 32 });
+  tl.mark(last);
+  const fired = Object.entries(r.fired).map(([k, v]) => `<code>${k}</code>×${v}`).join(", ");
+  DST.$("#bt-cap").innerHTML = `Seed ${r.hdr.seed} with <code>--buggify</code>: the active points were ${r.active.map((a) => `<code>${a}</code>`).join(", ")}, and they fired ${fired}.
+    The same seed without <code>--buggify</code> has the same workload, because BUGGIFY draws from its own PRNG stream, and it
+    <b>${run40.final.result === "PASS" ? "passes" : "fails"}</b> (<code>trace=${run40.final.trace}</code>). Only the fired points made the difference.
+    The run ends with ${r.corrupt ? `<code>${DST.esc(r.corrupt.line)}</code>` : "no corruption"}.`;
+}
+// why tests miss it
+{
+  const p = swOk.paths;
+  DST.$("#why").innerHTML = ` Each path alone is handled correctly. In the ${fmt(p.short_write_retry.of)}-seed correct sweep, ${fmt(p.short_write_retry.seeds)} seeds
+    took a short-write retry and ${fmt(p.timeout_in_flush.seeds)} took a timeout during a flush, and all of them passed. Only
+    <b>${fmt(p.short_retry_then_timeout.seeds)}</b> seeds took both, in that order, on the same flush. A unit test for each path passes. The bug
+    lives in the combination.`;
+}
+
+// ---------------------------------------------------------------- 06 seed stability
+{
+  const cols = [["bug", runP, `run ${runP.hdr.seed} --bug-stale-offset`], ["+1 draw", runX, "… --extra-draw"], ["fixed", runF, `run ${runF.hdr.seed}`]];
+  const keys = [["records", "records"], ["gap", "append_gap max"], ["batch", "batch_max"], ["cap", "capacity"], ["linger", "linger"], ["delay", "delay max"]];
+  const T = DST.$("#stab");
+  T.append(el("tr", {}, el("th", {}, ""), cols.map(([, , n]) => el("th", {}, el("code", {}, n)))));
+  for (const [k, name] of keys) T.append(el("tr", {}, el("td", {}, name), cols.map(([, r]) => el("td", { class: "num" + (r.hdr[k] !== runP.hdr[k] ? " diff" : "") }, r.hdr[k]))));
+  T.append(el("tr", {}, el("td", {}, "short write → timeout"), cols.map(([, r]) => el("td", { class: "num" }, `${r.paths.short_write_retry} → ${r.paths.short_retry_then_timeout}`))));
+  T.append(el("tr", {}, el("td", {}, "ticks"), cols.map(([, r]) => el("td", { class: "num" }, r.final.ticks))));
+  T.append(el("tr", {}, el("td", {}, "trace"), cols.map(([, r]) => el("td", { class: "num" }, el("code", {}, r.final.trace)))));
+  T.append(el("tr", {}, el("td", {}, "result"), cols.map(([, r]) => el("td", { class: "num " + (r.final.result === "PASS" ? "res-pass" : "res-fail") }, r.final.result))));
+  // final disks
+  const W = 620, svg = s("svg", { viewBox: `0 0 ${W} 150` });
+  cols.forEach(([lbl, r], i) => {
+    const d = r.events[r.events.length - 1].disk, cw = Math.min(22, (W - 130) / d.length), y = 10 + i * 46;
+    svg.append(s("text", { x: 110, y: y + 18, "text-anchor": "end", fill: C.muted, "font-size": 11, "font-family": "monospace" }, lbl));
+    [...d].forEach((ch, p) => {
+      svg.append(s("rect", { x: 120 + p * cw, y, width: cw - 2, height: 26, rx: 3, fill: ch === "X" ? "rgba(255,92,122,.4)" : ch === "." ? "#0f1726" : "rgba(61,220,132,.22)", stroke: ch === "X" ? C.bug : C.line }));
+      svg.append(s("text", { x: 120 + p * cw + cw / 2 - 1, y: y + 17, "text-anchor": "middle", fill: ch === "X" ? C.bug : C.text, "font-size": 10, "font-family": "monospace" }, ch === "." ? "" : ch));
+    });
+  });
+  DST.$("#stab-disk").append(svg);
+  DST.$("#stab-text").innerHTML = ` One extra draw changes every option of seed ${runP.hdr.seed} and every sub-seed. With the bug still in the code, the seed now
+    <b>${runX.final.result === "PASS" ? "passes" : "fails"}</b>. It never even reaches a short write (${runX.paths.short_write_retry} short-write retries).
+    A test that says "seed ${runP.hdr.seed} must pass" would stay green while the bug is back. The bug is still there: the
+    <code>--extra-draw</code> sweep finds it again at seed ${fmt(swExtra.fail.seed)}, after another ${swExtra.real.toFixed(2)} s of searching.`;
+}
+// scenario
+{
+  const W = 520, r = scBug, n = r.events[0].disk.length, H = 40 + r.events.length * 0;
+  const steps = r.steps, table = DST.$("#sc-table");
+  table.append(el("tr", {}, el("th", {}, "step"), el("th", {}, "events it caused (bug on)")));
+  steps.forEach((st, i) => {
+    const evs = r.events.slice(st.first, i + 1 < steps.length ? steps[i + 1].first : r.events.length);
+    const show = evs.filter((e) => e.ev !== "append").map((e) => `t=${e.t} ${e.ev} ${e.detail}`);
+    if (evs.some((e) => e.ev === "append")) show.unshift(`${evs.filter((e) => e.ev === "append").length} × append`);
+    table.append(el("tr", {}, el("td", {}, el("code", {}, st.text)), el("td", { style: { fontFamily: "var(--mono)", fontSize: ".78rem" }, html: show.map((x) => /corrupt|SHORT|timeout/.test(x) ? `<span style="color:var(--bug)">${DST.esc(x)}</span>` : DST.esc(x)).join("<br>") || "—" })));
+  });
+  // disk snapshots: before, after the short write, at the corruption
+  const snaps = [r.events.find((e) => /SHORT/.test(e.detail)), r.events.find((e) => e.ev === "timeout"), r.events[r.events.length - 1]];
+  const svg = s("svg", { viewBox: `0 0 ${W} 120` });
+  snaps.forEach((e, i) => {
+    const x0 = 10 + i * 170;
+    svg.append(s("text", { x: x0, y: 14, fill: C.muted, "font-size": 10.5, "font-family": "monospace" }, `t=${e.t} ${e.ev}`));
+    [...e.disk].forEach((ch, p) => {
+      svg.append(s("rect", { x: x0 + p * 34, y: 24, width: 30, height: 30, rx: 4, fill: ch === "X" ? "rgba(255,92,122,.4)" : ch === "." ? "#0f1726" : "rgba(61,220,132,.22)", stroke: ch === "X" ? C.bug : C.line }));
+      svg.append(s("text", { x: x0 + p * 34 + 15, y: 44, "text-anchor": "middle", fill: ch === "X" ? C.bug : C.text, "font-size": 12, "font-family": "monospace" }, ch === "." ? "" : ch));
+    });
+    if (e.flush) svg.append(s("text", { x: x0, y: 74, fill: e.flush.off !== e.base ? C.bug : C.accent2, "font-size": 10.5, "font-family": "monospace" }, `flush@${e.flush.off}+${e.flush.count} base=${e.base}`));
+  });
+  svg.append(s("text", { x: 10, y: 104, fill: C.dim, "font-size": 10.5, "font-family": "monospace" }, `${n} records · offsets 0..${n - 1} · every delay 1 tick`));
+  DST.$("#sc-viz").append(svg);
+  const same = scBug.final.trace === scBugX.final.trace;
+  DST.$("#sc-text").innerHTML = ` <code>scenario</code> (correct code): <span class="res-pass">${scOk.final.result}</span>, <code>trace=${scOk.final.trace}</code>.
+    <code>scenario --bug-stale-offset</code>: <span class="res-fail">${scBug.final.result}</span>, <code>trace=${scBug.final.trace}</code>.
+    With <code>--extra-draw</code> added: <span class="res-fail">${scBugX.final.result}</span>, <code>trace=${scBugX.final.trace}</code>,
+    ${same ? "the <b>same</b> trace" : "a different trace"}. The scenario uses no PRNG, so a change in how randomness is consumed cannot move it.
+    The scenario's own path counters confirm it took the combination: <code>short_retry_then_timeout=${scBug.paths.short_retry_then_timeout}</code>.`;
+}
+
+// ---------------------------------------------------------------- 07 determinism
+{
+  const a = parseRun(DST.text("log-run-plain")), b = parseRun(DST.text("log-run-plain-again"));
+  const sha = DST.text("log-run-plain-sha").trim().split("\n").map((l) => l.split(/\s+/));
+  const identical = DST.text("log-run-plain") === DST.text("log-run-plain-again");
+  [[a, sha[0]], [b, sha[1]]].forEach(([r, h], i) => {
+    const c = el("div", { class: "card" }, el("h4", {}, `Replay ${i + 1}: `, el("code", {}, h[1])));
+    DST.term(c, r.text.trim().split("\n").slice(-5).join("\n"));
+    c.append(el("p", { class: "src" }, "sha256 ", el("code", {}, h[0])));
+    DST.$("#det").append(c);
+  });
+  DST.$("#det").after(el("div", { class: identical && sha[0][0] === sha[1][0] ? "callout ok" : "callout bug" },
+    el("strong", {}, identical ? "Byte-identical" : "DIFFERENT"),
+    `Both replays of seed ${a.hdr.seed} print ${a.events.length} events and end with trace=${a.final.trace}. Their full outputs have the same sha256. Determinism is what makes seed ${fmt(a.hdr.seed)} worth reporting at all, for as long as the code does not change how it draws randomness (section 06).`));
+}
+
+// ---------------------------------------------------------------- raw output
+{
+  const ids = [["sweep", "log-sweep"], ["sweep --bug", "log-sweep-bug"], ["sweep --bug --buggify", "log-sweep-bug-buggify"], ["sweep --buggify", "log-sweep-buggify"],
+    ["orders (realistic)", "log-orders-plain"], ["orders (buggify)", "log-orders-buggify"], ["run 290087 --bug", "log-run-plain"], ["run 40 --bug --buggify", "log-run-buggify"],
+    ["run --extra-draw", "log-run-extra"], ["run (fixed)", "log-run-fixed"], ["sweep --extra-draw", "log-sweep-extra"], ["scenario --bug", "log-scenario-bug"], ["scenario", "log-scenario"]];
+  const show = (id) => { DST.$("#raw").innerHTML = ""; DST.term("#raw", DST.text(id), [[/FAIL|CORRUPTION/, "f"], [/PASS/, "k"], [/buggify +\w+$|BUGGIFY|buggify  /, "hl"]]); };
+  const btns = ids.map(([n, id], i) => el("button", { class: i ? null : "on", onclick: () => { btns.forEach((b) => b.classList.remove("on")); btns[i].classList.add("on"); show(id); } }, n));
+  DST.$("#raw-pick").append(...btns); show(ids[0][1]);
+}
+</script>
+</body></html>

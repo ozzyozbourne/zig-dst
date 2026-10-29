@@ -1,0 +1,371 @@
+seed=96 drift_mode=uniform drift_ppm=1106,-988,-1070 realtime_offset_ms=-30.728,+17.067,-10.628
+  delay=1..1 loss=34/1000 steps=7/100000 per node per tick, up to 195ms
+  partitions=49/100000 per tick, 1000..8777 ticks, healthy>=853 ticks
+  lease=5000ms drift_bound=2000ppm drift_margin=20.000ms guard=2.000ms leader_lease=4978.000ms clock=realtime
+  tick node ev role term m=<monotonic ms> r=<realtime ms> detail
+   754 0 ? C   1T m=754.833 r=724.105 term=1
+   755 1 v F   1T m=754.254 r=771.321 for=0
+   755 2 v F   1T m=754.192 r=743.564 for=0
+   756 0 * L   1T m=756.836 r=726.108 votes=011
+   757 2 p F   1T m=756.190 r=745.562 leader=0 until=5745.562
+   758 0 W L   1T m=758.838 r=728.110 key=0 val=0 ver=1.1 recovery
+   758 0 W L   1T m=758.838 r=728.110 key=1 val=0 ver=1.2 recovery
+   758 0 c L   1T m=758.838 r=728.110 recovered
+   758 0 + L   1T m=758.838 r=728.110 until=5704.108 clock=real
+   762 0 W L   1T m=762.842 r=732.114 key=1 val=1 ver=1.3
+   767 0 W L   1T m=767.848 r=737.120 key=1 val=2 ver=1.4
+   779 0 W L   1T m=779.861 r=749.133 key=0 val=3 ver=1.5
+   780 0 W L   1T m=780.862 r=750.134 key=0 val=4 ver=1.6
+   784 0 W L   1T m=784.867 r=754.139 key=0 val=5 ver=1.7
+   787 0 W L   1T m=787.870 r=757.142 key=1 val=6 ver=1.8
+   790 0 W L   1T m=790.873 r=760.145 key=1 val=7 ver=1.9
+   794 0 W L   1T m=794.878 r=764.150 key=1 val=8 ver=1.10
+   798 0 W L   1T m=798.882 r=768.154 key=1 val=9 ver=1.11
+   799 0 W L   1T m=799.883 r=769.155 key=0 val=10 ver=1.12
+   804 0 W L   1T m=804.889 r=774.161 key=0 val=11 ver=1.13
+   809 0 W L   1T m=809.894 r=779.166 key=0 val=12 ver=1.14
+   819 0 W L   1T m=819.905 r=789.177 key=1 val=13 ver=1.15
+   827 0 W L   1T m=827.914 r=797.186 key=1 val=14 ver=1.16
+   832 0 W L   1T m=832.920 r=802.192 key=1 val=15 ver=1.17
+   834 0 W L   1T m=834.922 r=804.194 key=0 val=16 ver=1.18
+   836 0 W L   1T m=836.924 r=806.196 key=1 val=17 ver=1.19
+   837 0 W L   1T m=837.925 r=807.197 key=0 val=18 ver=1.20
+   844 0 W L   1T m=844.933 r=814.205 key=1 val=19 ver=1.21
+   845 0 W L   1T m=845.934 r=815.206 key=0 val=20 ver=1.22
+   846 0 W L   1T m=846.935 r=816.207 key=1 val=21 ver=1.23
+   847 0 W L   1T m=847.936 r=817.208 key=0 val=22 ver=1.24
+   858 0 W L   1T m=858.948 r=828.220 key=1 val=23 ver=1.25
+   860 0 W L   1T m=860.951 r=830.223 key=1 val=24 ver=1.26
+   866 0 W L   1T m=866.957 r=836.229 key=0 val=25 ver=1.27
+   867 0 W L   1T m=867.958 r=837.230 key=0 val=26 ver=1.28
+   873 0 W L   1T m=873.965 r=843.237 key=0 val=27 ver=1.29
+   881 0 W L   1T m=881.974 r=851.246 key=1 val=28 ver=1.30
+   884 0 W L   1T m=884.977 r=854.249 key=1 val=29 ver=1.31
+   903 0 W L   1T m=903.998 r=873.270 key=0 val=30 ver=1.32
+   910 0 W L   1T m=911.006 r=880.278 key=0 val=31 ver=1.33
+   912 0 W L   1T m=913.008 r=882.280 key=1 val=32 ver=1.34
+   926 0 W L   1T m=927.024 r=896.296 key=1 val=33 ver=1.35
+   934 0 W L   1T m=935.033 r=904.305 key=1 val=34 ver=1.36
+   935 0 W L   1T m=936.034 r=905.306 key=1 val=35 ver=1.37
+   946 0 W L   1T m=947.046 r=916.318 key=1 val=36 ver=1.38
+   949 0 W L   1T m=950.049 r=919.321 key=0 val=37 ver=1.39
+   950 0 W L   1T m=951.050 r=920.322 key=1 val=38 ver=1.40
+   957 1 p F   1T m=956.054 r=973.121 leader=0 until=5973.121
+   969 0 W L   1T m=970.071 r=939.343 key=1 val=39 ver=1.41
+   970 0 W L   1T m=971.072 r=940.344 key=1 val=40 ver=1.42
+   975 0 W L   1T m=976.078 r=945.350 key=0 val=41 ver=1.43
+   990 0 W L   1T m=991.094 r=960.366 key=1 val=42 ver=1.44
+   992 0 W L   1T m=993.097 r=962.369 key=0 val=43 ver=1.45
+   994 0 W L   1T m=995.099 r=964.371 key=1 val=44 ver=1.46
+   995 0 W L   1T m=996.100 r=965.372 key=0 val=45 ver=1.47
+   996 0 W L   1T m=997.101 r=966.373 key=1 val=46 ver=1.48
+   998 0 W L   1T m=999.103 r=968.375 key=0 val=47 ver=1.49
+  1003 0 W L   1T m=1004.109 r=973.381 key=1 val=48 ver=1.50
+  1004 0 W L   1T m=1005.110 r=974.382 key=0 val=49 ver=1.51
+  1008 0 W L   1T m=1009.114 r=978.386 key=0 val=50 ver=1.52
+  1016 0 W L   1T m=1017.123 r=986.395 key=0 val=51 ver=1.53
+  1018 0 W L   1T m=1019.125 r=988.397 key=0 val=52 ver=1.54
+  1021 0 W L   1T m=1022.129 r=991.401 key=0 val=53 ver=1.55
+  1031 0 W L   1T m=1032.140 r=1001.412 key=1 val=54 ver=1.56
+  1033 0 W L   1T m=1034.142 r=1003.414 key=0 val=55 ver=1.57
+  1038 0 W L   1T m=1039.148 r=1008.420 key=1 val=56 ver=1.58
+  1039 0 W L   1T m=1040.149 r=1009.421 key=0 val=57 ver=1.59
+  1040 0 W L   1T m=1041.150 r=1010.422 key=0 val=58 ver=1.60
+  1049 0 W L   1T m=1050.160 r=1019.432 key=1 val=59 ver=1.61
+  1050 0 W L   1T m=1051.161 r=1020.433 key=0 val=60 ver=1.62
+  1057 0 W L   1T m=1058.169 r=1027.441 key=0 val=61 ver=1.63
+  1058 0 W L   1T m=1059.170 r=1028.442 key=1 val=62 ver=1.64
+  1061 0 W L   1T m=1062.173 r=1031.445 key=0 val=63 ver=1.65
+  1062 0 W L   1T m=1063.174 r=1032.446 key=1 val=64 ver=1.66
+  1070 0 W L   1T m=1071.183 r=1040.455 key=1 val=65 ver=1.67
+  1073 0 W L   1T m=1074.186 r=1043.458 key=0 val=66 ver=1.68
+  1077 0 W L   1T m=1078.191 r=1047.463 key=0 val=67 ver=1.69
+  1079 0 W L   1T m=1080.193 r=1049.465 key=1 val=68 ver=1.70
+  1080 0 W L   1T m=1081.194 r=1050.466 key=0 val=69 ver=1.71
+  1083 0 W L   1T m=1084.197 r=1053.469 key=0 val=70 ver=1.72
+  1086 0 W L   1T m=1087.201 r=1056.473 key=0 val=71 ver=1.73
+  1095 0 W L   1T m=1096.211 r=1065.483 key=1 val=72 ver=1.74
+  1098 0 W L   1T m=1099.214 r=1068.486 key=0 val=73 ver=1.75
+  1112 0 W L   1T m=1113.229 r=1082.501 key=1 val=74 ver=1.76
+  1116 0 W L   1T m=1117.234 r=1086.506 key=0 val=75 ver=1.77
+  1120 0 W L   1T m=1121.238 r=1090.510 key=1 val=76 ver=1.78
+  1129 0 W L   1T m=1130.248 r=1099.520 key=0 val=77 ver=1.79
+  1131 0 W L   1T m=1132.250 r=1101.522 key=1 val=78 ver=1.80
+  1134 0 W L   1T m=1135.254 r=1104.526 key=1 val=79 ver=1.81
+  1136 0 W L   1T m=1137.256 r=1106.528 key=0 val=80 ver=1.82
+  1142 0 W L   1T m=1143.263 r=1112.535 key=1 val=81 ver=1.83
+  1148 0 W L   1T m=1149.269 r=1118.541 key=1 val=82 ver=1.84
+  1153 0 W L   1T m=1154.275 r=1123.547 key=1 val=83 ver=1.85
+  1168 0 W L   1T m=1169.291 r=1138.563 key=0 val=84 ver=1.86
+  1173 0 W L   1T m=1174.297 r=1143.569 key=0 val=85 ver=1.87
+  1179 0 W L   1T m=1180.303 r=1149.575 key=1 val=86 ver=1.88
+  1183 0 W L   1T m=1184.308 r=1153.580 key=1 val=87 ver=1.89
+  1208 0 W L   1T m=1209.336 r=1178.608 key=0 val=88 ver=1.90
+  1211 0 W L   1T m=1212.339 r=1181.611 key=1 val=89 ver=1.91
+  1212 0 W L   1T m=1213.340 r=1182.612 key=1 val=90 ver=1.92
+  1213 0 W L   1T m=1214.341 r=1183.613 key=0 val=91 ver=1.93
+  1216 0 W L   1T m=1217.344 r=1186.616 key=0 val=92 ver=1.94
+  1218 0 W L   1T m=1219.347 r=1188.619 key=1 val=93 ver=1.95
+  1223 0 W L   1T m=1224.352 r=1193.624 key=1 val=94 ver=1.96
+  1224 0 W L   1T m=1225.353 r=1194.625 key=0 val=95 ver=1.97
+  1234 0 W L   1T m=1235.364 r=1204.636 key=1 val=96 ver=1.98
+  1235 0 W L   1T m=1236.365 r=1205.637 key=0 val=97 ver=1.99
+  1243 0 W L   1T m=1244.374 r=1213.646 key=1 val=98 ver=1.100
+  1247 0 W L   1T m=1248.379 r=1217.651 key=0 val=99 ver=1.101
+  1256 0 W L   1T m=1257.389 r=1226.661 key=1 val=100 ver=1.102
+  1260 0 W L   1T m=1261.393 r=1230.665 key=0 val=101 ver=1.103
+  1264 0 W L   1T m=1265.397 r=1234.669 key=0 val=102 ver=1.104
+  1270 0 W L   1T m=1271.404 r=1240.676 key=0 val=103 ver=1.105
+  1272 0 W L   1T m=1273.406 r=1242.678 key=1 val=104 ver=1.106
+  1274 0 W L   1T m=1275.409 r=1244.681 key=0 val=105 ver=1.107
+  1279 0 W L   1T m=1280.414 r=1249.686 key=0 val=106 ver=1.108
+  1281 0 W L   1T m=1282.416 r=1251.688 key=1 val=107 ver=1.109
+  1282 0 W L   1T m=1283.417 r=1252.689 key=1 val=108 ver=1.110
+  1294 0 W L   1T m=1295.431 r=1264.703 key=1 val=109 ver=1.111
+  1311 0 W L   1T m=1312.449 r=1281.721 key=1 val=110 ver=1.112
+  1320 0 W L   1T m=1321.459 r=1290.731 key=1 val=111 ver=1.113
+  1322 0 W L   1T m=1323.462 r=1292.734 key=1 val=112 ver=1.114
+  1337 0 W L   1T m=1338.478 r=1307.750 key=1 val=113 ver=1.115
+  1339 0 W L   1T m=1340.480 r=1309.752 key=0 val=114 ver=1.116
+  1341 0 W L   1T m=1342.483 r=1311.755 key=0 val=115 ver=1.117
+  1344 0 W L   1T m=1345.486 r=1314.758 key=1 val=116 ver=1.118
+  1349 0 W L   1T m=1350.491 r=1319.763 key=1 val=117 ver=1.119
+  1368 0 W L   1T m=1369.513 r=1338.785 key=0 val=118 ver=1.120
+  1370 0 W L   1T m=1371.515 r=1340.787 key=1 val=119 ver=1.121
+  1378 0 W L   1T m=1379.524 r=1348.796 key=0 val=120 ver=1.122
+  1385 0 W L   1T m=1386.531 r=1355.803 key=0 val=121 ver=1.123
+  1394 0 W L   1T m=1395.541 r=1364.813 key=0 val=122 ver=1.124
+  1400 0 W L   1T m=1401.548 r=1370.820 key=0 val=123 ver=1.125
+  1402 0 W L   1T m=1403.550 r=1372.822 key=1 val=124 ver=1.126
+  1408 0 W L   1T m=1409.557 r=1378.829 key=1 val=125 ver=1.127
+  1409 0 W L   1T m=1410.558 r=1379.830 key=1 val=126 ver=1.128
+  1413 0 W L   1T m=1414.562 r=1383.834 key=1 val=127 ver=1.129
+  1415 0 W L   1T m=1416.564 r=1385.836 key=0 val=128 ver=1.130
+  1420 0 W L   1T m=1421.570 r=1390.842 key=0 val=129 ver=1.131
+  1428 0 W L   1T m=1429.579 r=1398.851 key=1 val=130 ver=1.132
+  1429 0 W L   1T m=1430.580 r=1399.852 key=0 val=131 ver=1.133
+  1431 0 W L   1T m=1432.582 r=1401.854 key=0 val=132 ver=1.134
+  1435 0 W L   1T m=1436.587 r=1405.859 key=0 val=133 ver=1.135
+  1436 0 W L   1T m=1437.588 r=1406.860 key=0 val=134 ver=1.136
+  1437 0 W L   1T m=1438.589 r=1407.861 key=1 val=135 ver=1.137
+  1447 0 W L   1T m=1448.600 r=1417.872 key=1 val=136 ver=1.138
+  1460 0 W L   1T m=1461.614 r=1430.886 key=1 val=137 ver=1.139
+  1469 0 W L   1T m=1470.624 r=1439.896 key=0 val=138 ver=1.140
+  1478 0 W L   1T m=1479.634 r=1448.906 key=1 val=139 ver=1.141
+  1486 0 W L   1T m=1487.643 r=1456.915 key=0 val=140 ver=1.142
+  1490 0 W L   1T m=1491.647 r=1460.919 key=1 val=141 ver=1.143
+  1495 0 W L   1T m=1496.653 r=1465.925 key=0 val=142 ver=1.144
+  1496 0 W L   1T m=1497.654 r=1466.926 key=1 val=143 ver=1.145
+  1497 0 W L   1T m=1498.655 r=1467.927 key=0 val=144 ver=1.146
+  1505 0 W L   1T m=1506.664 r=1475.936 key=0 val=145 ver=1.147
+  1511 0 W L   1T m=1512.671 r=1481.943 key=0 val=146 ver=1.148
+  1514 0 W L   1T m=1515.674 r=1484.946 key=0 val=147 ver=1.149
+  1529 0 W L   1T m=1530.691 r=1499.963 key=0 val=148 ver=1.150
+  1540 0 W L   1T m=1541.703 r=1510.975 key=1 val=149 ver=1.151
+  1544 0 W L   1T m=1545.707 r=1514.979 key=0 val=150 ver=1.152
+  1545 0 W L   1T m=1546.708 r=1515.980 key=0 val=151 ver=1.153
+  1547 0 W L   1T m=1548.710 r=1517.982 key=1 val=152 ver=1.154
+  1554 0 W L   1T m=1555.718 r=1524.990 key=1 val=153 ver=1.155
+  1556 0 W L   1T m=1557.720 r=1526.992 key=0 val=154 ver=1.156
+  1558 0 W L   1T m=1559.723 r=1528.995 key=1 val=155 ver=1.157
+  1563 0 W L   1T m=1564.728 r=1534.000 key=1 val=156 ver=1.158
+  1569 0 W L   1T m=1570.735 r=1540.007 key=0 val=157 ver=1.159
+  1578 0 W L   1T m=1579.745 r=1549.017 key=0 val=158 ver=1.160
+  1587 0 W L   1T m=1588.755 r=1558.027 key=0 val=159 ver=1.161
+  1596 0 W L   1T m=1597.765 r=1567.037 key=0 val=160 ver=1.162
+  1598 0 W L   1T m=1599.767 r=1569.039 key=0 val=161 ver=1.163
+  1604 0 W L   1T m=1605.774 r=1575.046 key=0 val=162 ver=1.164
+  1612 0 W L   1T m=1613.782 r=1583.054 key=1 val=163 ver=1.165
+  1614 0 W L   1T m=1615.785 r=1585.057 key=0 val=164 ver=1.166
+  1617 0 W L   1T m=1618.788 r=1588.060 key=0 val=165 ver=1.167
+  1621 0 W L   1T m=1622.792 r=1592.064 key=0 val=166 ver=1.168
+  1623 0 W L   1T m=1624.795 r=1594.067 key=1 val=167 ver=1.169
+  1627 0 W L   1T m=1628.799 r=1598.071 key=0 val=168 ver=1.170
+  1632 0 W L   1T m=1633.804 r=1603.076 key=0 val=169 ver=1.171
+  1636 0 W L   1T m=1637.809 r=1607.081 key=1 val=170 ver=1.172
+  1640 0 W L   1T m=1641.813 r=1611.085 key=1 val=171 ver=1.173
+  1657 0 W L   1T m=1658.832 r=1628.104 key=0 val=172 ver=1.174
+  1663 0 W L   1T m=1664.839 r=1634.111 key=0 val=173 ver=1.175
+  1670 0 W L   1T m=1671.847 r=1641.119 key=1 val=174 ver=1.176
+  1673 0 W L   1T m=1674.850 r=1644.122 key=0 val=175 ver=1.177
+  1674 0 W L   1T m=1675.851 r=1645.123 key=1 val=176 ver=1.178
+  1677 0 W L   1T m=1678.854 r=1648.126 key=1 val=177 ver=1.179
+  1681 0 W L   1T m=1682.859 r=1652.131 key=1 val=178 ver=1.180
+  1684 0 W L   1T m=1685.862 r=1655.134 key=1 val=179 ver=1.181
+  1688 0 W L   1T m=1689.866 r=1659.138 key=1 val=180 ver=1.182
+  1700 0 W L   1T m=1701.880 r=1671.152 key=0 val=181 ver=1.183
+  1702 0 W L   1T m=1703.882 r=1673.154 key=1 val=182 ver=1.184
+  1703 0 W L   1T m=1704.883 r=1674.155 key=1 val=183 ver=1.185
+  1712 0 W L   1T m=1713.893 r=1683.165 key=1 val=184 ver=1.186
+  1716 0 W L   1T m=1717.897 r=1687.169 key=0 val=185 ver=1.187
+  1722 0 W L   1T m=1723.904 r=1693.176 key=1 val=186 ver=1.188
+  1735 0 W L   1T m=1736.918 r=1706.190 key=0 val=187 ver=1.189
+  1741 0 W L   1T m=1742.925 r=1712.197 key=1 val=188 ver=1.190
+  1742 0 W L   1T m=1743.926 r=1713.198 key=1 val=189 ver=1.191
+  1747 0 W L   1T m=1748.932 r=1718.204 key=1 val=190 ver=1.192
+  1763 0 W L   1T m=1764.949 r=1734.221 key=1 val=191 ver=1.193
+  1764 0 W L   1T m=1765.950 r=1735.222 key=0 val=192 ver=1.194
+  1778 0 W L   1T m=1779.966 r=1749.238 key=1 val=193 ver=1.195
+  1779 0 W L   1T m=1780.967 r=1750.239 key=1 val=194 ver=1.196
+  1781 0 W L   1T m=1782.969 r=1752.241 key=0 val=195 ver=1.197
+  1783 0 W L   1T m=1784.971 r=1754.243 key=1 val=196 ver=1.198
+  1787 0 W L   1T m=1788.976 r=1758.248 key=0 val=197 ver=1.199
+  1790 0 W L   1T m=1791.979 r=1761.251 key=1 val=198 ver=1.200
+  1794 0 W L   1T m=1795.984 r=1765.256 key=0 val=199 ver=1.201
+  1798 0 W L   1T m=1799.988 r=1769.260 key=1 val=200 ver=1.202
+  1804 0 W L   1T m=1805.995 r=1775.267 key=0 val=201 ver=1.203
+  1819 0 W L   1T m=1821.011 r=1790.283 key=0 val=202 ver=1.204
+  1820 0 W L   1T m=1822.012 r=1791.284 key=0 val=203 ver=1.205
+  1822 0 W L   1T m=1824.015 r=1793.287 key=0 val=204 ver=1.206
+  1824 0 W L   1T m=1826.017 r=1795.289 key=0 val=205 ver=1.207
+  1833 0 W L   1T m=1835.027 r=1804.299 key=1 val=206 ver=1.208
+  1836 0 W L   1T m=1838.030 r=1807.302 key=0 val=207 ver=1.209
+  1839 0 W L   1T m=1841.033 r=1810.305 key=1 val=208 ver=1.210
+  1842 0 W L   1T m=1844.037 r=1813.309 key=0 val=209 ver=1.211
+  1843 0 W L   1T m=1845.038 r=1814.310 key=0 val=210 ver=1.212
+  1849 0 W L   1T m=1851.044 r=1820.316 key=1 val=211 ver=1.213
+  1850 0 W L   1T m=1852.046 r=1821.318 key=0 val=212 ver=1.214
+  1853 0 W L   1T m=1855.049 r=1824.321 key=1 val=213 ver=1.215
+  1856 0 W L   1T m=1858.052 r=1827.324 key=1 val=214 ver=1.216
+  1866 0 W L   1T m=1868.063 r=1837.335 key=0 val=215 ver=1.217
+  1868 0 W L   1T m=1870.066 r=1839.338 key=0 val=216 ver=1.218
+  1871 0 W L   1T m=1873.069 r=1842.341 key=0 val=217 ver=1.219
+  1873 0 W L   1T m=1875.071 r=1844.343 key=0 val=218 ver=1.220
+  1875 0 W L   1T m=1877.073 r=1846.345 key=1 val=219 ver=1.221
+  1878 0 W L   1T m=1880.077 r=1849.349 key=0 val=220 ver=1.222
+  1885 0 W L   1T m=1887.084 r=1856.356 key=1 val=221 ver=1.223
+  1889 0 W L   1T m=1891.089 r=1860.361 key=0 val=222 ver=1.224
+  1897 0 W L   1T m=1899.098 r=1868.370 key=1 val=223 ver=1.225
+  1906 0 W L   1T m=1908.108 r=1877.380 key=1 val=224 ver=1.226
+  1911 0 W L   1T m=1913.113 r=1882.385 key=0 val=225 ver=1.227
+  1913 0 W L   1T m=1915.115 r=1884.387 key=0 val=226 ver=1.228
+  1916 0 W L   1T m=1918.119 r=1887.391 key=0 val=227 ver=1.229
+  1923 0 W L   1T m=1925.126 r=1894.398 key=1 val=228 ver=1.230
+  1925 0 W L   1T m=1927.129 r=1896.401 key=1 val=229 ver=1.231
+  1937 0 W L   1T m=1939.142 r=1908.414 key=1 val=230 ver=1.232
+  1940 0 W L   1T m=1942.145 r=1911.417 key=1 val=231 ver=1.233
+  1941 0 W L   1T m=1943.146 r=1912.418 key=1 val=232 ver=1.234
+  1945 0 W L   1T m=1947.151 r=1916.423 key=0 val=233 ver=1.235
+  1954 0 W L   1T m=1956.161 r=1925.433 key=0 val=234 ver=1.236
+  1967 0 W L   1T m=1969.175 r=1938.447 key=1 val=235 ver=1.237
+  1975 0 W L   1T m=1977.184 r=1946.456 key=0 val=236 ver=1.238
+  1987 0 W L   1T m=1989.197 r=1958.469 key=1 val=237 ver=1.239
+  1995 0 W L   1T m=1997.206 r=1966.478 key=0 val=238 ver=1.240
+  1997 0 W L   1T m=1999.208 r=1968.480 key=0 val=239 ver=1.241
+  2001 0 W L   1T m=2003.213 r=1972.485 key=0 val=240 ver=1.242
+  2004 0 W L   1T m=2006.216 r=1975.488 key=1 val=241 ver=1.243
+  2006 0 W L   1T m=2008.218 r=1977.490 key=0 val=242 ver=1.244
+  2008 0 W L   1T m=2010.220 r=1979.492 key=0 val=243 ver=1.245
+  2013 0 W L   1T m=2015.226 r=1984.498 key=1 val=244 ver=1.246
+  2023 0 W L   1T m=2025.237 r=1994.509 key=1 val=245 ver=1.247
+  2032 0 W L   1T m=2034.247 r=2003.519 key=1 val=246 ver=1.248
+  2033 0 W L   1T m=2035.248 r=2004.520 key=0 val=247 ver=1.249
+  2037 0 W L   1T m=2039.252 r=2008.524 key=1 val=248 ver=1.250
+  2039 0 W L   1T m=2041.255 r=2010.527 key=1 val=249 ver=1.251
+  2043 0 W L   1T m=2045.259 r=2014.531 key=0 val=250 ver=1.252
+  2055 0 W L   1T m=2057.272 r=2026.544 key=0 val=251 ver=1.253
+  2061 0 W L   1T m=2063.279 r=2032.551 key=0 val=252 ver=1.254
+  2063 0 W L   1T m=2065.281 r=2034.553 key=1 val=253 ver=1.255
+  2065 0 W L   1T m=2067.283 r=2036.555 key=1 val=254 ver=1.256
+  2070 0 W L   1T m=2072.289 r=2041.561 key=1 val=255 ver=1.257
+  2076 0 W L   1T m=2078.296 r=2047.568 key=1 val=256 ver=1.258
+  2080 0 W L   1T m=2082.300 r=2051.572 key=0 val=257 ver=1.259
+  2081 0 W L   1T m=2083.301 r=2052.573 key=0 val=258 ver=1.260
+  2095 0 W L   1T m=2097.317 r=2066.589 key=0 val=259 ver=1.261
+  2098 0 W L   1T m=2100.320 r=2069.592 key=1 val=260 ver=1.262
+  2102 0 W L   1T m=2104.324 r=2073.596 key=1 val=261 ver=1.263
+  2103 0 W L   1T m=2105.325 r=2074.597 key=0 val=262 ver=1.264
+  2113 0 W L   1T m=2115.336 r=2084.608 key=0 val=263 ver=1.265
+  2120 0 W L   1T m=2122.344 r=2091.616 key=0 val=264 ver=1.266
+  2129 0 W L   1T m=2131.354 r=2100.626 key=1 val=265 ver=1.267
+  2137 0 W L   1T m=2139.363 r=2108.635 key=1 val=266 ver=1.268
+  2144 0 W L   1T m=2146.371 r=2115.643 key=1 val=267 ver=1.269
+  2150 0 W L   1T m=2152.377 r=2121.649 key=0 val=268 ver=1.270
+  2158 0 W L   1T m=2160.386 r=2129.658 key=0 val=269 ver=1.271
+  2159 0 W L   1T m=2161.387 r=2130.659 key=0 val=270 ver=1.272
+  2160 0 W L   1T m=2162.388 r=2131.660 key=1 val=271 ver=1.273
+  2161 0 W L   1T m=2163.390 r=2132.662 key=1 val=272 ver=1.274
+  2171 0 W L   1T m=2173.401 r=2142.673 key=0 val=273 ver=1.275
+  2178 0 W L   1T m=2180.408 r=2149.680 key=0 val=274 ver=1.276
+  2184 0 W L   1T m=2186.415 r=2155.687 key=1 val=275 ver=1.277
+  2188 0 W L   1T m=2190.419 r=2159.691 key=0 val=276 ver=1.278
+  2190 0 W L   1T m=2192.422 r=2161.694 key=0 val=277 ver=1.279
+  2194 0 W L   1T m=2196.426 r=2165.698 key=0 val=278 ver=1.280
+  2201 0 W L   1T m=2203.434 r=2172.706 key=0 val=279 ver=1.281
+  2204 0 W L   1T m=2206.437 r=2175.709 key=0 val=280 ver=1.282
+  2208 0 W L   1T m=2210.442 r=2179.714 key=0 val=281 ver=1.283
+  2216 0 W L   1T m=2218.450 r=2187.722 key=1 val=282 ver=1.284
+  2218 0 W L   1T m=2220.453 r=2189.725 key=0 val=283 ver=1.285
+  2222 0 W L   1T m=2224.457 r=2193.729 key=1 val=284 ver=1.286
+  2223 0 W L   1T m=2225.458 r=2194.730 key=0 val=285 ver=1.287
+  2225 0 W L   1T m=2227.460 r=2196.732 key=0 val=286 ver=1.288
+  2226 0 W L   1T m=2228.461 r=2197.733 key=0 val=287 ver=1.289
+  2233 0 W L   1T m=2235.469 r=2204.741 key=1 val=288 ver=1.290
+  2240 0 W L   1T m=2242.477 r=2211.749 key=1 val=289 ver=1.291
+  2249 0 W L   1T m=2251.487 r=2220.759 key=1 val=290 ver=1.292
+  2253 0 W L   1T m=2255.491 r=2224.763 key=1 val=291 ver=1.293
+  2260 0 W L   1T m=2262.499 r=2231.771 key=0 val=292 ver=1.294
+  2279 0 W L   1T m=2281.520 r=2250.792 key=0 val=293 ver=1.295
+  2281 0 W L   1T m=2283.522 r=2252.794 key=0 val=294 ver=1.296
+  2293 0 W L   1T m=2295.536 r=2264.808 key=1 val=295 ver=1.297
+  2301 0 W L   1T m=2303.544 r=2272.816 key=0 val=296 ver=1.298
+  2302 0 W L   1T m=2304.546 r=2273.818 key=0 val=297 ver=1.299
+  2307 0 W L   1T m=2309.551 r=2278.823 key=0 val=298 ver=1.300
+  2309 0 W L   1T m=2311.553 r=2280.825 key=0 val=299 ver=1.301
+  2310 0 W L   1T m=2312.554 r=2281.826 key=0 val=300 ver=1.302
+  2311 0 W L   1T m=2313.555 r=2282.827 key=0 val=301 ver=1.303
+  2315 0 W L   1T m=2317.560 r=2286.832 key=1 val=302 ver=1.304
+  2316 0 W L   1T m=2318.561 r=2287.833 key=1 val=303 ver=1.305
+  2317 0 W L   1T m=2319.562 r=2288.834 key=0 val=304 ver=1.306
+  2322 0 W L   1T m=2324.568 r=2293.840 key=0 val=305 ver=1.307
+  2338 0 W L   1T m=2340.585 r=2309.857 key=0 val=306 ver=1.308
+  2339 0 W L   1T m=2341.586 r=2310.858 key=1 val=307 ver=1.309
+  2340 - P - ---- isolate=0 ticks=7323
+  4700 0 S L   1T m=4705.198 r=4575.303 step=-99.167ms
+  7162 1 ? C   2T m=7154.923 r=7171.990 term=2
+  7162 1 e C   2T m=7154.923 r=7171.990 promise_expired
+  7163 2 v F   2T m=7155.335 r=7144.707 for=1
+  7163 2 e F   2T m=7155.335 r=7144.707 promise_expired
+  7164 1 * L   2T m=7156.921 r=7173.988 votes=110
+  7165 2 p F   2T m=7157.333 r=7146.705 leader=1 until=12146.705
+  7166 1 W L   2T m=7158.919 r=7175.986 key=0 val=306 ver=2.1 recovery
+  7166 1 W L   2T m=7158.919 r=7175.986 key=1 val=307 ver=2.2 recovery
+  7166 1 c L   2T m=7158.919 r=7175.986 recovered
+  7166 1 + L   2T m=7158.919 r=7175.986 until=12151.988 clock=real
+LEASE OVERLAP: node 0 and node 1 both hold a lease at tick 7166 (true time)
+  7190 1 W L   2T m=7182.896 r=7199.963 key=1 val=1270 ver=2.4
+  7190 0 r L   1T m=7197.952 r=7068.057 key=1 val=307 ver=1.309 STALE
+STALE READ: node 0 read key 1 = 307 at tick 7190, but the latest committed write is 1270 (committed by node 1 at tick 7190)
+  7192 1 W L   2T m=7184.894 r=7201.961 key=0 val=1271 ver=2.5
+  7193 1 W L   2T m=7185.893 r=7202.960 key=0 val=1273 ver=2.6
+  7193 0 r L   1T m=7200.955 r=7071.060 key=1 val=307 ver=1.309 STALE
+  7195 0 r L   1T m=7202.957 r=7073.062 key=1 val=307 ver=1.309 STALE
+  7196 1 W L   2T m=7188.890 r=7205.957 key=1 val=1275 ver=2.7
+  7196 0 r L   1T m=7203.958 r=7074.063 key=1 val=307 ver=1.309 STALE
+  7198 0 r L   1T m=7205.960 r=7076.065 key=1 val=307 ver=1.309 STALE
+  7199 0 r L   1T m=7206.962 r=7077.067 key=1 val=307 ver=1.309 STALE
+  7200 0 r L   1T m=7207.963 r=7078.068 key=0 val=306 ver=1.308 STALE
+  7201 0 r L   1T m=7208.964 r=7079.069 key=1 val=307 ver=1.309 STALE
+  7202 0 r L   1T m=7209.965 r=7080.070 key=1 val=307 ver=1.309 STALE
+  7203 0 r L   1T m=7210.966 r=7081.071 key=0 val=306 ver=1.308 STALE
+  7204 0 r L   1T m=7211.967 r=7082.072 key=1 val=307 ver=1.309 STALE
+  7205 0 r L   1T m=7212.968 r=7083.073 key=1 val=307 ver=1.309 STALE
+  7206 0 r L   1T m=7213.969 r=7084.074 key=1 val=307 ver=1.309 STALE
+  7207 1 W L   2T m=7199.879 r=7216.946 key=0 val=1278 ver=2.8
+  7209 1 W L   2T m=7201.877 r=7218.944 key=0 val=1279 ver=2.9
+  7209 0 r L   1T m=7216.973 r=7087.078 key=1 val=307 ver=1.309 STALE
+  7210 1 W L   2T m=7202.876 r=7219.943 key=0 val=1280 ver=2.10
+  7210 0 r L   1T m=7217.974 r=7088.079 key=0 val=306 ver=1.308 STALE
+  7211 0 r L   1T m=7218.975 r=7089.080 key=1 val=307 ver=1.309 STALE
+  7214 0 r L   1T m=7221.978 r=7092.083 key=1 val=307 ver=1.309 STALE
+  7217 0 r L   1T m=7224.982 r=7095.087 key=0 val=306 ver=1.308 STALE
+  7220 1 W L   2T m=7212.866 r=7229.933 key=0 val=1281 ver=2.11
+  7221 1 W L   2T m=7213.865 r=7230.932 key=0 val=1282 ver=2.12
+  7221 0 r L   1T m=7228.986 r=7099.091 key=0 val=306 ver=1.308 STALE
+  7223 0 r L   1T m=7230.988 r=7101.093 key=0 val=306 ver=1.308 STALE
+  7224 0 r L   1T m=7231.989 r=7102.094 key=0 val=306 ver=1.308 STALE
+  7226 0 r L   1T m=7233.991 r=7104.096 key=0 val=306 ver=1.308 STALE
+  7227 0 r L   1T m=7234.993 r=7105.098 key=1 val=307 ver=1.309 STALE
+  7228 0 - L   1T m=7235.994 r=7106.099 expired
+summary: handovers=1 min_gap=-62 pair=0->1 expiry_gap=-62 expiry_pair=0->1 overlap_ticks=62 stale_reads=23 lease_reads=3276 commits=320 elections=2 steps=1
+seed=96 ticks=7228 trace=2d3ce8d2f23ec0e8 FAIL

@@ -1,0 +1,1993 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>12 · Coverage marks &amp; exhaustive testing — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .hm-wrap { position: relative; }
+  .hm-tabs { margin-bottom: 6px; }
+  .slotbox { font-family: var(--mono); }
+  .rp-grid { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 14px; }
+  @media (max-width: 960px) { .rp-grid { grid-template-columns: 1fr; } }
+  .rp-panel { background: #0b111d; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .rp-panel h5 { margin: 0 0 6px; font: 600 0.78rem var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .rp-now { font-family: var(--mono); font-size: 0.85rem; padding: 8px 10px; border-radius: 8px; background: #0b111d; border: 1px solid var(--line); margin-top: 8px; min-height: 2.6em; }
+  .rp-now b { color: var(--yellow); }
+  .steps .tl-row { grid-template-columns: 40px 1fr; white-space: pre; }
+  .steps .tl-row.cur { background: rgba(245,230,99,.10); }
+  .steps .tl-row.fut { opacity: .35; }
+  pre.code { font-size: 0.76rem; }
+  pre.code .hit { background: rgba(245,230,99,.16); display: inline-block; width: 100%; }
+  .odo { font-family: var(--mono); font-size: .85rem; display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-end; margin: 6px 0; }
+  .odo .cell { border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; text-align: center; background: var(--panel2); min-width: 64px; }
+  .odo .cell b { display: block; font-size: 1.2rem; color: var(--accent2); }
+  .odo .cell.bump { border-color: var(--yellow); }
+  .odo .cell.bump b { color: var(--yellow); }
+  .odo .cell span { color: var(--dim); font-size: .72rem; }
+  table.data.cov td.num { font-size: .82rem; }
+  table.data.cov tr.zero td { color: var(--bug); font-weight: 700; background: rgba(255,92,122,.08); }
+</style>
+</head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag medium">Medium–Hard</span><span class="tag">Example 12</span><span class="tag">coverage marks · exhaustigen · small scope</span></div>
+    <h1>Coverage marks &amp; exhaustive testing</h1>
+    <p class="lede">A sweep that passes proves nothing about code it never reached. Here a free-space map (an extent set that
+      coalesces and splits ranges in a fixed-size array) has a planted bug on one rare path. A million random seeds pass.
+      The <b>coverage marks</b> show why: that path was hit zero times. An <b>exhaustive generator</b> in the style of
+      TigerBeetle's <code>exhaustigen.zig</code> walks every op sequence on a 7-block domain and prints the 4-op counterexample in 8&nbsp;ms.</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>The system, its marks, and two ways to feed it</h2>
+    <p>The system under test is <code>IntervalSet</code>: sorted, disjoint, <em>non-touching</em> ranges <code>[lo, hi)</code> of free
+      blocks, stored in a fixed array of slots, like a B-tree node. <code>insert</code> and <code>remove</code> must open slots, close slots
+      (in-place compaction), coalesce neighbours and split ranges. Each of those branches carries a named <b>coverage mark</b>.
+      The same harness can be fed by a seeded random generator, or by <code>Gen</code>, which enumerates every choice sequence.
+      After every op the harness checks the set's shape and compares its contents with an independent bitset model.</p>
+    <div class="viz" id="arch"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>The coverage heatmap: which seeds reached which branch</h2>
+    <p>Each cell is one real seed (columns, seeds 0–199) and one mark (rows). Brightness = how many times that seed's 100 ops hit
+      the mark (log scale; dark = 0). The data comes from the <code>marks:</code> line of <code>run &lt;seed&gt;</code>, captured for both
+      generators. Switch generators and look at the <code>insert_fill_gap</code> row.</p>
+    <div class="controls hm-tabs" id="hm-tabs"></div>
+    <div class="viz hm-wrap" id="heat"></div>
+    <div class="grid g2">
+      <div>
+        <h3>Uniform generator, 1,000,000 seeds, with the bug</h3>
+        <div id="cov-uni"></div>
+      </div>
+      <div>
+        <h3>Boundary-biased generator, 100,000 seeds</h3>
+        <div id="cov-bnd"></div>
+      </div>
+    </div>
+    <div class="callout warn" id="cov-callout"></div>
+    <h3>Marks × generator settings</h3>
+    <p>Share of all ops that hit each mark, for each way of generating ops (parsed from the coverage tables and from the per-length
+      <code>hits:</code> lines of <code>exhaust 5</code>). Exhaustive small-scope testing has its own blind spots: it rarely fills all slots.</p>
+    <div class="viz" id="heat2"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Step through the minimal failing sequence</h2>
+    <p>This is the replay that <code>exhaust 4 --bug-fill-gap</code> printed: every slot after every op, exactly as captured.
+      The number line below the slots shows which blocks the set holds, what the <em>model</em> holds, and what
+      <code>contains(x)</code> answers. <code>contains</code> uses a binary search, so it is only correct while the slots are sorted.</p>
+    <div class="viz">
+      <div class="rp-grid">
+        <div class="rp-panel"><h5>slots (capacity 3) and blocks 0..6</h5><div id="rp-svg"></div></div>
+        <div class="rp-panel"><h5>captured replay</h5><div class="tl steps" id="rp-steps"></div>
+          <h5 style="margin-top:12px">code path</h5><div id="rp-code"></div></div>
+      </div>
+      <div id="rp-player"></div>
+      <div class="rp-now" id="rp-now"></div>
+      <div class="cap">The "model" and "contains(x)" rows are recomputed in your browser from the captured ops and slots (the model is
+        a bitset of the ops; <code>contains</code> is the same binary search as <code>IntervalSet.contains</code>). Everything else is the captured text.</div>
+    </div>
+    <h3>The bug: one line of a fast path</h3>
+    <div class="grid g2">
+      <div><div class="src">main.zig · IntervalSet.insert, correct (<code>close_slots</code>: ordered remove)</div>
+<pre class="code"><span class="kw">if</span> (touching == <span class="n">2</span> <span class="kw">and</span> set.slots[i].hi == lo <span class="kw">and</span> set.slots[i + <span class="n">1</span>].lo == hi) {
+    marks.<span class="fn">hit</span>(.insert_fill_gap);
+    set.slots[i + <span class="n">1</span>].lo = set.slots[i].lo;
+<span class="good">    set.<span class="fn">close_slots</span>(i, <span class="n">1</span>);</span>
+    <span class="kw">return</span>;
+}
+<span class="kw">fn</span> <span class="fn">close_slots</span>(set: *IntervalSet, at: <span class="kw">u32</span>, count: <span class="kw">u32</span>) <span class="kw">void</span> {
+    std.mem.<span class="fn">copyForwards</span>(Interval, set.slots[at .. set.len - count], set.slots[at + count .. set.len]);
+    set.len -= count;
+}</pre></div>
+      <div><div class="src">main.zig · with <code>--bug-fill-gap</code> (swap-remove)</div>
+<pre class="code"><span class="kw">if</span> (touching == <span class="n">2</span> <span class="kw">and</span> set.slots[i].hi == lo <span class="kw">and</span> set.slots[i + <span class="n">1</span>].lo == hi) {
+    marks.<span class="fn">hit</span>(.insert_fill_gap);
+    set.slots[i + <span class="n">1</span>].lo = set.slots[i].lo;
+<span class="c">    // BUG: swap-remove is O(1) and looks harmless, but it moves the LAST interval</span>
+<span class="c">    // into slot i. That is right only when slot i+1 was the last one (then the last</span>
+<span class="c">    // one IS the fused range). With anything after it, the array is now unsorted.</span>
+<span class="bad">    set.slots[i] = set.slots[set.len - <span class="n">1</span>];</span>
+<span class="bad">    set.len -= <span class="n">1</span>;</span>
+    <span class="kw">return</span>;
+}</pre></div>
+    </div>
+    <p>Why a random generator never gets here: the fast path needs <code>lo</code> to equal the left neighbour's <code>hi</code> <em>and</em>
+      the length to equal the hole, exactly, on a domain of 2<sup>20</sup> blocks. Two exact equalities on a big domain is a
+      measure-zero event. On a domain of 7 blocks it is one of 36 possible ops.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>Exhaustive enumeration: Gen, the odometer</h2>
+    <p><code>Gen</code> replaces the PRNG. Each pass of <code>while (!g.done())</code> asks for choices with bounds
+      (<code>kind ≤ 1</code>, <code>lo ≤ 6</code>, <code>hi - lo - 1 ≤ min(3, 7 - lo) - 1</code>). <code>done()</code> bumps the rightmost
+      choice still below its bound and forgets everything after it. Because <code>hi</code>'s bound depends on <code>lo</code>, the space is a
+      tree, not a grid; Gen still visits every leaf exactly once. Below: the tree of one op (36 leaves), and the odometer stepping through it.</p>
+    <div class="viz">
+      <div id="gen-tree"></div>
+      <div class="odo" id="gen-odo"></div>
+      <div id="gen-player"></div>
+      <div class="cap">JS re-implementation of <code>Gen.done</code> / <code>Gen.int_inclusive</code> and <code>gen_op</code> from main.zig, for illustration.
+        It counts its leaves; the Zig output says <span id="gen-36"></span>.</div>
+    </div>
+    <h3>How many sequences per length</h3>
+    <p>Sequences of length <i>L</i> = 36<sup><i>L</i></sup>. Bars are the real counts from <code>exhaust 5</code> (correct code) on a log scale;
+      the red bar is how far <code>exhaust 4 --bug-fill-gap</code> got into length 4 before failing.</p>
+    <div class="viz" id="len-chart"></div>
+    <div class="viz" id="len-marks"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Random vs exhaustive: time to find</h2>
+    <p>Ops executed before the bug is found (log scale), and wall time, from the captured runs. The uniform generator never finds it.</p>
+    <div class="viz" id="ttf"></div>
+    <h3>With the fixed generator, most seeds find it on their own</h3>
+    <p>Seeds 0–499 with <code>--gen-boundaries --bug-fill-gap</code>: at which op each seed failed. <span id="bnd-sum"></span></p>
+    <div class="viz" id="bnd-hist"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>The random seed that finds it: <code>run 1 --gen-boundaries --bug-fill-gap</code></h2>
+    <p>Every op of the real run, placed on the 2<sup>20</sup>-block domain (x) by step (y), coloured by the mark it hit. Boundary-biased
+      endpoints make ops land on existing range edges, so extends and, at step <span id="r1-step"></span>, a fill-gap happen.</p>
+    <div class="viz" id="r1"></div>
+    <div id="r1-tail"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Determinism: same seed, same bytes</h2>
+    <div class="grid g2" id="det"></div>
+    <div class="callout info" id="det-same"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>How TigerBeetle does this</h2>
+    <div class="grid g2">
+      <div class="card"><h4><span class="src"><a class="file">src/vsr/replica.zig</a> · send_commit</span></h4>
+<pre class="code"><span class="kw">const</span> marks = <span class="fn">@import</span>(<span class="s">"../testing/marks.zig"</span>);
+<span class="kw">const</span> log = marks.<span class="fn">wrap_log</span>(stdx.log.<span class="fn">scoped</span>(.replica));
+...
+<span class="kw">if</span> (self.primary_abdicating) {
+    <span class="fn">assert</span>(self.primary_abdicate_timeout.ticking);
+
+<span class="hit">    log.mark.<span class="fn">debug</span>(<span class="s">"{f}: send_commit: primary abdicating (view={})"</span>, .{</span>
+        self.<span class="fn">log_prefix</span>(),
+        self.view,
+    });
+    <span class="kw">return</span>;
+}</pre>
+        <p style="font-size:.9rem">Production code marks the branch with an ordinary log line. Outside tests <code>log.mark</code> <em>is</em> the plain logger.
+          <code>replica.zig</code> has 9 <code>log.mark</code> sites.</p></div>
+      <div class="card"><h4><span class="src"><a class="file">src/vsr/replica_test.zig</a> · one test per mark</span></h4>
+<pre class="code"><span class="kw">test</span> <span class="s">"Cluster: network: partition 1-2 (isolate primary, asymmetric, send-only)"</span> {
+    <span class="c">// The primary can send to the backups, but not receive.</span>
+    ...
+    t.<span class="fn">replica</span>(.A0).<span class="fn">drop_all</span>(.B1, .incoming);
+    t.<span class="fn">replica</span>(.A0).<span class="fn">drop_all</span>(.B2, .incoming);
+<span class="hit">    <span class="kw">const</span> mark = marks.<span class="fn">check</span>(<span class="s">"send_commit: primary abdicating"</span>);</span>
+    <span class="kw">try</span> c.<span class="fn">request</span>(<span class="n">2</span>, <span class="n">2</span>);
+<span class="hit">    <span class="kw">try</span> mark.<span class="fn">expect_hit</span>();</span>
+}</pre>
+        <p style="font-size:.9rem">grep the mark text and you land on the one test that explains why the branch exists. The receive-only variant
+          asserts <code>expect_not_hit()</code> for the same mark. 13 <code>marks.check</code> calls in this file.</p></div>
+      <div class="card"><h4><span class="src"><a class="file">src/testing/marks.zig</a> · record</span></h4>
+<pre class="code"><span class="c">//! That is, the important part is not that a log line is covered at all, but that we</span>
+<span class="c">//! can trace production code to a single minimal hand-written test which explains why</span>
+<span class="c">//! the code needs to exist.</span>
+<span class="kw">fn</span> <span class="fn">record</span>(fmt: []<span class="kw">const</span> <span class="kw">u8</span>) <span class="kw">void</span> {
+    <span class="kw">comptime</span> <span class="fn">assert</span>(builtin.is_test);
+    <span class="kw">if</span> (global_state.mark_name) |mark_active| {
+        <span class="kw">if</span> (std.mem.<span class="fn">indexOf</span>(<span class="kw">u8</span>, fmt, mark_active) != <span class="kw">null</span>) {
+            global_state.mark_hit_count += <span class="n">1</span>;
+        }
+    }
+}</pre>
+        <p style="font-size:.9rem">This example's <code>marks</code> module has the same <code>check</code> / <code>expect_hit</code> shape, but its counters are always
+          on, so the simulator can print the coverage table. Its <code>zig test</code> for <code>insert_fill_gap</code> is the 4-op sequence from section 03.</p></div>
+      <div class="card"><h4><span class="src"><a class="file">src/lsm/k_way_merge.zig</a> · test "k_way_merge: exhaustigen"</span></h4>
+<pre class="code"><span class="kw">const</span> Gen = <span class="fn">@import</span>(<span class="s">"../testing/exhaustigen.zig"</span>);
+<span class="kw">const</span> N = <span class="n">3</span>;
+<span class="kw">const</span> M = <span class="n">2</span>;
+...
+<span class="kw">var</span> g: Gen = .{};
+<span class="kw">while</span> (!g.<span class="fn">done</span>()) {
+    <span class="kw">const</span> direction = g.<span class="fn">enum_value</span>(Direction);
+    <span class="kw">for</span> (<span class="n">0</span>..N) |stream_index| {
+        <span class="kw">const</span> key_count = g.<span class="fn">int_inclusive</span>(<span class="kw">u32</span>, M);
+        <span class="kw">for</span> (<span class="n">0</span>..key_count) |key_index| {
+            streams_buffer[stream_index][key_index] = g.<span class="fn">int_inclusive</span>(<span class="kw">u32</span>, M);
+        }
+        ...</pre>
+        <p style="font-size:.9rem">Every direction × every set of 3 streams with up to 2 keys each. The same file also has a random fuzzer
+          (<code>FuzzTestContextType</code>, <code>prng.chance(ratio(5, 100))</code>). <code>src/trace/event.zig</code> uses Gen to check
+          that no two <code>EventMetric</code> / <code>EventTiming</code> values share a slot.</p></div>
+      <div class="card" style="grid-column: 1 / -1"><h4><span class="src"><a class="file">src/testing/exhaustigen.zig</a> · done</span></h4>
+<pre class="code"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn">done</span>(g: *<span class="kw">@This</span>()) <span class="kw">bool</span> {
+    <span class="kw">if</span> (!g.started) {
+        g.started = <span class="kw">true</span>;
+        <span class="kw">return</span> <span class="kw">false</span>;
+    }
+    <span class="kw">var</span> i = g.p_max;
+    <span class="kw">while</span> (i > <span class="n">0</span>) {
+        i -= <span class="n">1</span>;
+        <span class="kw">if</span> (g.v[i].value < g.v[i].bound) {
+            g.v[i].value += <span class="n">1</span>;
+            g.p_max = i + <span class="n">1</span>;
+            g.p = <span class="n">0</span>;
+            <span class="kw">return</span> <span class="kw">false</span>;
+        }
+    }
+    <span class="kw">return</span> <span class="kw">true</span>;
+}</pre>
+        <p style="font-size:.9rem">main.zig's <code>Gen</code> is a line-for-line port (std only). Sequences come out shortest first, so the first failure is
+          a minimal one, as matklad's <a href="https://matklad.github.io/2021/11/07/generate-all-the-things.html">Generate All the Things</a> notes.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/12-coverage-marks-exhaustive</span>
+<span class="p">$ zig run main.zig -- sweep 100000 --bug-fill-gap</span>                 # passes: the bug is never reached
+<span class="p">$ zig run main.zig -- coverage 100000 --bug-fill-gap --require-all</span>  # insert_fill_gap = 0: fails
+<span class="p">$ zig run main.zig -- exhaust 4 --bug-fill-gap</span>                     # minimal 4-op counterexample
+<span class="p">$ zig run main.zig -- sweep 100000 --gen-boundaries --bug-fill-gap</span> # a better generator finds it too
+<span class="p">$ zig run main.zig -- run 1 --gen-boundaries --bug-fill-gap</span>
+<span class="p">$ zig test main.zig</span>                                               # each test asserts one mark</pre>
+    <div id="sweeps"></div>
+  </section>
+</main>
+<script type="text/plain" id="log-sweep" data-src="data/12/sweep.txt">
+PASS: 100000 seeds (10000000 ops)
+
+real	0m1.593s
+user	0m1.592s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/12/sweep-bug.txt">
+PASS: 100000 seeds (10000000 ops)
+
+real	0m1.591s
+user	0m1.587s
+sys	0m0.004s
+</script>
+<script type="text/plain" id="log-cov-uni" data-src="data/12/coverage-uniform-bug.txt">
+PASS: 1000000 seeds (100000000 ops)
+coverage: 1000000 seeds, generator=uniform
+  mark                 seeds_hit        hits
+  insert_disjoint        1000000    32023197
+  insert_full            1000000    32593030
+  insert_extend           317517      381452
+  insert_coalesce            484         484
+  insert_fill_gap              0           0   <-- NEVER HIT
+  remove_miss            1000000    34797620
+  remove_trim             127276      135888
+  remove_delete            33856       34459
+  remove_split             11033       11090
+  remove_split_full        22526       22780
+--require-all: FAIL, 1 mark(s) never hit
+
+real	0m15.971s
+user	0m15.900s
+sys	0m0.016s
+</script>
+<script type="text/plain" id="log-cov-bnd" data-src="data/12/coverage-boundaries.txt">
+PASS: 100000 seeds (10000000 ops)
+coverage: 100000 seeds, generator=boundaries
+  mark                 seeds_hit        hits
+  insert_disjoint         100000     2555583
+  insert_full              24362       88296
+  insert_extend           100000     3646939
+  insert_coalesce          27515       34300
+  insert_fill_gap          82999      174804
+  remove_miss             100000     2225183
+  remove_trim              98659      458963
+  remove_delete            86947      202341
+  remove_split             96842      593886
+  remove_split_full        13027       19705
+--require-all: every mark hit
+
+real	0m9.897s
+user	0m9.896s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-bnd" data-src="data/12/sweep-boundaries-bug.txt">
+INVARIANT VIOLATED: slots 2,3 out of order or touching: [1040774,1040862) then [214004,319265)
+FAIL at seed=1 after 2 seeds (124 ops). Replay with:
+  zig run main.zig -- run 1 --gen-boundaries --bug-fill-gap
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-ex4" data-src="data/12/exhaust4-bug.txt">
+exhaust: domain=0..7 capacity=3 ranges of 1..3 blocks, max_len=4
+len=1 sequences=36 ops=36 hits: insert_disjoint=18 insert_full=0 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=18 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+len=2 sequences=1296 ops=2592 hits: insert_disjoint=1092 insert_full=0 insert_extend=204 insert_coalesce=0 insert_fill_gap=0 remove_miss=1164 remove_trim=72 remove_delete=55 remove_split=5 remove_split_full=0
+len=3 sequences=46656 ops=139968 hits: insert_disjoint=51204 insert_full=0 insert_extend=18312 insert_coalesce=353 insert_fill_gap=115 remove_miss=57417 remove_trim=6864 remove_delete=4982 remove_split=721 remove_split_full=0
+len=4 sequences=8212 ops=32848 hits: insert_disjoint=11630 insert_full=0 insert_extend=12834 insert_coalesce=303 insert_fill_gap=89 remove_miss=4333 remove_trim=2336 remove_delete=879 remove_split=444 remove_split_full=0
+FAIL at len=4: sequence 8212 of this length, 56200 sequences and 175444 ops in total
+minimal failing sequence (every shorter sequence passed), replayed:
+  step op              mark                slots (live | stale)
+     - start                                | · · ·
+     1 insert [0,1)    insert_disjoint     [0,1) | · ·
+     2 insert [2,3)    insert_disjoint     [0,1) [2,3) | ·
+     3 insert [4,5)    insert_disjoint     [0,1) [2,3) [4,5) |
+     4 insert [1,2)    insert_fill_gap     [4,5) [0,3) | [4,5)
+INVARIANT VIOLATED: slots 0,1 out of order or touching: [4,5) then [0,3)
+replay trace=262a5491113ac8ff
+exhaust trace=d4b4290b4d04a09a FAIL
+
+real	0m0.008s
+user	0m0.008s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-ex4-again" data-src="data/12/exhaust4-bug-again.txt">
+exhaust: domain=0..7 capacity=3 ranges of 1..3 blocks, max_len=4
+len=1 sequences=36 ops=36 hits: insert_disjoint=18 insert_full=0 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=18 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+len=2 sequences=1296 ops=2592 hits: insert_disjoint=1092 insert_full=0 insert_extend=204 insert_coalesce=0 insert_fill_gap=0 remove_miss=1164 remove_trim=72 remove_delete=55 remove_split=5 remove_split_full=0
+len=3 sequences=46656 ops=139968 hits: insert_disjoint=51204 insert_full=0 insert_extend=18312 insert_coalesce=353 insert_fill_gap=115 remove_miss=57417 remove_trim=6864 remove_delete=4982 remove_split=721 remove_split_full=0
+len=4 sequences=8212 ops=32848 hits: insert_disjoint=11630 insert_full=0 insert_extend=12834 insert_coalesce=303 insert_fill_gap=89 remove_miss=4333 remove_trim=2336 remove_delete=879 remove_split=444 remove_split_full=0
+FAIL at len=4: sequence 8212 of this length, 56200 sequences and 175444 ops in total
+minimal failing sequence (every shorter sequence passed), replayed:
+  step op              mark                slots (live | stale)
+     - start                                | · · ·
+     1 insert [0,1)    insert_disjoint     [0,1) | · ·
+     2 insert [2,3)    insert_disjoint     [0,1) [2,3) | ·
+     3 insert [4,5)    insert_disjoint     [0,1) [2,3) [4,5) |
+     4 insert [1,2)    insert_fill_gap     [4,5) [0,3) | [4,5)
+INVARIANT VIOLATED: slots 0,1 out of order or touching: [4,5) then [0,3)
+replay trace=262a5491113ac8ff
+exhaust trace=d4b4290b4d04a09a FAIL
+</script>
+<script type="text/plain" id="log-ex5" data-src="data/12/exhaust5.txt">
+exhaust: domain=0..7 capacity=3 ranges of 1..3 blocks, max_len=5
+len=1 sequences=36 ops=36 hits: insert_disjoint=18 insert_full=0 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=18 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+len=2 sequences=1296 ops=2592 hits: insert_disjoint=1092 insert_full=0 insert_extend=204 insert_coalesce=0 insert_fill_gap=0 remove_miss=1164 remove_trim=72 remove_delete=55 remove_split=5 remove_split_full=0
+len=3 sequences=46656 ops=139968 hits: insert_disjoint=51204 insert_full=0 insert_extend=18312 insert_coalesce=353 insert_fill_gap=115 remove_miss=57417 remove_trim=6864 remove_delete=4982 remove_split=721 remove_split_full=0
+len=4 sequences=1679616 ops=6718464 hits: insert_disjoint=2183624 insert_full=42 insert_extend=1125068 insert_coalesce=38178 insert_fill_gap=12320 remove_miss=2552458 remove_trim=439632 remove_delete=307404 remove_split=59714 remove_split_full=24
+len=5 sequences=60466176 ops=302330880 hits: insert_disjoint=88874672 insert_full=4782 insert_extend=58777710 insert_coalesce=2655414 insert_fill_gap=852862 remove_miss=107584348 remove_trim=23664380 remove_delete=16082680 remove_split=3830938 remove_split_full=3094
+PASS: every sequence up to len=5: 62193780 sequences, 309191940 ops
+exhaust trace=5dddad567ca7f562 PASS
+
+real	0m12.872s
+user	0m12.871s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-run1" data-src="data/12/run1-boundaries-bug.txt">
+seed=1 generator=boundaries domain=1048576 capacity=32 ops=100
+  step op                        mark                len
+     0 insert [359035,359186)     insert_disjoint      1
+     1 insert [359186,359321)     insert_extend        1
+     2 remove [431906,432066)     remove_miss          1
+     3 remove [359035,359131)     remove_trim          1
+     4 insert [359321,359376)     insert_extend        1
+     5 remove [390821,391014)     remove_miss          1
+     6 remove [799077,799140)     remove_miss          1
+     7 insert [756918,757058)     insert_disjoint      2
+     8 insert [1040774,1040862)   insert_disjoint      3
+     9 remove [359131,359200)     remove_trim          3
+    10 insert [131601,131614)     insert_disjoint      4
+    11 insert [777930,778175)     insert_disjoint      5
+    12 insert [319061,319265)     insert_disjoint      6
+    13 insert [55128,55143)       insert_disjoint      7
+    14 remove [938990,939226)     remove_miss          7
+    15 insert [91179,131601)      insert_extend        7
+    16 remove [505368,505427)     remove_miss          7
+    17 insert [214004,214080)     insert_disjoint      8
+    18 insert [131614,131737)     insert_extend        8
+    19 remove [818568,818591)     remove_miss          8
+    20 insert [757058,757193)     insert_extend        8
+    21 insert [362475,362599)     insert_disjoint      9
+    22 insert [750148,750205)     insert_disjoint     10
+    23 insert [214080,319061)     insert_fill_gap      9
+INVARIANT VIOLATED: slots 2,3 out of order or touching: [1040774,1040862) then [214004,319265)
+  slots: [55128,55143) [91179,131737) [1040774,1040862) [214004,319265) [359200,359376) [362475,362599) [750148,750205) [756918,757193) [777930,778175) | [1040774,1040862) · · · · · · · · · · · · · · · · · · · · · ·
+marks: insert_disjoint=10 insert_full=0 insert_extend=5 insert_coalesce=0 insert_fill_gap=1 remove_miss=6 remove_trim=2 remove_delete=0 remove_split=0 remove_split_full=0
+seed=1 ops=24 trace=45c5296705eb5176 FAIL
+</script>
+<script type="text/plain" id="log-run1-again" data-src="data/12/run1-boundaries-bug-again.txt">
+seed=1 generator=boundaries domain=1048576 capacity=32 ops=100
+  step op                        mark                len
+     0 insert [359035,359186)     insert_disjoint      1
+     1 insert [359186,359321)     insert_extend        1
+     2 remove [431906,432066)     remove_miss          1
+     3 remove [359035,359131)     remove_trim          1
+     4 insert [359321,359376)     insert_extend        1
+     5 remove [390821,391014)     remove_miss          1
+     6 remove [799077,799140)     remove_miss          1
+     7 insert [756918,757058)     insert_disjoint      2
+     8 insert [1040774,1040862)   insert_disjoint      3
+     9 remove [359131,359200)     remove_trim          3
+    10 insert [131601,131614)     insert_disjoint      4
+    11 insert [777930,778175)     insert_disjoint      5
+    12 insert [319061,319265)     insert_disjoint      6
+    13 insert [55128,55143)       insert_disjoint      7
+    14 remove [938990,939226)     remove_miss          7
+    15 insert [91179,131601)      insert_extend        7
+    16 remove [505368,505427)     remove_miss          7
+    17 insert [214004,214080)     insert_disjoint      8
+    18 insert [131614,131737)     insert_extend        8
+    19 remove [818568,818591)     remove_miss          8
+    20 insert [757058,757193)     insert_extend        8
+    21 insert [362475,362599)     insert_disjoint      9
+    22 insert [750148,750205)     insert_disjoint     10
+    23 insert [214080,319061)     insert_fill_gap      9
+INVARIANT VIOLATED: slots 2,3 out of order or touching: [1040774,1040862) then [214004,319265)
+  slots: [55128,55143) [91179,131737) [1040774,1040862) [214004,319265) [359200,359376) [362475,362599) [750148,750205) [756918,757193) [777930,778175) | [1040774,1040862) · · · · · · · · · · · · · · · · · · · · · ·
+marks: insert_disjoint=10 insert_full=0 insert_extend=5 insert_coalesce=0 insert_fill_gap=1 remove_miss=6 remove_trim=2 remove_delete=0 remove_split=0 remove_split_full=0
+seed=1 ops=24 trace=45c5296705eb5176 FAIL
+</script>
+<script type="text/plain" id="log-run3" data-src="data/12/run3.txt">
+seed=3 generator=uniform domain=1048576 capacity=32 ops=100
+  step op                        mark                len
+     0 remove [429585,429696)     remove_miss          0
+     1 remove [73968,74119)       remove_miss          0
+     2 insert [354084,354294)     insert_disjoint      1
+     3 insert [38916,39063)       insert_disjoint      2
+     4 insert [525694,525839)     insert_disjoint      3
+     5 insert [791916,792031)     insert_disjoint      4
+     6 insert [1001521,1001676)   insert_disjoint      5
+     7 insert [730937,731059)     insert_disjoint      6
+     8 remove [938296,938332)     remove_miss          6
+     9 insert [636584,636739)     insert_disjoint      7
+    10 insert [401496,401575)     insert_disjoint      8
+    11 remove [407175,407188)     remove_miss          8
+    12 remove [399216,399289)     remove_miss          8
+    13 insert [311584,311600)     insert_disjoint      9
+    14 insert [627059,627239)     insert_disjoint     10
+    15 insert [415139,415293)     insert_disjoint     11
+    16 insert [606372,606385)     insert_disjoint     12
+    17 insert [204118,204348)     insert_disjoint     13
+    18 insert [620644,620837)     insert_disjoint     14
+    19 insert [584374,584471)     insert_disjoint     15
+    20 insert [843975,843990)     insert_disjoint     16
+    21 insert [182556,182620)     insert_disjoint     17
+    22 remove [770367,770385)     remove_miss         17
+    23 insert [544351,544569)     insert_disjoint     18
+    24 insert [859315,859500)     insert_disjoint     19
+    25 insert [492666,492674)     insert_disjoint     20
+    26 insert [69283,69453)       insert_disjoint     21
+    27 insert [401978,401998)     insert_disjoint     22
+    28 remove [396484,396632)     remove_miss         22
+    29 remove [361381,361636)     remove_miss         22
+    30 remove [543379,543402)     remove_miss         22
+    31 insert [827645,827772)     insert_disjoint     23
+    32 insert [709896,710043)     insert_disjoint     24
+    33 remove [397159,397282)     remove_miss         24
+    34 remove [768723,768807)     remove_miss         24
+    35 insert [44748,44845)       insert_disjoint     25
+    36 remove [399237,399474)     remove_miss         25
+    37 insert [505558,505561)     insert_disjoint     26
+    38 insert [986318,986398)     insert_disjoint     27
+    39 insert [801345,801593)     insert_disjoint     28
+    40 insert [789285,789333)     insert_disjoint     29
+    41 remove [843219,843331)     remove_miss         29
+    42 insert [261055,261261)     insert_disjoint     30
+    43 remove [164414,164600)     remove_miss         30
+    44 insert [370882,370919)     insert_disjoint     31
+    45 insert [708380,708538)     insert_disjoint     32
+    46 remove [122586,122591)     remove_miss         32
+    47 insert [169071,169143)     insert_full         32
+    48 insert [877984,878231)     insert_full         32
+    49 insert [112239,112332)     insert_full         32
+    50 insert [76894,77029)       insert_full         32
+    51 remove [482196,482364)     remove_miss         32
+    52 insert [879924,879978)     insert_full         32
+    53 insert [306242,306489)     insert_full         32
+    54 insert [996583,996828)     insert_full         32
+    55 insert [628027,628232)     insert_full         32
+    56 insert [20651,20674)       insert_full         32
+    57 remove [719443,719606)     remove_miss         32
+    58 insert [669938,669950)     insert_full         32
+    59 insert [479847,480006)     insert_full         32
+    60 remove [517950,518078)     remove_miss         32
+    61 remove [228522,228605)     remove_miss         32
+    62 remove [25946,26170)       remove_miss         32
+    63 insert [902607,902746)     insert_full         32
+    64 insert [796399,796565)     insert_full         32
+    65 remove [969725,969769)     remove_miss         32
+    66 insert [695325,695513)     insert_full         32
+    67 remove [874355,874601)     remove_miss         32
+    68 remove [315832,315884)     remove_miss         32
+    69 insert [901288,901411)     insert_full         32
+    70 insert [415957,416107)     insert_full         32
+    71 insert [537874,538101)     insert_full         32
+    72 insert [826103,826347)     insert_full         32
+    73 remove [853897,853940)     remove_miss         32
+    74 insert [796120,796202)     insert_full         32
+    75 remove [13384,13491)       remove_miss         32
+    76 remove [417927,418057)     remove_miss         32
+    77 insert [740267,740445)     insert_full         32
+    78 insert [386160,386389)     insert_full         32
+    79 insert [864157,864407)     insert_full         32
+    80 insert [421882,421984)     insert_full         32
+    81 insert [366876,366978)     insert_full         32
+    82 insert [128915,129015)     insert_full         32
+    83 remove [669575,669830)     remove_miss         32
+    84 insert [32482,32612)       insert_full         32
+    85 remove [863599,863704)     remove_miss         32
+    86 insert [627834,628066)     insert_full         32
+    87 remove [481400,481467)     remove_miss         32
+    88 insert [829552,829734)     insert_full         32
+    89 insert [270572,270761)     insert_full         32
+    90 insert [611255,611471)     insert_full         32
+    91 insert [917074,917143)     insert_full         32
+    92 insert [774174,774329)     insert_full         32
+    93 remove [82051,82215)       remove_miss         32
+    94 remove [119030,119253)     remove_miss         32
+    95 insert [464181,464250)     insert_full         32
+    96 insert [758957,759081)     insert_full         32
+    97 remove [181989,182234)     remove_miss         32
+    98 remove [740372,740624)     remove_miss         32
+    99 insert [95407,95646)       insert_full         32
+marks: insert_disjoint=32 insert_full=35 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=33 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+seed=3 ops=100 trace=a247b6028e137c30 PASS
+</script>
+<script type="text/plain" id="log-run3-bug" data-src="data/12/run3-bug.txt">
+seed=3 generator=uniform domain=1048576 capacity=32 ops=100
+  step op                        mark                len
+     0 remove [429585,429696)     remove_miss          0
+     1 remove [73968,74119)       remove_miss          0
+     2 insert [354084,354294)     insert_disjoint      1
+     3 insert [38916,39063)       insert_disjoint      2
+     4 insert [525694,525839)     insert_disjoint      3
+     5 insert [791916,792031)     insert_disjoint      4
+     6 insert [1001521,1001676)   insert_disjoint      5
+     7 insert [730937,731059)     insert_disjoint      6
+     8 remove [938296,938332)     remove_miss          6
+     9 insert [636584,636739)     insert_disjoint      7
+    10 insert [401496,401575)     insert_disjoint      8
+    11 remove [407175,407188)     remove_miss          8
+    12 remove [399216,399289)     remove_miss          8
+    13 insert [311584,311600)     insert_disjoint      9
+    14 insert [627059,627239)     insert_disjoint     10
+    15 insert [415139,415293)     insert_disjoint     11
+    16 insert [606372,606385)     insert_disjoint     12
+    17 insert [204118,204348)     insert_disjoint     13
+    18 insert [620644,620837)     insert_disjoint     14
+    19 insert [584374,584471)     insert_disjoint     15
+    20 insert [843975,843990)     insert_disjoint     16
+    21 insert [182556,182620)     insert_disjoint     17
+    22 remove [770367,770385)     remove_miss         17
+    23 insert [544351,544569)     insert_disjoint     18
+    24 insert [859315,859500)     insert_disjoint     19
+    25 insert [492666,492674)     insert_disjoint     20
+    26 insert [69283,69453)       insert_disjoint     21
+    27 insert [401978,401998)     insert_disjoint     22
+    28 remove [396484,396632)     remove_miss         22
+    29 remove [361381,361636)     remove_miss         22
+    30 remove [543379,543402)     remove_miss         22
+    31 insert [827645,827772)     insert_disjoint     23
+    32 insert [709896,710043)     insert_disjoint     24
+    33 remove [397159,397282)     remove_miss         24
+    34 remove [768723,768807)     remove_miss         24
+    35 insert [44748,44845)       insert_disjoint     25
+    36 remove [399237,399474)     remove_miss         25
+    37 insert [505558,505561)     insert_disjoint     26
+    38 insert [986318,986398)     insert_disjoint     27
+    39 insert [801345,801593)     insert_disjoint     28
+    40 insert [789285,789333)     insert_disjoint     29
+    41 remove [843219,843331)     remove_miss         29
+    42 insert [261055,261261)     insert_disjoint     30
+    43 remove [164414,164600)     remove_miss         30
+    44 insert [370882,370919)     insert_disjoint     31
+    45 insert [708380,708538)     insert_disjoint     32
+    46 remove [122586,122591)     remove_miss         32
+    47 insert [169071,169143)     insert_full         32
+    48 insert [877984,878231)     insert_full         32
+    49 insert [112239,112332)     insert_full         32
+    50 insert [76894,77029)       insert_full         32
+    51 remove [482196,482364)     remove_miss         32
+    52 insert [879924,879978)     insert_full         32
+    53 insert [306242,306489)     insert_full         32
+    54 insert [996583,996828)     insert_full         32
+    55 insert [628027,628232)     insert_full         32
+    56 insert [20651,20674)       insert_full         32
+    57 remove [719443,719606)     remove_miss         32
+    58 insert [669938,669950)     insert_full         32
+    59 insert [479847,480006)     insert_full         32
+    60 remove [517950,518078)     remove_miss         32
+    61 remove [228522,228605)     remove_miss         32
+    62 remove [25946,26170)       remove_miss         32
+    63 insert [902607,902746)     insert_full         32
+    64 insert [796399,796565)     insert_full         32
+    65 remove [969725,969769)     remove_miss         32
+    66 insert [695325,695513)     insert_full         32
+    67 remove [874355,874601)     remove_miss         32
+    68 remove [315832,315884)     remove_miss         32
+    69 insert [901288,901411)     insert_full         32
+    70 insert [415957,416107)     insert_full         32
+    71 insert [537874,538101)     insert_full         32
+    72 insert [826103,826347)     insert_full         32
+    73 remove [853897,853940)     remove_miss         32
+    74 insert [796120,796202)     insert_full         32
+    75 remove [13384,13491)       remove_miss         32
+    76 remove [417927,418057)     remove_miss         32
+    77 insert [740267,740445)     insert_full         32
+    78 insert [386160,386389)     insert_full         32
+    79 insert [864157,864407)     insert_full         32
+    80 insert [421882,421984)     insert_full         32
+    81 insert [366876,366978)     insert_full         32
+    82 insert [128915,129015)     insert_full         32
+    83 remove [669575,669830)     remove_miss         32
+    84 insert [32482,32612)       insert_full         32
+    85 remove [863599,863704)     remove_miss         32
+    86 insert [627834,628066)     insert_full         32
+    87 remove [481400,481467)     remove_miss         32
+    88 insert [829552,829734)     insert_full         32
+    89 insert [270572,270761)     insert_full         32
+    90 insert [611255,611471)     insert_full         32
+    91 insert [917074,917143)     insert_full         32
+    92 insert [774174,774329)     insert_full         32
+    93 remove [82051,82215)       remove_miss         32
+    94 remove [119030,119253)     remove_miss         32
+    95 insert [464181,464250)     insert_full         32
+    96 insert [758957,759081)     insert_full         32
+    97 remove [181989,182234)     remove_miss         32
+    98 remove [740372,740624)     remove_miss         32
+    99 insert [95407,95646)       insert_full         32
+marks: insert_disjoint=32 insert_full=35 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=33 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+seed=3 ops=100 trace=a247b6028e137c30 PASS
+</script>
+<script type="text/plain" id="tsv-marks" data-src="data/12/per-seed-marks.tsv">
+uniform	0	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	1	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	2	PASS	100	32	39	1	0	0	28	0	0	0	0
+uniform	3	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	4	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	5	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	6	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	7	PASS	100	32	39	1	0	0	28	0	0	0	0
+uniform	8	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	9	PASS	100	32	37	0	0	0	31	0	0	0	0
+uniform	10	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	11	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	12	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	13	PASS	100	32	34	1	0	0	33	0	0	0	0
+uniform	14	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	15	PASS	100	32	34	1	0	0	33	0	0	0	0
+uniform	16	PASS	100	32	26	1	0	0	40	1	0	0	0
+uniform	17	PASS	100	32	27	0	0	0	41	0	0	0	0
+uniform	18	PASS	100	32	24	0	0	0	43	1	0	0	0
+uniform	19	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	20	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	21	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	22	PASS	100	32	31	1	0	0	36	0	0	0	0
+uniform	23	PASS	100	32	37	1	0	0	30	0	0	0	0
+uniform	24	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	25	PASS	100	32	37	0	0	0	31	0	0	0	0
+uniform	26	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	27	PASS	100	32	43	1	0	0	22	2	0	0	0
+uniform	28	PASS	100	32	36	1	0	0	31	0	0	0	0
+uniform	29	PASS	100	32	30	1	0	0	37	0	0	0	0
+uniform	30	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	31	PASS	100	32	30	2	0	0	36	0	0	0	0
+uniform	32	PASS	100	33	38	0	0	0	28	0	1	0	0
+uniform	33	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	34	PASS	100	32	27	2	0	0	39	0	0	0	0
+uniform	35	PASS	100	32	40	0	0	0	28	0	0	0	0
+uniform	36	PASS	100	32	25	0	0	0	42	1	0	0	0
+uniform	37	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	38	PASS	100	32	35	0	0	0	32	1	0	0	0
+uniform	39	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	40	PASS	100	32	35	1	0	0	32	0	0	0	0
+uniform	41	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	42	PASS	100	32	35	0	0	0	32	0	0	0	1
+uniform	43	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	44	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	45	PASS	100	32	29	0	0	0	38	1	0	0	0
+uniform	46	PASS	100	32	38	0	0	0	30	0	0	0	0
+uniform	47	PASS	100	32	38	0	0	0	30	0	0	0	0
+uniform	48	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	49	PASS	100	32	46	0	0	0	22	0	0	0	0
+uniform	50	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	51	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	52	PASS	100	32	28	1	0	0	39	0	0	0	0
+uniform	53	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	54	PASS	100	32	37	0	0	0	31	0	0	0	0
+uniform	55	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	56	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	57	PASS	100	32	35	1	0	0	32	0	0	0	0
+uniform	58	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	59	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	60	PASS	100	32	36	1	0	0	30	0	0	0	1
+uniform	61	PASS	100	32	39	0	0	0	29	0	0	0	0
+uniform	62	PASS	100	32	19	0	0	0	49	0	0	0	0
+uniform	63	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	64	PASS	100	32	20	0	0	0	48	0	0	0	0
+uniform	65	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	66	PASS	100	32	18	1	0	0	48	1	0	0	0
+uniform	67	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	68	PASS	100	32	24	0	0	0	44	0	0	0	0
+uniform	69	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	70	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	71	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	72	PASS	100	32	40	0	0	0	28	0	0	0	0
+uniform	73	PASS	100	33	36	0	0	0	30	0	1	0	0
+uniform	74	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	75	PASS	100	32	36	1	0	0	31	0	0	0	0
+uniform	76	PASS	100	32	32	0	0	0	35	0	0	0	1
+uniform	77	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	78	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	79	PASS	100	32	25	1	0	0	42	0	0	0	0
+uniform	80	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	81	PASS	100	32	29	2	0	0	37	0	0	0	0
+uniform	82	PASS	100	32	27	0	0	0	41	0	0	0	0
+uniform	83	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	84	PASS	100	32	33	1	0	0	34	0	0	0	0
+uniform	85	PASS	100	32	33	1	0	0	34	0	0	0	0
+uniform	86	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	87	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	88	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	89	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	90	PASS	100	32	29	3	0	0	36	0	0	0	0
+uniform	91	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	92	PASS	100	32	31	0	0	0	36	1	0	0	0
+uniform	93	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	94	PASS	100	32	29	1	0	0	37	1	0	0	0
+uniform	95	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	96	PASS	100	32	43	0	0	0	25	0	0	0	0
+uniform	97	PASS	100	33	29	0	0	0	36	1	1	0	0
+uniform	98	PASS	100	32	37	0	0	0	31	0	0	0	0
+uniform	99	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	100	PASS	100	32	29	1	0	0	38	0	0	0	0
+uniform	101	PASS	100	32	44	0	0	0	24	0	0	0	0
+uniform	102	PASS	100	33	33	0	0	0	33	0	1	0	0
+uniform	103	PASS	100	32	21	1	0	0	46	0	0	0	0
+uniform	104	PASS	100	32	25	1	0	0	42	0	0	0	0
+uniform	105	PASS	100	32	22	0	0	0	46	0	0	0	0
+uniform	106	PASS	100	32	25	2	0	0	40	1	0	0	0
+uniform	107	PASS	100	32	32	1	0	0	34	0	0	0	1
+uniform	108	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	109	PASS	100	32	38	0	0	0	30	0	0	0	0
+uniform	110	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	111	PASS	100	32	26	1	0	0	41	0	0	0	0
+uniform	112	PASS	100	32	24	1	0	0	43	0	0	0	0
+uniform	113	PASS	100	32	27	0	0	0	41	0	0	0	0
+uniform	114	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	115	PASS	100	32	36	2	0	0	29	1	0	0	0
+uniform	116	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	117	PASS	100	31	26	1	0	0	41	0	0	1	0
+uniform	118	PASS	100	32	43	0	0	0	24	1	0	0	0
+uniform	119	PASS	100	32	25	0	0	0	43	0	0	0	0
+uniform	120	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	121	PASS	100	32	35	1	0	0	32	0	0	0	0
+uniform	122	PASS	100	32	38	1	0	0	29	0	0	0	0
+uniform	123	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	124	PASS	100	32	32	0	0	0	35	1	0	0	0
+uniform	125	PASS	100	32	35	1	0	0	32	0	0	0	0
+uniform	126	PASS	100	32	36	0	0	0	31	1	0	0	0
+uniform	127	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	128	PASS	100	33	36	0	0	0	30	0	1	0	0
+uniform	129	PASS	100	33	31	0	0	0	35	0	1	0	0
+uniform	130	PASS	100	32	39	0	0	0	29	0	0	0	0
+uniform	131	PASS	100	32	39	0	0	0	29	0	0	0	0
+uniform	132	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	133	PASS	100	32	24	0	0	0	44	0	0	0	0
+uniform	134	PASS	100	32	31	1	0	0	36	0	0	0	0
+uniform	135	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	136	PASS	100	32	43	0	0	0	25	0	0	0	0
+uniform	137	PASS	100	31	33	0	0	0	35	0	0	1	0
+uniform	138	PASS	100	32	31	0	0	0	36	1	0	0	0
+uniform	139	PASS	100	32	28	1	0	0	39	0	0	0	0
+uniform	140	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	141	PASS	100	33	27	0	0	0	39	0	1	0	0
+uniform	142	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	143	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	144	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	145	PASS	100	33	32	1	0	0	33	0	1	0	0
+uniform	146	PASS	100	32	33	1	0	0	34	0	0	0	0
+uniform	147	PASS	100	32	30	2	0	0	36	0	0	0	0
+uniform	148	PASS	100	33	33	0	0	0	33	0	1	0	0
+uniform	149	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	150	PASS	100	32	44	0	0	0	24	0	0	0	0
+uniform	151	PASS	100	32	31	0	0	0	37	0	0	0	0
+uniform	152	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	153	PASS	100	33	30	0	0	0	36	0	1	0	0
+uniform	154	PASS	100	32	26	0	0	0	42	0	0	0	0
+uniform	155	PASS	100	32	32	0	0	0	35	0	0	0	1
+uniform	156	PASS	100	32	37	0	0	0	31	0	0	0	0
+uniform	157	PASS	100	32	33	0	0	0	34	1	0	0	0
+uniform	158	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	159	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	160	PASS	100	32	25	0	0	0	43	0	0	0	0
+uniform	161	PASS	100	32	29	0	0	0	39	0	0	0	0
+uniform	162	PASS	100	32	33	0	0	0	35	0	0	0	0
+uniform	163	PASS	100	32	31	1	0	0	36	0	0	0	0
+uniform	164	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	165	PASS	100	32	26	0	0	0	42	0	0	0	0
+uniform	166	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	167	PASS	100	32	30	0	0	0	37	1	0	0	0
+uniform	168	PASS	100	33	24	0	0	0	42	0	1	0	0
+uniform	169	PASS	100	32	36	1	0	0	31	0	0	0	0
+uniform	170	PASS	100	32	19	1	0	0	48	0	0	0	0
+uniform	171	PASS	100	32	36	1	0	0	31	0	0	0	0
+uniform	172	PASS	100	32	22	0	0	0	46	0	0	0	0
+uniform	173	PASS	100	32	32	2	0	0	34	0	0	0	0
+uniform	174	PASS	100	32	30	0	0	0	37	0	0	0	1
+uniform	175	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	176	PASS	100	32	28	0	0	0	40	0	0	0	0
+uniform	177	PASS	100	32	40	0	0	0	27	1	0	0	0
+uniform	178	PASS	100	32	28	1	0	0	38	1	0	0	0
+uniform	179	PASS	100	32	33	1	0	0	34	0	0	0	0
+uniform	180	PASS	100	32	36	1	0	0	31	0	0	0	0
+uniform	181	PASS	100	32	30	0	0	0	38	0	0	0	0
+uniform	182	PASS	100	32	30	1	0	0	37	0	0	0	0
+uniform	183	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	184	PASS	100	32	40	1	0	0	27	0	0	0	0
+uniform	185	PASS	100	32	38	0	0	0	30	0	0	0	0
+uniform	186	PASS	100	32	33	1	0	0	34	0	0	0	0
+uniform	187	PASS	100	32	32	1	0	0	35	0	0	0	0
+uniform	188	PASS	100	32	36	0	0	0	31	1	0	0	0
+uniform	189	PASS	100	32	32	0	0	0	35	1	0	0	0
+uniform	190	PASS	100	32	33	2	0	0	33	0	0	0	0
+uniform	191	PASS	100	32	35	0	0	0	33	0	0	0	0
+uniform	192	PASS	100	32	31	1	0	0	35	0	0	0	1
+uniform	193	PASS	100	32	34	0	0	0	34	0	0	0	0
+uniform	194	PASS	100	32	32	0	0	0	36	0	0	0	0
+uniform	195	PASS	100	32	28	1	0	0	39	0	0	0	0
+uniform	196	PASS	100	32	30	0	0	0	36	2	0	0	0
+uniform	197	PASS	100	32	36	0	0	0	32	0	0	0	0
+uniform	198	PASS	100	32	41	1	0	0	26	0	0	0	0
+uniform	199	PASS	100	32	34	0	0	0	34	0	0	0	0
+boundaries	0	PASS	100	33	0	27	0	0	31	3	5	1	0
+boundaries	1	PASS	100	31	0	30	0	5	23	8	1	2	0
+boundaries	2	PASS	100	25	0	31	1	0	20	8	5	10	0
+boundaries	3	PASS	100	28	0	35	1	4	16	3	3	10	0
+boundaries	4	PASS	100	16	0	51	0	2	19	2	1	9	0
+boundaries	5	PASS	100	34	0	27	0	6	26	5	1	1	0
+boundaries	6	PASS	100	21	0	33	1	1	30	5	1	8	0
+boundaries	7	PASS	100	33	7	25	0	0	27	1	2	1	4
+boundaries	8	PASS	100	25	0	36	0	1	19	9	2	8	0
+boundaries	9	PASS	100	29	0	35	0	3	22	6	4	1	0
+boundaries	10	PASS	100	15	0	47	0	2	15	9	0	12	0
+boundaries	11	PASS	100	20	0	41	1	2	22	2	3	9	0
+boundaries	12	PASS	100	20	0	29	0	0	37	5	3	6	0
+boundaries	13	PASS	100	31	2	39	0	1	19	4	1	3	0
+boundaries	14	PASS	100	20	0	43	0	2	16	7	2	10	0
+boundaries	15	PASS	100	32	0	33	0	3	24	6	1	1	0
+boundaries	16	PASS	100	22	0	38	0	7	20	2	4	7	0
+boundaries	17	PASS	100	34	9	22	0	0	30	3	2	0	0
+boundaries	18	PASS	100	25	0	40	0	3	16	7	2	7	0
+boundaries	19	PASS	100	33	0	30	0	1	23	5	7	1	0
+boundaries	20	PASS	100	21	0	45	0	1	17	5	3	8	0
+boundaries	21	PASS	100	23	0	37	0	1	20	7	5	7	0
+boundaries	22	PASS	100	30	3	29	0	1	27	5	1	4	0
+boundaries	23	PASS	100	29	0	35	0	3	20	5	2	6	0
+boundaries	24	PASS	100	32	4	35	0	1	20	4	1	2	1
+boundaries	25	PASS	100	26	0	40	0	2	24	3	2	3	0
+boundaries	26	PASS	100	25	0	41	1	5	14	4	1	9	0
+boundaries	27	PASS	100	21	0	39	2	4	19	7	4	4	0
+boundaries	28	PASS	100	23	0	40	0	2	21	6	2	6	0
+boundaries	29	PASS	100	29	0	37	2	1	18	2	4	7	0
+boundaries	30	PASS	100	29	0	34	1	0	24	2	4	6	0
+boundaries	31	PASS	100	17	0	47	1	0	23	5	2	5	0
+boundaries	32	PASS	100	24	0	35	2	3	18	6	0	12	0
+boundaries	33	PASS	100	34	0	31	0	4	24	4	2	1	0
+boundaries	34	PASS	100	27	0	39	0	0	19	6	4	5	0
+boundaries	35	PASS	100	24	0	34	3	3	21	1	6	8	0
+boundaries	36	PASS	100	16	0	44	4	0	14	6	3	13	0
+boundaries	37	PASS	100	24	0	40	0	2	14	8	1	11	0
+boundaries	38	PASS	100	29	1	35	0	0	23	6	1	4	1
+boundaries	39	PASS	100	31	4	24	0	2	27	5	1	4	2
+boundaries	40	PASS	100	20	0	47	0	0	17	5	3	8	0
+boundaries	41	PASS	100	32	0	23	0	4	34	1	3	3	0
+boundaries	42	PASS	100	25	0	37	0	1	23	7	1	6	0
+boundaries	43	PASS	100	28	1	39	1	1	16	4	2	8	0
+boundaries	44	PASS	100	29	3	29	0	1	25	8	0	4	1
+boundaries	45	PASS	100	17	0	48	0	2	16	5	1	11	0
+boundaries	46	PASS	100	24	0	40	1	5	21	5	0	4	0
+boundaries	47	PASS	100	20	0	38	1	1	27	6	0	7	0
+boundaries	48	PASS	100	27	0	35	0	2	25	4	3	4	0
+boundaries	49	PASS	100	25	0	38	0	1	22	3	4	7	0
+boundaries	50	PASS	100	32	0	33	0	0	27	4	3	1	0
+boundaries	51	PASS	100	14	0	50	1	1	10	7	2	15	0
+boundaries	52	PASS	100	21	0	42	0	3	18	2	2	12	0
+boundaries	53	PASS	100	29	1	31	0	2	23	6	1	6	1
+boundaries	54	PASS	100	32	0	30	1	3	24	5	2	3	0
+boundaries	55	PASS	100	25	0	31	0	3	27	3	2	9	0
+boundaries	56	PASS	100	18	0	42	1	1	20	5	3	10	0
+boundaries	57	PASS	100	27	0	44	0	1	20	2	3	3	0
+boundaries	58	PASS	100	37	2	26	1	3	23	0	4	3	1
+boundaries	59	PASS	100	33	0	27	0	0	31	4	3	2	0
+boundaries	60	PASS	100	31	3	39	0	2	17	3	1	4	0
+boundaries	61	PASS	100	35	1	34	0	2	23	2	2	1	0
+boundaries	62	PASS	100	30	0	32	0	0	29	3	2	4	0
+boundaries	63	PASS	100	28	0	35	0	1	26	5	3	2	0
+boundaries	64	PASS	100	28	0	33	0	3	26	2	2	6	0
+boundaries	65	PASS	100	30	0	33	0	2	23	4	2	6	0
+boundaries	66	PASS	100	24	0	40	0	1	23	8	1	3	0
+boundaries	67	PASS	100	20	0	41	1	1	18	7	3	9	0
+boundaries	68	PASS	100	17	0	44	0	0	23	6	0	10	0
+boundaries	69	PASS	100	18	0	47	0	5	16	1	2	11	0
+boundaries	70	PASS	100	30	10	28	0	1	23	3	0	2	3
+boundaries	71	PASS	100	25	0	38	2	2	23	3	1	6	0
+boundaries	72	PASS	100	21	0	34	0	3	26	5	3	8	0
+boundaries	73	PASS	100	21	0	43	2	4	16	6	1	7	0
+boundaries	74	PASS	100	25	0	31	0	3	26	7	3	5	0
+boundaries	75	PASS	100	25	0	36	0	4	21	4	3	7	0
+boundaries	76	PASS	100	12	0	46	2	0	12	7	3	18	0
+boundaries	77	PASS	100	24	0	31	1	2	30	5	4	3	0
+boundaries	78	PASS	100	29	0	25	0	5	34	5	1	1	0
+boundaries	79	PASS	100	27	0	25	0	3	32	7	5	1	0
+boundaries	80	PASS	100	19	0	35	0	2	22	13	2	7	0
+boundaries	81	PASS	100	21	0	31	1	2	22	10	2	11	0
+boundaries	82	PASS	100	17	0	51	0	1	15	7	1	8	0
+boundaries	83	PASS	100	28	3	32	1	2	20	6	0	7	1
+boundaries	84	PASS	100	21	0	39	0	2	21	6	1	10	0
+boundaries	85	PASS	100	25	0	32	0	2	26	7	3	5	0
+boundaries	86	PASS	100	23	0	35	0	4	24	6	2	6	0
+boundaries	87	PASS	100	25	0	30	0	2	23	5	3	12	0
+boundaries	88	PASS	100	29	0	29	0	2	35	2	0	3	0
+boundaries	89	PASS	100	14	0	37	1	3	21	3	5	16	0
+boundaries	90	PASS	100	27	0	28	0	4	32	6	2	1	0
+boundaries	91	PASS	100	34	2	22	1	2	34	3	0	1	1
+boundaries	92	PASS	100	27	0	35	0	3	22	5	3	5	0
+boundaries	93	PASS	100	31	5	31	1	1	17	5	3	6	0
+boundaries	94	PASS	100	14	0	44	0	2	27	4	1	8	0
+boundaries	95	PASS	100	14	0	49	1	0	18	7	1	10	0
+boundaries	96	PASS	100	20	0	49	1	2	10	7	3	8	0
+boundaries	97	PASS	100	36	0	29	0	1	27	2	4	1	0
+boundaries	98	PASS	100	18	0	40	1	3	23	4	1	10	0
+boundaries	99	PASS	100	21	0	42	0	1	23	6	0	7	0
+boundaries	100	PASS	100	22	0	45	0	1	18	4	5	5	0
+boundaries	101	PASS	100	24	1	39	0	1	14	8	1	10	2
+boundaries	102	PASS	100	24	0	45	0	1	19	6	2	3	0
+boundaries	103	PASS	100	23	0	36	0	3	28	7	1	2	0
+boundaries	104	PASS	100	30	7	25	0	0	27	5	2	4	0
+boundaries	105	PASS	100	23	0	39	0	3	24	3	1	7	0
+boundaries	106	PASS	100	24	0	38	0	0	25	3	2	8	0
+boundaries	107	PASS	100	33	0	35	0	2	23	4	2	1	0
+boundaries	108	PASS	100	20	0	47	0	2	9	5	2	15	0
+boundaries	109	PASS	100	26	0	37	1	1	17	7	1	9	1
+boundaries	110	PASS	100	26	0	34	0	5	22	4	3	6	0
+boundaries	111	PASS	100	28	1	37	0	0	22	3	2	6	1
+boundaries	112	PASS	100	25	0	31	2	2	25	4	1	10	0
+boundaries	113	PASS	100	27	0	30	0	0	33	5	0	5	0
+boundaries	114	PASS	100	27	0	36	0	4	20	6	1	6	0
+boundaries	115	PASS	100	21	0	37	0	0	22	8	5	7	0
+boundaries	116	PASS	100	28	0	38	1	1	15	7	1	7	2
+boundaries	117	PASS	100	27	0	35	0	1	28	2	2	5	0
+boundaries	118	PASS	100	17	0	48	1	2	14	7	0	11	0
+boundaries	119	PASS	100	27	0	36	0	3	26	4	0	4	0
+boundaries	120	PASS	100	35	2	29	2	2	21	2	3	4	0
+boundaries	121	PASS	100	34	1	25	0	0	35	3	2	0	0
+boundaries	122	PASS	100	23	0	33	0	0	30	8	3	3	0
+boundaries	123	PASS	100	36	10	19	0	1	25	4	3	0	2
+boundaries	124	PASS	100	28	0	35	0	0	25	3	5	4	0
+boundaries	125	PASS	100	31	1	34	1	1	21	6	1	4	0
+boundaries	126	PASS	100	28	0	40	0	2	25	3	0	2	0
+boundaries	127	PASS	100	30	0	30	0	0	36	1	1	2	0
+boundaries	128	PASS	100	22	0	43	2	2	17	4	1	9	0
+boundaries	129	PASS	100	33	0	22	0	1	38	1	3	2	0
+boundaries	130	PASS	100	19	0	46	0	2	9	10	1	13	0
+boundaries	131	PASS	100	19	0	48	0	1	19	3	2	8	0
+boundaries	132	PASS	100	16	0	52	0	1	21	4	1	5	0
+boundaries	133	PASS	100	24	0	43	1	1	17	3	3	8	0
+boundaries	134	PASS	100	22	0	36	0	3	23	10	1	5	0
+boundaries	135	PASS	100	33	0	30	1	1	21	4	5	5	0
+boundaries	136	PASS	100	26	0	38	0	6	14	5	4	7	0
+boundaries	137	PASS	100	27	0	36	0	2	19	6	4	6	0
+boundaries	138	PASS	100	13	0	51	3	2	10	6	1	14	0
+boundaries	139	PASS	100	39	0	26	0	5	16	6	5	3	0
+boundaries	140	PASS	100	22	0	41	1	1	19	2	1	13	0
+boundaries	141	PASS	100	19	0	40	0	0	22	8	3	8	0
+boundaries	142	PASS	100	33	0	34	0	2	21	3	5	2	0
+boundaries	143	PASS	100	23	0	45	1	3	16	2	1	9	0
+boundaries	144	PASS	100	30	0	32	0	3	23	3	2	7	0
+boundaries	145	PASS	100	30	0	41	0	4	22	2	0	1	0
+boundaries	146	PASS	100	15	0	45	0	2	16	10	1	11	0
+boundaries	147	PASS	100	17	0	37	3	2	22	4	3	12	0
+boundaries	148	PASS	100	31	7	32	0	0	23	2	1	2	2
+boundaries	149	PASS	100	26	0	44	0	2	15	5	0	8	0
+boundaries	150	PASS	100	29	0	31	0	1	29	8	1	1	0
+boundaries	151	PASS	100	17	0	44	0	2	22	6	0	9	0
+boundaries	152	PASS	100	34	0	28	0	2	26	4	3	3	0
+boundaries	153	PASS	100	23	0	39	0	1	24	3	4	6	0
+boundaries	154	PASS	100	31	2	35	1	0	20	4	2	4	1
+boundaries	155	PASS	100	19	0	42	1	2	24	5	2	5	0
+boundaries	156	PASS	100	27	0	38	1	2	18	3	2	9	0
+boundaries	157	PASS	100	23	0	44	0	2	19	4	3	5	0
+boundaries	158	PASS	100	8	0	50	1	2	21	7	2	9	0
+boundaries	159	PASS	100	26	0	28	1	3	28	4	2	8	0
+boundaries	160	PASS	100	17	0	45	1	2	23	5	2	5	0
+boundaries	161	PASS	100	14	0	53	1	2	11	5	0	14	0
+boundaries	162	PASS	100	19	0	45	0	2	13	9	0	12	0
+boundaries	163	PASS	100	30	0	24	0	1	28	6	4	6	1
+boundaries	164	PASS	100	36	8	21	0	2	27	1	3	1	1
+boundaries	165	PASS	100	35	0	18	0	3	36	5	2	1	0
+boundaries	166	PASS	100	32	5	29	0	0	29	3	1	1	0
+boundaries	167	PASS	100	26	4	35	0	1	20	5	0	6	3
+boundaries	168	PASS	100	25	0	40	0	1	28	2	0	4	0
+boundaries	169	PASS	100	14	0	45	0	3	20	4	3	11	0
+boundaries	170	PASS	100	29	1	25	0	3	23	7	3	8	1
+boundaries	171	PASS	100	31	8	29	0	0	20	4	2	3	3
+boundaries	172	PASS	100	20	0	42	1	4	16	2	5	10	0
+boundaries	173	PASS	100	24	0	40	0	2	24	2	2	6	0
+boundaries	174	PASS	100	18	0	47	0	0	14	9	1	11	0
+boundaries	175	PASS	100	23	0	39	0	0	26	7	1	4	0
+boundaries	176	PASS	100	32	4	27	0	1	27	6	1	2	0
+boundaries	177	PASS	100	27	0	40	0	1	23	5	2	2	0
+boundaries	178	PASS	100	19	0	40	1	1	20	8	4	7	0
+boundaries	179	PASS	100	31	5	27	0	0	31	2	1	2	1
+boundaries	180	PASS	100	31	1	32	1	0	25	5	2	3	0
+boundaries	181	PASS	100	34	3	23	0	2	35	3	0	0	0
+boundaries	182	PASS	100	27	0	36	0	2	25	3	2	5	0
+boundaries	183	PASS	100	6	0	59	0	0	14	6	2	13	0
+boundaries	184	PASS	100	33	2	32	0	1	25	5	1	1	0
+boundaries	185	PASS	100	30	0	34	1	1	25	3	2	4	0
+boundaries	186	PASS	100	22	0	47	0	1	18	2	1	9	0
+boundaries	187	PASS	100	30	6	29	0	2	21	3	2	6	1
+boundaries	188	PASS	100	33	3	32	0	2	20	5	2	3	0
+boundaries	189	PASS	100	32	3	30	0	1	23	3	3	4	1
+boundaries	190	PASS	100	24	0	38	1	1	19	7	1	9	0
+boundaries	191	PASS	100	20	0	46	2	3	18	4	1	6	0
+boundaries	192	PASS	100	24	3	44	1	1	10	7	0	10	0
+boundaries	193	PASS	100	23	2	38	0	2	19	4	1	11	0
+boundaries	194	PASS	100	32	1	33	0	1	27	4	0	1	1
+boundaries	195	PASS	100	27	0	38	0	2	23	2	2	6	0
+boundaries	196	PASS	100	32	0	33	0	2	29	1	1	2	0
+boundaries	197	PASS	100	28	0	28	0	1	31	3	6	3	0
+boundaries	198	PASS	100	30	0	36	1	2	22	3	1	5	0
+boundaries	199	PASS	100	19	0	46	0	4	19	5	1	6	0
+</script>
+<script type="text/plain" id="tsv-bnd" data-src="data/12/per-seed-boundaries-bug.tsv">
+0	PASS	100
+1	FAIL	24
+2	PASS	100
+3	FAIL	47
+4	FAIL	16
+5	FAIL	28
+6	FAIL	26
+7	PASS	100
+8	FAIL	57
+9	FAIL	11
+10	FAIL	71
+11	FAIL	44
+12	PASS	100
+13	FAIL	38
+14	FAIL	64
+15	FAIL	12
+16	FAIL	23
+17	PASS	100
+18	FAIL	82
+19	FAIL	90
+20	FAIL	98
+21	PASS	100
+22	FAIL	91
+23	FAIL	17
+24	FAIL	32
+25	FAIL	61
+26	FAIL	10
+27	FAIL	16
+28	FAIL	19
+29	FAIL	65
+30	PASS	100
+31	PASS	100
+32	FAIL	20
+33	FAIL	17
+34	PASS	100
+35	FAIL	21
+36	PASS	100
+37	FAIL	15
+38	PASS	100
+39	FAIL	52
+40	PASS	100
+41	FAIL	16
+42	FAIL	83
+43	FAIL	13
+44	FAIL	20
+45	FAIL	58
+46	FAIL	22
+47	FAIL	15
+48	FAIL	24
+49	FAIL	72
+50	PASS	100
+51	FAIL	48
+52	FAIL	23
+53	FAIL	30
+54	FAIL	83
+55	FAIL	35
+56	FAIL	97
+57	FAIL	30
+58	FAIL	56
+59	PASS	100
+60	FAIL	51
+61	FAIL	47
+62	PASS	100
+63	FAIL	52
+64	FAIL	86
+65	FAIL	24
+66	FAIL	21
+67	FAIL	22
+68	PASS	100
+69	FAIL	16
+70	FAIL	97
+71	FAIL	33
+72	FAIL	71
+73	FAIL	17
+74	FAIL	9
+75	FAIL	81
+76	PASS	100
+77	FAIL	92
+78	FAIL	33
+79	FAIL	43
+80	FAIL	79
+81	FAIL	69
+82	FAIL	76
+83	FAIL	78
+84	FAIL	84
+85	FAIL	20
+86	FAIL	21
+87	FAIL	9
+88	FAIL	75
+89	FAIL	79
+90	FAIL	72
+91	FAIL	69
+92	FAIL	23
+93	FAIL	92
+94	FAIL	31
+95	PASS	100
+96	FAIL	15
+97	FAIL	55
+98	FAIL	26
+99	FAIL	80
+100	FAIL	14
+101	FAIL	32
+102	FAIL	14
+103	FAIL	74
+104	PASS	100
+105	FAIL	53
+106	PASS	100
+107	FAIL	47
+108	FAIL	33
+109	FAIL	34
+110	FAIL	61
+111	PASS	100
+112	FAIL	24
+113	PASS	100
+114	FAIL	31
+115	PASS	100
+116	FAIL	96
+117	FAIL	41
+118	FAIL	48
+119	FAIL	25
+120	FAIL	75
+121	PASS	100
+122	PASS	100
+123	FAIL	65
+124	PASS	100
+125	FAIL	52
+126	FAIL	44
+127	PASS	100
+128	FAIL	36
+129	PASS	100
+130	FAIL	54
+131	FAIL	62
+132	FAIL	91
+133	FAIL	50
+134	FAIL	61
+135	FAIL	91
+136	FAIL	35
+137	FAIL	26
+138	FAIL	9
+139	FAIL	55
+140	FAIL	72
+141	PASS	100
+142	FAIL	31
+143	FAIL	13
+144	FAIL	29
+145	FAIL	55
+146	FAIL	56
+147	FAIL	87
+148	PASS	100
+149	FAIL	46
+150	FAIL	60
+151	FAIL	24
+152	FAIL	85
+153	FAIL	83
+154	PASS	100
+155	FAIL	90
+156	FAIL	69
+157	FAIL	20
+158	FAIL	47
+159	FAIL	19
+160	FAIL	7
+161	FAIL	9
+162	FAIL	15
+163	FAIL	14
+164	FAIL	83
+165	FAIL	49
+166	PASS	100
+167	FAIL	98
+168	FAIL	54
+169	FAIL	29
+170	FAIL	32
+171	PASS	100
+172	FAIL	36
+173	FAIL	51
+174	PASS	100
+175	PASS	100
+176	FAIL	51
+177	FAIL	89
+178	FAIL	56
+179	PASS	100
+180	PASS	100
+181	FAIL	36
+182	FAIL	64
+183	PASS	100
+184	FAIL	95
+185	FAIL	26
+186	FAIL	80
+187	FAIL	23
+188	FAIL	75
+189	FAIL	45
+190	FAIL	62
+191	FAIL	34
+192	FAIL	91
+193	FAIL	83
+194	FAIL	67
+195	FAIL	12
+196	FAIL	25
+197	FAIL	45
+198	FAIL	41
+199	FAIL	22
+200	FAIL	55
+201	FAIL	63
+202	PASS	100
+203	FAIL	24
+204	FAIL	57
+205	FAIL	6
+206	FAIL	8
+207	FAIL	50
+208	FAIL	93
+209	FAIL	88
+210	PASS	100
+211	FAIL	71
+212	FAIL	67
+213	FAIL	45
+214	FAIL	6
+215	FAIL	53
+216	FAIL	47
+217	FAIL	52
+218	FAIL	25
+219	FAIL	71
+220	FAIL	33
+221	FAIL	42
+222	FAIL	94
+223	FAIL	5
+224	FAIL	67
+225	FAIL	12
+226	FAIL	45
+227	FAIL	28
+228	FAIL	15
+229	FAIL	82
+230	FAIL	78
+231	FAIL	38
+232	PASS	100
+233	FAIL	58
+234	FAIL	62
+235	PASS	100
+236	FAIL	46
+237	FAIL	96
+238	PASS	100
+239	PASS	100
+240	PASS	100
+241	PASS	100
+242	PASS	100
+243	FAIL	64
+244	FAIL	93
+245	FAIL	83
+246	PASS	100
+247	FAIL	27
+248	FAIL	47
+249	FAIL	65
+250	FAIL	82
+251	PASS	100
+252	FAIL	28
+253	FAIL	89
+254	FAIL	30
+255	PASS	100
+256	FAIL	38
+257	FAIL	37
+258	FAIL	26
+259	FAIL	59
+260	FAIL	22
+261	FAIL	75
+262	FAIL	15
+263	FAIL	26
+264	FAIL	38
+265	FAIL	56
+266	PASS	100
+267	FAIL	69
+268	PASS	100
+269	FAIL	22
+270	PASS	100
+271	FAIL	38
+272	FAIL	57
+273	PASS	100
+274	FAIL	12
+275	PASS	100
+276	FAIL	71
+277	FAIL	53
+278	FAIL	56
+279	FAIL	51
+280	FAIL	28
+281	FAIL	27
+282	FAIL	56
+283	PASS	100
+284	FAIL	17
+285	FAIL	81
+286	FAIL	30
+287	FAIL	22
+288	FAIL	36
+289	FAIL	25
+290	FAIL	30
+291	FAIL	7
+292	FAIL	28
+293	PASS	100
+294	FAIL	23
+295	FAIL	55
+296	FAIL	24
+297	FAIL	32
+298	FAIL	22
+299	FAIL	38
+300	FAIL	34
+301	FAIL	72
+302	FAIL	27
+303	FAIL	31
+304	FAIL	49
+305	FAIL	80
+306	FAIL	75
+307	FAIL	12
+308	PASS	100
+309	PASS	100
+310	FAIL	40
+311	FAIL	35
+312	FAIL	42
+313	PASS	100
+314	FAIL	43
+315	FAIL	28
+316	FAIL	39
+317	FAIL	14
+318	FAIL	59
+319	FAIL	94
+320	FAIL	38
+321	PASS	100
+322	FAIL	44
+323	FAIL	44
+324	FAIL	32
+325	FAIL	19
+326	FAIL	97
+327	PASS	100
+328	FAIL	47
+329	FAIL	39
+330	FAIL	79
+331	FAIL	21
+332	PASS	100
+333	FAIL	65
+334	FAIL	47
+335	PASS	100
+336	FAIL	18
+337	FAIL	51
+338	FAIL	71
+339	FAIL	59
+340	FAIL	43
+341	FAIL	92
+342	FAIL	31
+343	FAIL	11
+344	FAIL	67
+345	FAIL	34
+346	PASS	100
+347	FAIL	95
+348	PASS	100
+349	FAIL	78
+350	PASS	100
+351	FAIL	50
+352	PASS	100
+353	FAIL	61
+354	FAIL	72
+355	FAIL	67
+356	FAIL	49
+357	FAIL	93
+358	FAIL	23
+359	PASS	100
+360	FAIL	28
+361	FAIL	69
+362	FAIL	24
+363	FAIL	52
+364	PASS	100
+365	FAIL	72
+366	FAIL	51
+367	FAIL	37
+368	FAIL	30
+369	FAIL	44
+370	FAIL	32
+371	FAIL	98
+372	FAIL	37
+373	PASS	100
+374	PASS	100
+375	FAIL	44
+376	FAIL	43
+377	PASS	100
+378	FAIL	21
+379	FAIL	22
+380	FAIL	39
+381	PASS	100
+382	PASS	100
+383	FAIL	44
+384	FAIL	54
+385	FAIL	38
+386	FAIL	24
+387	FAIL	39
+388	FAIL	33
+389	FAIL	9
+390	FAIL	61
+391	FAIL	84
+392	FAIL	51
+393	FAIL	71
+394	FAIL	16
+395	FAIL	52
+396	PASS	100
+397	FAIL	17
+398	FAIL	32
+399	FAIL	47
+400	FAIL	12
+401	FAIL	24
+402	FAIL	78
+403	FAIL	14
+404	FAIL	75
+405	PASS	100
+406	FAIL	93
+407	FAIL	62
+408	FAIL	23
+409	PASS	100
+410	PASS	100
+411	PASS	100
+412	FAIL	38
+413	FAIL	45
+414	FAIL	79
+415	FAIL	39
+416	FAIL	58
+417	FAIL	93
+418	FAIL	29
+419	FAIL	8
+420	FAIL	55
+421	FAIL	66
+422	PASS	100
+423	FAIL	17
+424	PASS	100
+425	FAIL	42
+426	FAIL	25
+427	FAIL	82
+428	FAIL	23
+429	PASS	100
+430	FAIL	52
+431	FAIL	56
+432	FAIL	39
+433	FAIL	98
+434	FAIL	56
+435	PASS	100
+436	FAIL	96
+437	FAIL	57
+438	FAIL	27
+439	PASS	100
+440	FAIL	10
+441	FAIL	14
+442	FAIL	62
+443	FAIL	32
+444	FAIL	57
+445	PASS	100
+446	FAIL	39
+447	FAIL	41
+448	FAIL	25
+449	FAIL	18
+450	FAIL	98
+451	PASS	100
+452	FAIL	33
+453	FAIL	12
+454	FAIL	99
+455	FAIL	48
+456	FAIL	10
+457	FAIL	12
+458	FAIL	13
+459	FAIL	49
+460	FAIL	47
+461	FAIL	62
+462	FAIL	95
+463	FAIL	57
+464	FAIL	70
+465	FAIL	73
+466	FAIL	37
+467	FAIL	49
+468	FAIL	65
+469	FAIL	42
+470	FAIL	52
+471	FAIL	21
+472	FAIL	78
+473	FAIL	74
+474	FAIL	59
+475	FAIL	68
+476	PASS	100
+477	FAIL	99
+478	FAIL	69
+479	PASS	100
+480	FAIL	97
+481	FAIL	14
+482	FAIL	40
+483	FAIL	42
+484	FAIL	7
+485	FAIL	80
+486	FAIL	53
+487	PASS	100
+488	FAIL	72
+489	FAIL	41
+490	FAIL	78
+491	FAIL	48
+492	FAIL	59
+493	PASS	100
+494	FAIL	29
+495	FAIL	70
+496	FAIL	27
+497	FAIL	5
+498	FAIL	26
+499	FAIL	40
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex12" });
+const { el, s, C } = DST;
+const fmt = (n) => n.toLocaleString("en-US");
+
+// ---------------------------------------------------------------- parsing real output
+function realSecs(t) { const m = t.match(/^real\s+(\d+)m([\d.]+)s/m); return m ? +m[1] * 60 + +m[2] : null; }
+function parseHits(str) { const o = {}; for (const kv of str.trim().split(/\s+/)) { const [k, v] = kv.split("="); o[k] = +v; } return o; }
+function parseCoverage(t) {
+  const out = { rows: [], real: realSecs(t) };
+  for (const ln of t.split("\n")) {
+    let m;
+    if ((m = ln.match(/^coverage: (\d+) seeds, generator=(\w+)/))) { out.seeds = +m[1]; out.gen = m[2]; }
+    else if ((m = ln.match(/^PASS: (\d+) seeds \((\d+) ops\)/))) { out.pass = true; out.ops = +m[2]; }
+    else if ((m = ln.match(/^  (\w+)\s+(\d+)\s+(\d+)(\s+<-- NEVER HIT)?$/))) out.rows.push({ mark: m[1], seeds: +m[2], hits: +m[3] });
+    else if ((m = ln.match(/^--require-all: (.*)$/))) out.require = m[1];
+  }
+  return out;
+}
+function parseSlots(str) {
+  const [a, b = ""] = str.split("|");
+  const tok = (x) => x.trim().split(/\s+/).filter(Boolean).map((t) => { const m = t.match(/^\[(\d+),(\d+)\)$/); return m ? { lo: +m[1], hi: +m[2] } : null; });
+  return { live: tok(a), stale: tok(b) };
+}
+function parseExhaust(t) {
+  const out = { lens: [], steps: [], real: realSecs(t) };
+  for (const ln of t.split("\n")) {
+    let m;
+    if ((m = ln.match(/^exhaust: domain=0\.\.(\d+) capacity=(\d+) ranges of 1\.\.(\d+) blocks, max_len=(\d+)/))) Object.assign(out, { domain: +m[1], cap: +m[2], lenMax: +m[3], maxLen: +m[4] });
+    else if ((m = ln.match(/^len=(\d+) sequences=(\d+) ops=(\d+) hits: (.*)$/))) out.lens.push({ len: +m[1], seqs: +m[2], ops: +m[3], hits: parseHits(m[4]) });
+    else if ((m = ln.match(/^FAIL at len=(\d+): sequence (\d+) of this length, (\d+) sequences and (\d+) ops in total/))) out.fail = { len: +m[1], seq: +m[2], seqs: +m[3], ops: +m[4], line: ln };
+    else if ((m = ln.match(/^PASS: every sequence up to len=(\d+): (\d+) sequences, (\d+) ops/))) out.pass = { len: +m[1], seqs: +m[2], ops: +m[3] };
+    else if ((m = ln.match(/^\s+- start\s+(.*)$/))) out.steps.push({ step: 0, op: null, mark: "-", ...parseSlots(m[1]), line: ln });
+    else if ((m = ln.match(/^\s+(\d+) (insert|remove) \[(\d+),(\d+)\)\s+(\w+)\s+(.*)$/))) out.steps.push({ step: +m[1], op: { kind: m[2], lo: +m[3], hi: +m[4] }, mark: m[5], ...parseSlots(m[6]), line: ln });
+    else if ((m = ln.match(/^INVARIANT VIOLATED: (.*)$/))) out.violated = m[1];
+    else if ((m = ln.match(/^exhaust trace=([0-9a-f]+) (PASS|FAIL)/))) out.trace = m[1];
+    else if ((m = ln.match(/^replay trace=([0-9a-f]+)/))) out.replayTrace = m[1];
+  }
+  return out;
+}
+function parseRun(t) {
+  const out = { steps: [], text: t };
+  for (const ln of t.split("\n")) {
+    let m;
+    if ((m = ln.match(/^seed=(\d+) generator=(\w+) domain=(\d+) capacity=(\d+) ops=(\d+)/))) Object.assign(out, { seed: +m[1], gen: m[2], domain: +m[3], cap: +m[4], opsMax: +m[5] });
+    else if ((m = ln.match(/^\s+(\d+) (insert|remove) \[(\d+),(\d+)\)\s+(\w+|-)\s+(\d+)$/))) out.steps.push({ step: +m[1], kind: m[2], lo: +m[3], hi: +m[4], mark: m[5], len: +m[6], line: ln });
+    else if ((m = ln.match(/^INVARIANT VIOLATED: (.*)$/))) out.violated = m[1];
+    else if ((m = ln.match(/^\s+slots: (.*)$/))) out.slots = parseSlots(m[1]);
+    else if ((m = ln.match(/^marks: (.*)$/))) out.marks = parseHits(m[1]);
+    else if ((m = ln.match(/^seed=(\d+) ops=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/))) out.final = { seed: +m[1], ops: +m[2], trace: m[3], result: m[4], line: ln };
+  }
+  return out;
+}
+
+const covUni = parseCoverage(DST.text("log-cov-uni"));
+const covBnd = parseCoverage(DST.text("log-cov-bnd"));
+const ex4 = parseExhaust(DST.text("log-ex4"));
+const ex5 = parseExhaust(DST.text("log-ex5"));
+const run1 = parseRun(DST.text("log-run1"));
+const run1b = parseRun(DST.text("log-run1-again"));
+const run3 = parseRun(DST.text("log-run3"));
+const run3b = parseRun(DST.text("log-run3-bug"));
+const sweepBndText = DST.text("log-sweep-bnd");
+const MARKS = Object.keys(run3.marks); // mark order as printed by the program
+const FG = "insert_fill_gap";
+const MARK_COL = {
+  insert_disjoint: C.accent, insert_full: "#4a5a80", insert_extend: C.accent2, insert_coalesce: C.violet, insert_fill_gap: C.bug,
+  remove_miss: "#56607a", remove_trim: C.warn, remove_delete: C.pink, remove_split: C.yellow, remove_split_full: "#8a6d2a",
+};
+const fgUni = covUni.rows.find((r) => r.mark === FG), fgBnd = covBnd.rows.find((r) => r.mark === FG);
+const bndSeedFail = sweepBndText.match(/FAIL at seed=(\d+) after (\d+) seeds \((\d+) ops\)/);
+
+// ---------------------------------------------------------------- hero stats
+(function () {
+  const st = [
+    [fmt(covUni.seeds), `random seeds (${fmt(covUni.ops)} ops) with the bug: all PASS`],
+    [fmt(fgUni.hits), `times the uniform sweep hit <code>${FG}</code>`],
+    [`len ${ex4.fail.len}`, `exhaust finds it after ${fmt(ex4.fail.seqs)} sequences, ${Math.round(ex4.real * 1000)} ms`],
+    [`${fmt(fgBnd.seeds)}`, `of ${fmt(covBnd.seeds)} seeds reach the mark with the boundary-biased generator`],
+  ];
+  const box = document.getElementById("stats");
+  st.forEach(([n, l]) => box.append(el("div", { class: "stat" }, el("div", { class: "num" }, n), el("div", { class: "lbl", html: l }))));
+})();
+
+// ---------------------------------------------------------------- 01 architecture
+(function () {
+  const W = 1100, H = 330, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const box = (x, y, w, h, title, sub, col, dash) => {
+    svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: "#111a2b", stroke: col, "stroke-width": 1.5, "stroke-dasharray": dash || null }));
+    svg.append(s("text", { x: x + 12, y: y + 22, fill: col, "font-size": 14, "font-weight": 700, "font-family": "monospace" }, title));
+    (sub || []).forEach((t, i) => svg.append(s("text", { x: x + 12, y: y + 42 + i * 16, fill: C.muted, "font-size": 11.5, "font-family": "monospace" }, t)));
+  };
+  const arrow = (x1, y1, x2, y2, col, label) => {
+    svg.append(s("line", { x1, y1, x2, y2, stroke: col, "stroke-width": 1.6, class: "flow" }));
+    svg.append(s("polygon", { points: `${x2},${y2} ${x2 - 8},${y2 - 4} ${x2 - 8},${y2 + 4}`, fill: col, transform: `rotate(${Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI} ${x2} ${y2})` }));
+    if (label) svg.append(s("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 6, "text-anchor": "middle", fill: C.dim, "font-size": 10.5, "font-family": "monospace" }, label));
+  };
+  box(10, 20, 250, 120, "random_op(seed)", [`domain = ${fmt(run3.domain)} blocks`, `extents 1..256 blocks, 65% insert`, `${run3.opsMax} ops per seed`, `--gen-boundaries: snap to edges`], C.warn, "6 4");
+  box(10, 180, 250, 120, "gen_op(Gen)  exhaustive", [`domain = 0..${ex4.domain} blocks`, `ranges of 1..${ex4.lenMax} blocks`, `every sequence, shortest first`, `36 ops per step`], C.violet, "6 4");
+  box(330, 20, 400, 290, "IntervalSet   (code under test)", [`capacity ${run3.cap} slots (exhaust: ${ex4.cap})`, "insert(lo, hi)  remove(lo, hi)", "open_slots / close_slots / search"], C.accent);
+  // marks inside
+  MARKS.forEach((m, i) => {
+    const x = 345 + (i % 2) * 190, y = 100 + Math.floor(i / 2) * 40;
+    const g = s("g", {});
+    g.append(s("rect", { x, y, width: 178, height: 30, rx: 6, fill: "#0b111d", stroke: MARK_COL[m], "stroke-width": m === FG ? 2.5 : 1 }));
+    g.append(s("text", { x: x + 10, y: y + 19, fill: m === FG ? C.bug : C.text, "font-size": 11.5, "font-family": "monospace" }, "◆ " + m));
+    const u = covUni.rows.find((r) => r.mark === m);
+    DST.tip(g, `marks.hit(.${m})\nuniform sweep, ${fmt(covUni.seeds)} seeds: ${fmt(u.hits)} hits in ${fmt(u.seeds)} seeds`);
+    svg.append(g);
+  });
+  box(800, 20, 290, 130, "Harness.check  (every op)", ["1 shape: sorted, gap between,", "  non-empty, len <= capacity", "2 contents == Model at edges", "3 NoSpace only when full"], C.ok);
+  box(800, 180, 290, 120, "Model  (independent)", ["bitset over the block domain", "no slots, no search", "tiny domain: every block compared"], C.accent2, "6 4");
+  arrow(262, 80, 328, 80, C.warn, "ops");
+  arrow(262, 240, 328, 240, C.violet, "ops");
+  arrow(732, 85, 798, 85, C.ok, "state");
+  arrow(945, 178, 945, 152, C.accent2);
+  svg.append(s("text", { x: 345, y: 302, fill: C.dim, "font-size": 11, "font-family": "monospace" }, "◆ = named coverage mark (hover for the real hit count)"));
+  document.getElementById("arch").append(svg);
+})();
+
+// ---------------------------------------------------------------- 02 heatmap
+const TSV = DST.text("tsv-marks").trim().split("\n").map((l) => l.split("\t")).map((f) => ({ gen: f[0], seed: +f[1], result: f[2], ops: +f[3], hits: f.slice(4).map(Number) }));
+function heatmap(gen) {
+  const box = document.getElementById("heat"); box.innerHTML = "";
+  const rows = TSV.filter((r) => r.gen === gen);
+  const W = 1100, labelW = 150, rightW = 90, top = 20, rowH = 24, n = rows.length, cw = (W - labelW - rightW) / n, H = top + MARKS.length * rowH + 30;
+  const max = Math.max(1, ...rows.flatMap((r) => r.hits));
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  MARKS.forEach((m, mi) => {
+    const y = top + mi * rowH, seedsHit = rows.filter((r) => r.hits[mi] > 0).length;
+    svg.append(s("text", { x: labelW - 8, y: y + 16, "text-anchor": "end", fill: m === FG ? C.bug : C.muted, "font-size": 11.5, "font-weight": m === FG ? 700 : 400, "font-family": "monospace" }, m));
+    rows.forEach((r, si) => {
+      const v = r.hits[mi], a = v ? 0.25 + 0.75 * Math.log(v + 1) / Math.log(max + 1) : 0;
+      svg.append(s("rect", { x: labelW + si * cw, y: y + 2, width: Math.max(cw - 0.6, 0.8), height: rowH - 4, fill: v ? MARK_COL[m] : "#141c2b", opacity: v ? a : 1 }));
+    });
+    svg.append(s("text", { x: W - rightW + 10, y: y + 16, fill: seedsHit ? C.text : C.bug, "font-size": 11.5, "font-weight": seedsHit ? 400 : 700, "font-family": "monospace" }, `${seedsHit}/${n}`));
+    if (m === FG && !seedsHit) {
+      svg.append(s("rect", { x: labelW - 2, y: y, width: n * cw + 4, height: rowH, rx: 4, fill: "none", stroke: C.bug, "stroke-width": 2, class: "pulse" }));
+      svg.append(s("text", { x: labelW + n * cw / 2, y: y + 16, "text-anchor": "middle", fill: C.bug, "font-size": 12, "font-weight": 700, "font-family": "monospace" }, "0 hits in every seed — the buggy line never ran"));
+    }
+  });
+  svg.append(s("text", { x: W - rightW + 10, y: 13, fill: C.dim, "font-size": 10.5, "font-family": "monospace" }, "seeds hit"));
+  [0, 50, 100, 150, n - 1].forEach((sd) => svg.append(s("text", { x: labelW + sd * cw + cw / 2, y: H - 10, "text-anchor": "middle", fill: C.dim, "font-size": 10.5, "font-family": "monospace" }, "seed " + sd)));
+  DST.tip(svg, (ev) => {
+    const b = svg.getBoundingClientRect(), x = (ev.clientX - b.left) * W / b.width, y = (ev.clientY - b.top) * H / b.height;
+    const si = Math.floor((x - labelW) / cw), mi = Math.floor((y - top) / rowH);
+    if (si < 0 || si >= n || mi < 0 || mi >= MARKS.length) return "hover a cell";
+    const r = rows[si];
+    return `seed ${r.seed} (${gen}): ${MARKS[mi]} hit ${r.hits[mi]}×\nrun ${r.seed}${gen === "boundaries" ? " --gen-boundaries" : ""}: ${r.result}, ${r.ops} ops`;
+  });
+  box.append(svg);
+  box.append(el("div", { class: "cap" }, `${gen === "uniform" ? "Uniform" : "Boundary-biased"} generator, correct code, seeds 0–${n - 1}, ${rows[0].ops} ops each. Max hits in one cell: ${max}.`));
+}
+(function () {
+  const tabs = document.getElementById("hm-tabs");
+  const btns = ["uniform", "boundaries"].map((g) => el("button", { onclick: () => { btns.forEach((b) => b.classList.toggle("on", b.dataset.g === g)); heatmap(g); }, "data-g": g }, g === "uniform" ? "uniform generator (default)" : "--gen-boundaries"));
+  tabs.append(...btns);
+  btns[0].classList.add("on"); heatmap("uniform");
+})();
+function covTable(id, cov) {
+  const t = el("table", { class: "data cov" }, el("tr", {}, el("th", {}, "mark"), el("th", { class: "num" }, "seeds hit"), el("th", { class: "num" }, "hits")));
+  for (const r of cov.rows) t.append(el("tr", { class: r.hits === 0 ? "zero" : null }, el("td", {}, el("code", {}, r.mark)), el("td", { class: "num" }, fmt(r.seeds)), el("td", { class: "num" }, r.hits ? fmt(r.hits) : "0  ← NEVER HIT")));
+  const box = document.getElementById(id);
+  box.append(t, el("div", { class: "src" }, `${cov.pass ? "PASS" : "FAIL"}: ${fmt(cov.seeds)} seeds, ${fmt(cov.ops)} ops, ${cov.real.toFixed(1)} s · --require-all: ${cov.require}`));
+}
+covTable("cov-uni", covUni); covTable("cov-bnd", covBnd);
+document.getElementById("cov-callout").innerHTML = `<strong>The warning sign is a zero, not a percentage.</strong>
+  The uniform sweep ran ${fmt(covUni.ops)} ops with <code>--bug-fill-gap</code> and passed. ${covUni.rows.filter((r) => r.hits).length} of ${covUni.rows.length} marks were hit; a coverage tool would
+  report ${Math.round(100 * covUni.rows.filter((r) => r.hits).length / covUni.rows.length)}% of branches. But <code>${FG}</code>, the one branch with the bug, ran 0 times, and <code>--require-all</code> says so:
+  <code>${covUni.require}</code>. Even <code>run 3</code> and <code>run 3 --bug-fill-gap</code> print the same trace,
+  <code>${run3.final.trace}</code> and <code>${run3b.final.trace}</code>: the buggy line simply never executes.`;
+
+// marks × settings heatmap
+(function () {
+  const cols = [
+    { name: `uniform ×${fmt(covUni.seeds)}`, ops: covUni.ops, hits: Object.fromEntries(covUni.rows.map((r) => [r.mark, r.hits])) },
+    { name: `boundaries ×${fmt(covBnd.seeds)}`, ops: covBnd.ops, hits: Object.fromEntries(covBnd.rows.map((r) => [r.mark, r.hits])) },
+    ...ex5.lens.map((l) => ({ name: `exhaust len=${l.len}`, ops: l.ops, hits: l.hits })),
+  ];
+  const W = 1100, labelW = 150, top = 30, rowH = 26, cw = (W - labelW - 10) / cols.length, H = top + MARKS.length * rowH + 6;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  cols.forEach((c, ci) => svg.append(s("text", { x: labelW + ci * cw + cw / 2, y: 18, "text-anchor": "middle", fill: ci < 2 ? C.warn : C.violet, "font-size": 11.5, "font-family": "monospace" }, c.name)));
+  MARKS.forEach((m, mi) => {
+    const y = top + mi * rowH;
+    svg.append(s("text", { x: labelW - 8, y: y + 17, "text-anchor": "end", fill: m === FG ? C.bug : C.muted, "font-size": 11.5, "font-family": "monospace" }, m));
+    cols.forEach((c, ci) => {
+      const v = c.hits[m] || 0, share = v / c.ops, a = v ? Math.min(1, 0.2 + 0.8 * (Math.log10(share) + 6) / 6) : 0;
+      const g = s("g", {});
+      g.append(s("rect", { x: labelW + ci * cw + 2, y: y + 2, width: cw - 4, height: rowH - 4, rx: 4, fill: v ? MARK_COL[m] : "#2a1320", opacity: v ? a : 1 }));
+      const label = v === 0 ? "0" : share >= 0.001 ? (share * 100).toFixed(1) + "%" : share.toExponential(0).replace("e", "e");
+      g.append(s("text", { x: labelW + ci * cw + cw / 2, y: y + 17, "text-anchor": "middle", fill: v ? "#0b0f17" : C.bug, "font-size": 11, "font-weight": 700, "font-family": "monospace" }, label));
+      DST.tip(g, `${c.name}\n${m}: ${fmt(v)} hits / ${fmt(c.ops)} ops`);
+      svg.append(g);
+    });
+  });
+  document.getElementById("heat2").append(svg, el("div", { class: "cap" }, "Cell = hits ÷ ops for that setting. Red zero = never reached. Exhaustive lengths 1–2 cannot reach fill-gap (it needs two ranges first); uniform random never does."));
+})();
+
+// ---------------------------------------------------------------- 03 replay of the minimal sequence
+(function () {
+  const steps = ex4.steps, D = ex4.domain, cap = ex4.cap;
+  const W = 640, H = 300, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  document.getElementById("rp-svg").append(svg);
+  // model: bitset recomputed from the captured ops
+  const models = []; let bits = Array(D).fill(false);
+  for (const st of steps) { if (st.op) for (let x = st.op.lo; x < st.op.hi; x++) bits[x] = st.op.kind === "insert"; models.push(bits.slice()); }
+  // same binary search as IntervalSet.search / contains
+  const contains = (live, x) => { let lo = 0, hi = live.length; while (lo < hi) { const mid = lo + ((hi - lo) >> 1); if (live[mid].hi < x + 1) lo = mid + 1; else hi = mid; } return lo < live.length && live[lo].lo <= x; };
+  const list = document.getElementById("rp-steps");
+  const rows = steps.map((st) => { const r = el("div", { class: "tl-row" }, el("span", { class: "t" }, st.op ? st.step : "-"), el("span", {}, st.op ? `${st.op.kind} [${st.op.lo},${st.op.hi})  ${st.mark}` : "start (empty set)")); list.append(r); return r; });
+  const codeBox = document.getElementById("rp-code");
+  const PATHS = {
+    "-": "", insert_disjoint: "touching == 0 → open_slots(i, 1)", insert_fill_gap: "touching == 2, exact hole → fast path → swap-remove (BUG)",
+    insert_extend: "touching == 1 → grow it", insert_coalesce: "touching ≥ 2 → merge + close_slots",
+  };
+  function draw(k) {
+    const st = steps[k];
+    svg.innerHTML = "";
+    rows.forEach((r, i) => { r.classList.toggle("cur", i === k); r.classList.toggle("fut", i > k); });
+    // slots
+    const sw = 150, sx = 30, sy = 30;
+    svg.append(s("text", { x: sx, y: 18, fill: C.dim, "font-size": 11, "font-family": "monospace" }, `slots[0..${cap}]   len = ${st.live.length}`));
+    const all = [...st.live.map((v) => ({ v, live: true })), ...st.stale.map((v) => ({ v, live: false }))];
+    for (let i = 0; i < cap; i++) {
+      const c = all[i] || { v: null, live: false }, x = sx + i * (sw + 30);
+      const bad = c.live && i > 0 && st.live[i - 1].hi >= c.v.lo;
+      svg.append(s("rect", { x, y: sy, width: sw, height: 54, rx: 8, fill: c.live ? "#16233b" : "#0d131f", stroke: bad ? C.bug : c.live ? C.accent : C.line, "stroke-width": bad ? 2.5 : 1.2, "stroke-dasharray": c.live ? null : "4 3" }));
+      svg.append(s("text", { x: x + sw / 2, y: sy + 26, "text-anchor": "middle", fill: c.live ? C.text : C.dim, "font-size": 16, "font-family": "monospace", "font-weight": 700 }, c.v ? `[${c.v.lo},${c.v.hi})` : "·"));
+      svg.append(s("text", { x: x + sw / 2, y: sy + 44, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, `slot ${i} · ${c.live ? "live" : "stale"}`));
+      if (i > 0 && i < st.live.length) {
+        const ok = st.live[i - 1].hi < st.live[i].lo;
+        svg.append(s("text", { x: x - 15, y: sy + 32, "text-anchor": "middle", fill: ok ? C.ok : C.bug, "font-size": 18, "font-weight": 700 }, ok ? "<" : "✕"));
+      }
+    }
+    // number line
+    const nx = 120, ny = 130, bw = (W - nx - 20) / D;
+    const rowsNL = [
+      ["set (slots)", (x) => st.live.some((v) => v.lo <= x && x < v.hi), C.accent],
+      ["model", (x) => models[k][x], C.accent2],
+      ["contains(x)", (x) => contains(st.live, x), C.warn],
+    ];
+    for (let x = 0; x < D; x++) svg.append(s("text", { x: nx + x * bw + bw / 2, y: ny - 6, "text-anchor": "middle", fill: C.dim, "font-size": 11, "font-family": "monospace" }, x));
+    let mismatch = [];
+    rowsNL.forEach(([name, f, col], ri) => {
+      const y = ny + ri * 44;
+      svg.append(s("text", { x: nx - 10, y: y + 22, "text-anchor": "end", fill: C.muted, "font-size": 12, "font-family": "monospace" }, name));
+      for (let x = 0; x < D; x++) {
+        const on = f(x), wrong = ri === 2 && on !== models[k][x];
+        if (wrong) mismatch.push(x);
+        svg.append(s("rect", { x: nx + x * bw + 2, y, width: bw - 4, height: 34, rx: 5, fill: on ? col : "#141c2b", opacity: on ? 0.85 : 1, stroke: wrong ? C.bug : "none", "stroke-width": 2.5 }));
+        if (wrong) svg.append(s("text", { x: nx + x * bw + bw / 2, y: y + 23, "text-anchor": "middle", fill: C.bug, "font-size": 16, "font-weight": 700 }, "✕"));
+      }
+    });
+    if (st.op) svg.append(s("rect", { x: nx + st.op.lo * bw, y: ny - 20, width: (st.op.hi - st.op.lo) * bw, height: 4, rx: 2, fill: C.yellow }));
+    codeBox.innerHTML = "";
+    codeBox.append(el("div", { class: "rp-now", style: { marginTop: 0, color: st.mark === FG ? C.bug : C.text } }, st.mark === "-" ? "—" : `marks.hit(.${st.mark})\n`, el("div", { class: "src" }, PATHS[st.mark] || "")));
+    const isLast = k === steps.length - 1;
+    document.getElementById("rp-now").innerHTML = st.op
+      ? `<b>step ${st.step}:</b> ${st.op.kind} [${st.op.lo},${st.op.hi}) → <code>${st.mark}</code>. ` +
+        (isLast && ex4.violated ? `<span style="color:var(--bug)">INVARIANT VIOLATED: ${DST.esc(ex4.violated)}</span>` + (mismatch.length ? ` — and binary search now answers wrong for block${mismatch.length > 1 ? "s" : ""} ${mismatch.join(", ")}.` : "") : "Shape and contents check: OK.")
+      : `<b>start:</b> ${cap} empty slots. Gen is about to emit sequence ${fmt(ex4.fail.seq)} of length ${ex4.fail.len}.`;
+  }
+  new DST.Player("#rp-player", { count: steps.length, onStep: draw, speed: 1, label: (i) => (i ? `op ${i}/${steps.length - 1}` : "start") });
+})();
+
+// ---------------------------------------------------------------- 04 Gen tree + odometer (JS re-implementation)
+(function () {
+  class Gen {
+    constructor() { this.started = false; this.v = []; this.p = 0; this.pMax = 0; this.bumped = -1; }
+    done() {
+      if (!this.started) { this.started = true; return false; }
+      for (let i = this.pMax; i > 0;) { i--; if (this.v[i].value < this.v[i].bound) { this.v[i].value++; this.pMax = i + 1; this.p = 0; this.bumped = i; return false; } }
+      return true;
+    }
+    int(bound) { if (this.p === this.pMax) { this.v[this.p] = { value: 0, bound: 0 }; this.pMax++; } this.p++; this.v[this.p - 1].bound = bound; return this.v[this.p - 1].value; }
+  }
+  const D = ex4.domain, LM = ex4.lenMax;
+  const genOp = (g) => { const kind = g.int(1) === 0 ? "insert" : "remove"; const lo = g.int(D - 1); const hi = lo + 1 + g.int(Math.min(lo + LM, D) - (lo + 1)); return { kind, lo, hi }; };
+  const frames = []; const g = new Gen();
+  while (!g.done()) { const op = genOp(g); frames.push({ op, v: g.v.slice(0, g.pMax).map((x) => ({ ...x })), bumped: g.bumped }); }
+  const len1 = ex4.lens.find((l) => l.len === 1);
+  document.getElementById("gen-36").textContent = `len=1 sequences=${len1.seqs}; this JS Gen produced ${frames.length}${frames.length === len1.seqs ? " ✓" : " ✗"}`;
+  // tree layout: root → kind (2) → lo (7 each) → hi leaves
+  const W = 1100, H = 300, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const leafX = (i) => 110 + i * (W - 130) / (frames.length - 1);
+  const yR = 24, yK = 80, yL = 160, yH = 250;
+  const kindX = {}, loX = {};
+  frames.forEach((f, i) => { const kk = f.op.kind, lk = kk + f.op.lo; (kindX[kk] = kindX[kk] || []).push(leafX(i)); (loX[lk] = loX[lk] || []).push(leafX(i)); });
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const edges = [], nodes = {};
+  const rootX = W / 2;
+  const node = (key, x, y, label, col) => { const c = s("circle", { cx: x, cy: y, r: 9, fill: "#141c2b", stroke: col, "stroke-width": 1.5 }); const t = s("text", { x, y: y + 4, "text-anchor": "middle", fill: C.text, "font-size": 9.5, "font-family": "monospace" }, label); nodes[key] = { c, t, col }; return [c, t]; };
+  const edge = (key, x1, y1, x2, y2) => { const l = s("line", { x1, y1, x2, y2, stroke: C.line, "stroke-width": 1.2 }); edges.push([key, l]); svg.append(l); };
+  for (const kk of ["insert", "remove"]) {
+    const kx = avg(kindX[kk]); edge(kk, rootX, yR, kx, yK);
+    for (let lo = 0; lo < D; lo++) { const lx = avg(loX[kk + lo]); edge(kk + lo, kx, yK, lx, yL); }
+  }
+  frames.forEach((f, i) => edge("leaf" + i, avg(loX[f.op.kind + f.op.lo]), yL, leafX(i), yH));
+  svg.append(...node("root", rootX, yR, "∅", C.muted));
+  for (const kk of ["insert", "remove"]) {
+    const kx = avg(kindX[kk]); svg.append(...node(kk, kx, yK, kk[0].toUpperCase(), C.accent));
+    svg.append(s("text", { x: kx, y: yK - 16, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, `kind=${kk === "insert" ? 0 : 1} (${kk})`));
+    for (let lo = 0; lo < D; lo++) svg.append(...node(kk + lo, avg(loX[kk + lo]), yL, lo, C.accent2));
+  }
+  frames.forEach((f, i) => svg.append(...node("leaf" + i, leafX(i), yH, f.op.hi, C.violet)));
+  [["bound 1: kind", yK], ["bound 6: lo", yL], ["bound ≤2: hi", yH]].forEach(([t, y]) => svg.append(s("text", { x: 4, y: y - 14, fill: C.dim, "font-size": 10.5, "font-family": "monospace" }, t)));
+  const caption = s("text", { x: W - 10, y: 18, "text-anchor": "end", fill: C.yellow, "font-size": 12, "font-family": "monospace" });
+  svg.append(caption);
+  document.getElementById("gen-tree").append(svg);
+  const odo = document.getElementById("gen-odo");
+  const NAMES = ["kind", "lo", "hi - lo - 1"];
+  function step(k) {
+    const f = frames[k];
+    const path = new Set(["root", f.op.kind, f.op.kind + f.op.lo, "leaf" + k]);
+    for (const [key, l] of edges) { const on = path.has(key); l.setAttribute("stroke", on ? C.yellow : C.line); l.setAttribute("stroke-width", on ? 2.5 : 1.2); }
+    for (const [key, n] of Object.entries(nodes)) {
+      const visited = key.startsWith("leaf") && +key.slice(4) <= k;
+      n.c.setAttribute("fill", path.has(key) ? C.yellow : visited ? n.col : "#141c2b");
+      n.t.setAttribute("fill", path.has(key) || visited ? "#0b0f17" : C.text);
+    }
+    caption.textContent = `leaf ${k + 1}/${frames.length}: ${f.op.kind} [${f.op.lo},${f.op.hi})`;
+    odo.innerHTML = "";
+    odo.append(el("span", { class: "src", style: { marginRight: "8px" } }, "g.v ="));
+    f.v.forEach((x, i) => odo.append(el("div", { class: "cell" + (i === f.bumped ? " bump" : "") }, el("span", {}, NAMES[i]), el("b", {}, x.value), el("span", {}, "bound " + x.bound))));
+    odo.append(el("span", { class: "src", style: { marginLeft: "10px" } }, k === 0 ? "first pass: all zeros" : `done(): bumped ${NAMES[f.bumped]}, ${f.bumped < f.v.length - 1 ? "later choices restart at 0" : "rightmost choice"}`));
+  }
+  new DST.Player("#gen-player", { count: frames.length, onStep: step, speed: 6, label: (i) => `${i + 1}/${frames.length}` });
+})();
+
+// sequences per length
+(function () {
+  const lens = ex5.lens, W = 1100, H = 280, m = { l: 90, r: 20, t: 20, b: 40 };
+  const maxV = Math.max(...lens.map((l) => l.seqs)), Y = (v) => H - m.b - (Math.log10(v) / Math.log10(maxV)) * (H - m.t - m.b);
+  const bw = (W - m.l - m.r) / lens.length;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  for (let p = 0; p <= Math.ceil(Math.log10(maxV)); p += 2) { const y = Y(10 ** p); if (y < m.t - 2) continue; svg.append(s("line", { x1: m.l, x2: W - m.r, y1: y, y2: y, stroke: C.line })); svg.append(s("text", { x: m.l - 6, y: y + 4, "text-anchor": "end", fill: C.dim, "font-size": 11, "font-family": "monospace" }, "1e" + p)); }
+  lens.forEach((l, i) => {
+    const x = m.l + i * bw + 14, w = bw - 28;
+    const r = s("rect", { x, y: Y(l.seqs), width: w, height: H - m.b - Y(l.seqs), rx: 6, fill: C.violet, opacity: 0.75 }); DST.tip(r, `len=${l.len}: ${fmt(l.seqs)} sequences, ${fmt(l.ops)} ops`); svg.append(r);
+    svg.append(s("text", { x: x + w / 2, y: Y(l.seqs) - 6, "text-anchor": "middle", fill: C.text, "font-size": 12, "font-family": "monospace" }, fmt(l.seqs)));
+    svg.append(s("text", { x: x + w / 2, y: H - m.b + 18, "text-anchor": "middle", fill: C.muted, "font-size": 12, "font-family": "monospace" }, `len=${l.len}`));
+    const f = ex4.lens.find((q) => q.len === l.len);
+    if (ex4.fail && l.len === ex4.fail.len && f) {
+      const fr = s("rect", { x: x + w * 0.25, y: Y(f.seqs), width: w * 0.5, height: H - m.b - Y(f.seqs), rx: 4, fill: C.bug });
+      svg.append(fr); DST.tip(fr, ex4.fail.line);
+      svg.append(s("text", { x: x + w / 2, y: Y(f.seqs) + 16, "text-anchor": "middle", fill: "#0b0f17", "font-size": 11, "font-weight": 700, "font-family": "monospace" }, `FAIL @ ${fmt(f.seqs)}`));
+    }
+  });
+  document.getElementById("len-chart").append(svg, el("div", { class: "cap" }, `exhaust ${ex5.pass.len} (correct code): ${fmt(ex5.pass.seqs)} sequences, ${fmt(ex5.pass.ops)} ops, ${ex5.real.toFixed(1)} s. exhaust 4 --bug-fill-gap: ${ex4.fail.line}`));
+  // when does each mark first appear, by length (line chart of hits per mark)
+  const series = MARKS.map((mk) => ({ name: mk, color: MARK_COL[mk], width: mk === FG ? 3.5 : 1.6, dots: true, points: lens.map((l) => [l.len, Math.log10((l.hits[mk] || 0) + 1), `len=${l.len} ${mk}: ${fmt(l.hits[mk] || 0)} hits`]) }));
+  const c = document.getElementById("len-marks");
+  c.append(el("div", { class: "src" }, "Hits per mark by sequence length (exhaust 5, log10(hits+1)). insert_fill_gap first appears at len=3, insert_full and remove_split_full only at len=4."));
+  DST.line(c, series, { height: 300, xlabel: "sequence length", ylabel: "log10(hits + 1)", xmin: 1, xmax: lens.length, yfmt: (t) => t.toFixed(0) });
+})();
+
+// ---------------------------------------------------------------- 05 time to find
+(function () {
+  const sweepBug = DST.text("log-sweep-bug");
+  const rows = [
+    { label: "uniform: not found", value: covUni.ops, color: C.dim, note: `coverage ${fmt(covUni.seeds)} --bug-fill-gap: PASS after ${fmt(covUni.ops)} ops (${covUni.real.toFixed(1)} s). The bug was never reached.`, t: `> ${fmt(covUni.ops)} ops, ${covUni.real.toFixed(1)} s, never` },
+    { label: "exhaust 4 (small scope)", value: ex4.fail.ops, color: C.violet, note: ex4.fail.line, t: `${fmt(ex4.fail.ops)} ops, ${Math.round(ex4.real * 1000)} ms, minimal` },
+    { label: "--gen-boundaries sweep", value: +bndSeedFail[3], color: C.ok, note: sweepBndText.split("\n").slice(0, 2).join("\n"), t: `${fmt(+bndSeedFail[3])} ops (seed ${bndSeedFail[1]}), ${realSecs(sweepBndText).toFixed(3)} s` },
+  ];
+  DST.bar("#ttf", rows, { log: true, labelW: 220, fmt: (v, r) => r.t });
+  document.getElementById("ttf").append(el("div", { class: "cap" }, `Ops on a log scale. Wall times are from the captured \`time\` output. Uniform sweep of 100,000 seeds with the bug: ${sweepBug.split("\n")[0]}.`));
+  // histogram of failing op for boundaries
+  const per = DST.text("tsv-bnd").trim().split("\n").map((l) => l.split("\t")).map((f) => ({ seed: +f[0], result: f[1], ops: +f[2] }));
+  const fails = per.filter((p) => p.result === "FAIL");
+  const B = 10, bins = Array(10).fill(0); fails.forEach((p) => bins[Math.min(9, Math.floor((p.ops - 1) / B))]++);
+  const mean = fails.reduce((a, p) => a + p.ops, 0) / fails.length;
+  document.getElementById("bnd-sum").textContent = `${fails.length} of ${per.length} seeds fail (${(100 * fails.length / per.length).toFixed(1)}%); mean ${mean.toFixed(1)} ops until failure; the rest pass all 100 ops.`;
+  DST.bar("#bnd-hist", [...bins.map((v, i) => ({ label: `fail at op ${i * B + 1}–${i * B + B}`, value: v, color: C.ok })), { label: "passed (100 ops)", value: per.length - fails.length, color: C.dim }], { labelW: 200, rowH: 22 });
+})();
+
+// ---------------------------------------------------------------- 06 run 1 boundaries
+(function () {
+  const r = run1, W = 1100, m = { l: 60, r: 20, t: 10, b: 30 }, rowH = 14, H = m.t + r.steps.length * rowH + m.b;
+  const X = (v) => m.l + v / r.domain * (W - m.l - m.r);
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  for (let q = 0; q <= 4; q++) { const v = q * r.domain / 4; svg.append(s("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, stroke: C.line })); svg.append(s("text", { x: X(v), y: H - 10, "text-anchor": q === 4 ? "end" : q ? "middle" : "start", fill: C.dim, "font-size": 10.5, "font-family": "monospace" }, fmt(v))); }
+  r.steps.forEach((st, i) => {
+    const y = m.t + i * rowH, col = MARK_COL[st.mark] || C.dim, last = i === r.steps.length - 1;
+    svg.append(s("text", { x: m.l - 8, y: y + 10, "text-anchor": "end", fill: last ? C.bug : C.dim, "font-size": 10, "font-family": "monospace" }, st.step));
+    const g = s("g", {});
+    g.append(s("rect", { x: X(st.lo), y: y + 2, width: Math.max(4, X(st.hi) - X(st.lo)), height: rowH - 4, rx: 2, fill: col, opacity: st.kind === "insert" ? 0.95 : 0.55 }));
+    if (last) g.append(s("rect", { x: X(st.lo) - 3, y: y, width: Math.max(4, X(st.hi) - X(st.lo)) + 6, height: rowH, rx: 3, fill: "none", stroke: C.bug, "stroke-width": 2, class: "pulse" }));
+    DST.tip(g, st.line.trim());
+    svg.append(g);
+  });
+  const c = document.getElementById("r1");
+  c.append(svg, el("div", { class: "legend" }, Object.keys(r.marks).filter((k) => r.marks[k]).map((k) => el("span", {}, el("i", { class: "sw", style: { background: MARK_COL[k] } }), `${k} ×${r.marks[k]}`))));
+  const fgStep = r.steps.find((st) => st.mark === FG);
+  document.getElementById("r1-step").textContent = fgStep ? fgStep.step : "?";
+  // final slots ladder (captured)
+  const live = r.slots.live, W2 = 1100, H2 = 80, sv2 = s("svg", { viewBox: `0 0 ${W2} ${H2}` }), sw = (W2 - 20) / live.length;
+  live.forEach((v, i) => {
+    const bad = i > 0 && live[i - 1].hi >= v.lo;
+    sv2.append(s("rect", { x: 10 + i * sw + 2, y: 18, width: sw - 4, height: 40, rx: 6, fill: "#16233b", stroke: bad || (i + 1 < live.length && v.hi >= live[i + 1].lo) ? C.bug : C.accent, "stroke-width": bad ? 2.5 : 1.2 }));
+    sv2.append(s("text", { x: 10 + i * sw + sw / 2, y: 42, "text-anchor": "middle", fill: C.text, "font-size": 9, "font-family": "monospace" }, `[${fmt(v.lo)},${fmt(v.hi)})`));
+    sv2.append(s("text", { x: 10 + i * sw + sw / 2, y: 12, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, "slot " + i));
+    if (bad) sv2.append(s("text", { x: 10 + i * sw, y: 74, "text-anchor": "middle", fill: C.bug, "font-size": 11, "font-weight": 700, "font-family": "monospace" }, "✕ out of order"));
+  });
+  const tail = document.getElementById("r1-tail");
+  tail.append(el("div", { class: "viz" }, el("div", { class: "src" }, `live slots after step ${r.final.ops - 1} (captured "slots:" line), stale slots omitted`), sv2));
+  DST.term(tail, r.text.split("\n").slice(-6).join("\n"));
+})();
+
+// ---------------------------------------------------------------- 07 determinism
+(function () {
+  const a = DST.text("log-run1"), b = DST.text("log-run1-again");
+  const box = document.getElementById("det");
+  const hashOf = (t) => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
+  [[a, run1, "run 1 --gen-boundaries --bug-fill-gap"], [b, run1b, "same command, again"]].forEach(([t, r, title]) => {
+    const card = el("div", { class: "card" }, el("h4", {}, title), el("div", { class: "src" }, `${t.split("\n").length} lines · FNV-1a of the bytes (computed here): ${hashOf(t)}`));
+    DST.term(card, t.split("\n").slice(-3).join("\n"));
+    box.append(card);
+  });
+  const ea = DST.text("log-ex4").split("\n").filter((l) => !/^(real|user|sys)\s/.test(l) && l !== "").join("\n");
+  const eb = DST.text("log-ex4-again").split("\n").filter((l) => l !== "").join("\n");
+  document.getElementById("det-same").innerHTML = `<strong>${a === b ? "Byte-identical" : "DIFFERENT"}</strong>
+    The two captured replays are ${a === b ? "identical, character for character" : "not identical"}: trace <code>${run1.final.trace}</code> and <code>${run1b.final.trace}</code>.
+    The two <code>exhaust 4 --bug-fill-gap</code> captures are ${ea === eb ? "identical too" : "NOT identical"} (apart from the <code>time</code> lines):
+    <code>exhaust trace=${ex4.trace}</code>, <code>replay trace=${ex4.replayTrace}</code>. Gen has no randomness at all; the random sweep has one seeded PRNG per seed.`;
+})();
+
+// sweeps (verbatim)
+(function () {
+  const box = document.getElementById("sweeps");
+  box.append(el("h3", {}, "Captured sweeps"));
+  const g = el("div", { class: "grid g2" }); box.append(g);
+  [["sweep (default 100000, correct code)", "log-sweep"], ["sweep 100000 --bug-fill-gap (uniform)", "log-sweep-bug"], ["sweep 100000 --gen-boundaries --bug-fill-gap", "log-sweep-bnd"], ["exhaust 5 (correct code)", "log-ex5"]].forEach(([t, id]) => {
+    const c = el("div", {}, el("div", { class: "src" }, "$ " + t)); g.append(c);
+    let txt = DST.text(id); if (id === "log-ex5") txt = txt.split("\n").map((l) => l.replace(/ hits: .*/, " hits: …")).join("\n");
+    DST.term(c, txt);
+  });
+})();
+</script>
+</body></html>

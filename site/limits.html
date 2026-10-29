@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>What DST can't catch — DST guide</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .layers { display: grid; gap: 8px; }
+  .layer { border-radius: 10px; padding: 12px 16px; border: 1px solid var(--line); display: grid; grid-template-columns: 220px 1fr 130px; gap: 14px; align-items: center; cursor: pointer; transition: transform .15s, border-color .15s; }
+  .layer:hover, .layer.sel { transform: translateX(6px); border-color: var(--accent); }
+  .layer .nm { font-family: var(--mono); font-weight: 700; }
+  .layer .st { font-family: var(--mono); font-size: .8rem; text-align: right; }
+  .l-code { background: linear-gradient(90deg, rgba(61,220,132,.18), var(--panel)); }
+  .l-sim { background: linear-gradient(90deg, rgba(54,214,195,.14), var(--panel)); }
+  .l-model { background: linear-gradient(90deg, rgba(255,181,71,.14), var(--panel)); }
+  .l-out { background: linear-gradient(90deg, rgba(255,92,122,.14), var(--panel)); }
+  #layerInfo { min-height: 90px; }
+  table.fm td { text-align: center; font-family: var(--mono); }
+  table.fm td:first-child { text-align: left; font-family: var(--sans); }
+  table.fm td.y { color: var(--ok); } table.fm td.n { color: var(--bug); opacity: .75; }
+  .q { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .q button { font: inherit; font-size: .9rem; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+  .q button.on { background: var(--accent); color: #0b0f17; border-color: var(--accent); font-weight: 700; }
+  #answer { min-height: 110px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero fade-in">
+    <div class="tags"><span class="tag medium">Chapter</span><span class="tag">After example 14</span></div>
+    <h1>What DST can't catch</h1>
+    <p class="lede">A simulator finds the bugs that live inside its <strong>fault model</strong>, checked by its
+      <strong>oracles</strong>. Everything outside those two boundaries is invisible to it. This chapter maps the
+      boundaries, shows real evidence of where the model and reality differ, and places DST next to the tools that cover
+      what it misses.</p>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>The fault model is the boundary</h2>
+    <p>DST tests <em>your code</em> against a <em>model</em> of everything underneath it. Click a layer.</p>
+    <div class="layers" id="layers"></div>
+    <div class="card" id="layerInfo" style="margin-top:12px"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>What the simulators in this guide model — and don't</h2>
+    <p>Every example models a few failure modes in detail. The empty cells are bugs these simulators can't find, no matter how many seeds run.
+      Rows marked <span style="color:var(--bug)">not modeled anywhere</span> are real-world failures none of the 14 examples simulate.</p>
+    <div class="viz" style="overflow-x:auto"><table class="data fm" id="fm"></table></div>
+    <div class="callout warn"><strong>The model needs maintenance too.</strong>When production sees a failure the simulator never produced
+      (a disk that returns success and drops the write, a clock that jumps backwards), the fix has two parts: the code fix and a new fault
+      in the simulator, so the whole class is searched from then on.</div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Reality check: real timers are messier than the model</h2>
+    <p>The capture for <a href="02-simulated-time.html">example 02</a> ran a real <code>sleep(5 ms)</code> 300 times on this orb and recorded the
+      actual elapsed time with a nanosecond monotonic clock. A simulator says "the timer fires at tick N". Reality says this:</p>
+    <div class="grid g4" id="sleepStats"></div>
+    <div class="viz"><div id="sleepHist"></div><div class="cap" id="sleepCap"></div></div>
+    <p>A simulator can draw delays from a distribution like this, but only if someone measured it and put it in. Timing-sensitive
+      behavior — throughput, tail latency, timeouts tuned too tight for a real network — is a question for benchmarks and production
+      telemetry, not for DST.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>The simulator and the oracle can be wrong</h2>
+    <p>A DST harness is code, and it has bugs of its own. Three real cases from building this guide:</p>
+    <div class="grid g3">
+      <div class="card"><h4>🧭 A wrong oracle</h4><p>Example 07's first draft defined "correct" backup reads as <em>the backup has caught up to what
+        this client has seen</em>. That's session consistency, not linearizability: another client can still read stale data. The checker would have
+        blessed a real bug. It became the planted bug instead.</p><p class="src"><a href="07-linearizability-checker.html">example 07</a></p></div>
+      <div class="card"><h4>🚨 False alarms</h4><p>Example 09 with the fault atlas turned off injects faults on <em>every</em> copy of a block. Correct
+        code then "fails" (no good copy left; <code>Unrepairable</code>). Those failures aren't bugs — the scenario is unrecoverable by design. The
+        simulator has to only produce faults the system is supposed to survive.</p><p class="src"><a href="09-storage-fault-atlas.html">example 09</a>, Exercise 1</p></div>
+      <div class="card"><h4>🎲 Hidden nondeterminism</h4><p>Example 06 hashed a struct with uninitialized padding bytes into its trace, so two identical
+        runs printed different trace hashes. The program was deterministic; the determinism <em>check</em> wasn't.</p><p class="src"><a href="06-swarm-testing-and-shrinking.html">example 06</a></p></div>
+    </div>
+    <div class="callout info"><strong>Defense: test the tester.</strong>Every example in this guide ships a planted bug and checks that the sweep finds it.
+      If a refactor of the simulator or the checker makes a planted bug stop failing, the harness got weaker. Examples 05, 08 and 10 also verified their
+      liveness checks by breaking the code on purpose and confirming the check fired.</div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Seeds are not regression tests</h2>
+    <p>A seed means "this sequence of PRNG draws". Change the code so it draws one more random number and seed 3 is a different world.
+      Durable regressions are pinned as hand-written scenarios — TigerBeetle keeps them in <code>src/vsr/replica_test.zig</code>.
+      <a href="14-rare-bugs-buggify.html">Example 14</a> demonstrates this for real, and <a href="debugging.html">the debugging chapter</a> shows the workflow.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>DST among the other tools</h2>
+    <div class="viz" style="overflow-x:auto"><table class="data" id="tools"></table></div>
+    <h3>Which tool answers your question?</h3>
+    <div class="q" id="qs"></div>
+    <div class="card" id="answer"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>The short version</h2>
+    <div class="grid g2">
+      <div class="callout ok"><strong>DST is the best tool for</strong>logic bugs in how your code reacts to faults and interleavings: consensus, recovery,
+        retries, exactly-once delivery, caches, schedulers. It searches millions of scenarios and makes every failure replayable.</div>
+      <div class="callout bug"><strong>DST is blind to</strong>faults outside its model, bugs below the interfaces it replaces (kernel, file system, firmware,
+        drivers, libraries that do their own IO), performance, configuration and operator mistakes, and anything its oracles don't check.</div>
+    </div>
+  </section>
+</main>
+
+<script type="text/plain" id="sleep" data-src="data/02/sleep-test.tsv">
+ttl_ns 5000000
+7485718730254 7485726065747
+7485726075838 7485738289670
+7485738298920 7485743978276
+7485743989760 7485749090250
+7485749094938 7485754205406
+7485754208906 7485760511077
+7485760519761 7485765771925
+7485765783822 7485771552902
+7485771562254 7485776963552
+7485776970415 7485782729138
+7485782745829 7485788187487
+7485788193375 7485793343781
+7485793354989 7485799674393
+7485799684737 7485804841411
+7485804850808 7485810203657
+7485810211870 7485815971019
+7485815979012 7485821667247
+7485821677475 7485827665917
+7485827676437 7485832874783
+7485832889381 7485838783090
+7485838790186 7485844894003
+7485844903634 7485850277099
+7485850285103 7485856068237
+7485856076273 7485861234096
+7485861243344 7485867359026
+7485867367968 7485872626179
+7485872635904 7485877745404
+7485877752634 7485882881195
+7485882889053 7485888726388
+7485888734124 7485894051915
+7485894059854 7485899195186
+7485899202584 7485904309840
+7485904319466 7485909585955
+7485909594579 7485914728018
+7485914733664 7485921044786
+7485921052214 7485926629100
+7485926636507 7485931842470
+7485931851621 7485937138971
+7485937149314 7485942302509
+7485942310317 7485948098870
+7485948107660 7485953207480
+7485953209491 7485958815422
+7485958833358 7485964805598
+7485964814538 7485970162995
+7485970171130 7485975287455
+7485975297526 7485980423493
+7485980432660 7485985807058
+7485985819884 7485990973354
+7485990982572 7485996991882
+7485997023505 7486002430979
+7486002441420 7486008271268
+7486008280043 7486013524980
+7486013532880 7486019511969
+7486019522590 7486025138786
+7486025148431 7486030684881
+7486030698655 7486036713588
+7486036723953 7486042054155
+7486042063281 7486047597487
+7486047608350 7486052795879
+7486052806946 7486058059598
+7486058066851 7486064369004
+7486064377482 7486069540240
+7486069549493 7486075841728
+7486075849898 7486081117002
+7486081124784 7486086595524
+7486086601858 7486092189598
+7486092197668 7486097349243
+7486097358196 7486103040313
+7486103049360 7486108232178
+7486108239884 7486113610355
+7486113618315 7486119197846
+7486119204973 7486124317979
+7486124330441 7486129534482
+7486129543003 7486134757149
+7486134778081 7486139962957
+7486139972236 7486145704124
+7486145713585 7486150833113
+7486150837672 7486157134823
+7486157143293 7486162707573
+7486162715273 7486167758084
+7486167765524 7486172888498
+7486172895660 7486178200798
+7486178209716 7486184395935
+7486184404054 7486189842253
+7486189852578 7486195186861
+7486195195370 7486200566528
+7486200574751 7486205854943
+7486205861973 7486211237199
+7486211246004 7486216441520
+7486216450159 7486221601595
+7486221610144 7486227217995
+7486227228990 7486232271777
+7486232281688 7486237566788
+7486237575157 7486243041366
+7486243051460 7486248933706
+7486248941179 7486254665000
+7486254675226 7486261129210
+7486261139986 7486266724022
+7486266734555 7486272829604
+7486272838468 7486278199857
+7486278212096 7486284043353
+7486284051370 7486289221837
+7486289232007 7486295446866
+7486295457443 7486301510036
+7486301519553 7486306848432
+7486306859149 7486312063490
+7486312086438 7486317381216
+7486317389337 7486323045090
+7486323053220 7486328933491
+7486328940080 7486334226059
+7486334233266 7486340403369
+7486340411261 7486346401939
+7486346411137 7486351662287
+7486351672043 7486356854557
+7486356866431 7486362241746
+7486362250663 7486368203497
+7486368217549 7486373387158
+7486373396427 7486378606473
+7486378618142 7486384365710
+7486384377107 7486389923508
+7486389932225 7486395638491
+7486395647318 7486400827379
+7486400835571 7486406322225
+7486406331178 7486412174293
+7486412182323 7486417343511
+7486417353913 7486423116712
+7486423128398 7486429300791
+7486429313241 7486434745325
+7486434756120 7486439926442
+7486439937168 7486445201129
+7486445211624 7486450673478
+7486450680925 7486456591250
+7486456601035 7486461887393
+7486461905419 7486467888944
+7486467904790 7486473433441
+7486473443867 7486479253573
+7486479262700 7486484314802
+7486484325471 7486489523242
+7486489539361 7486495258158
+7486495268601 7486501042573
+7486501050738 7486506591696
+7486506602556 7486512066777
+7486512076288 7486517235875
+7486517245214 7486522423586
+7486522433725 7486528746005
+7486528754216 7486534262520
+7486534269944 7486540137826
+7486540145919 7486545288849
+7486545298183 7486550498706
+7486550510568 7486555940113
+7486555948833 7486561113716
+7486561124007 7486566269384
+7486566280478 7486572320127
+7486572329369 7486577597161
+7486577604975 7486583338073
+7486583345659 7486588988825
+7486589019809 7486594225971
+7486594236808 7486599396615
+7486599407242 7486604550929
+7486604562606 7486609737124
+7486609747617 7486616072046
+7486616080229 7486621298312
+7486621306901 7486626861584
+7486626870253 7486633837499
+7486633849102 7486639445162
+7486639454871 7486644819219
+7486644830424 7486650160077
+7486650169878 7486655318331
+7486655328339 7486660452137
+7486660459546 7486665788531
+7486665806337 7486671231575
+7486671244519 7486676648058
+7486676656293 7486682098475
+7486682106787 7486687510574
+7486687524621 7486692655657
+7486692663137 7486697793835
+7486697799902 7486702965061
+7486702972991 7486708154542
+7486708164165 7486713479899
+7486713496512 7486718828213
+7486718836286 7486724579317
+7486724588431 7486729717855
+7486729726280 7486734918383
+7486734926488 7486740644674
+7486740653121 7486745800130
+7486745808130 7486750927552
+7486750934533 7486756965160
+7486756974463 7486762133759
+7486762141362 7486767885645
+7486767893866 7486773079699
+7486773090946 7486778577105
+7486778587754 7486783719837
+7486783732984 7486788916288
+7486788926697 7486794479372
+7486794489530 7486800415376
+7486800423366 7486805782938
+7486805791344 7486811431630
+7486811439737 7486816606376
+7486816614778 7486821829199
+7486821840611 7486827993681
+7486828064028 7486833220605
+7486833230871 7486838893498
+7486838912925 7486844962924
+7486844971533 7486850362851
+7486850370365 7486856581508
+7486856589671 7486861797145
+7486861807884 7486867533362
+7486867542554 7486872736021
+7486872748003 7486877919889
+7486877928447 7486883724723
+7486883733542 7486888954149
+7486888962911 7486894349936
+7486894356567 7486899569688
+7486899577290 7486904795748
+7486904804601 7486909918291
+7486909929282 7486915104711
+7486915113662 7486920452144
+7486920460254 7486925702370
+7486925712554 7486931322474
+7486931332106 7486936481957
+7486936490501 7486941814641
+7486941823905 7486947691589
+7486947702638 7486952942663
+7486952950690 7486958533450
+7486958550642 7486964850342
+7486964860668 7486970398211
+7486970408450 7486976235790
+7486976244124 7486981429396
+7486981441856 7486986721116
+7486986731031 7486992321036
+7486992332817 7486997494883
+7486997504096 7487002634155
+7487002642913 7487008965740
+7487008990267 7487014445177
+7487014454699 7487020073758
+7487020082914 7487025215284
+7487025223716 7487030677044
+7487030687911 7487035996180
+7487036068450 7487041337576
+7487041349062 7487047089476
+7487047103990 7487052219729
+7487052228891 7487057448504
+7487057456793 7487063026243
+7487063036283 7487068952821
+7487068961967 7487074378635
+7487074389113 7487080643698
+7487080652547 7487086901550
+7487086913116 7487092098765
+7487092109181 7487097290046
+7487097305024 7487102885036
+7487102894873 7487108850901
+7487108860068 7487114323951
+7487114332332 7487119777504
+7487119786753 7487125044630
+7487125057021 7487131234913
+7487131245257 7487136459028
+7487136469453 7487141638706
+7487141648265 7487147299404
+7487147307410 7487152440368
+7487152451090 7487157701455
+7487157709977 7487163340790
+7487163348887 7487168517275
+7487168528508 7487174109521
+7487174121061 7487179307870
+7487179317777 7487185398757
+7487185420895 7487191093603
+7487191105389 7487196302470
+7487196313401 7487201518206
+7487201528043 7487207098835
+7487207109520 7487212952042
+7487212963756 7487218474461
+7487218484414 7487223960472
+7487223970661 7487229155827
+7487229165023 7487234796166
+7487234807285 7487239948931
+7487239959044 7487245090983
+7487245099452 7487250618556
+7487250627416 7487256520256
+7487256529350 7487261799783
+7487261808408 7487266994158
+7487267026480 7487272189725
+7487272198388 7487278022910
+7487278034993 7487283230435
+7487283241492 7487288370393
+7487288381286 7487293606947
+7487293617961 7487299210621
+7487299220490 7487304958328
+7487304968915 7487310377905
+7487310389583 7487316779283
+7487316789757 7487322748691
+7487322758092 7487329173505
+7487329185737 7487334390354
+7487334401622 7487339758456
+7487339901913 7487344958046
+7487344967394 7487350350433
+7487350358397 7487356174234
+7487356181768 7487361478423
+7487361486420 7487367042728
+7487367055327 7487372320778
+7487372332043 7487377444611
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "limits" });
+const { el, C } = DST;
+
+/* ---------- layers ---------- */
+(function () {
+  const L = [
+    ["l-code", "Your code", "tested for real", C.ok, "Runs unmodified: the state machine, the protocol, recovery, retries, plus every assert. This is what DST is for. A bug here that the model can trigger and an oracle can see will be found."],
+    ["l-sim", "Simulated interfaces", "replaced", C.accent2, "Time, MessageBus, Storage, the scheduler. Their simulated versions are code you wrote for the test. Their real versions (io_uring, sockets, the kernel's clock) never run in the simulator, so their bugs and quirks can't show up."],
+    ["l-model", "Fault model", "only what you wrote", C.warn, "Loss, duplication, delay, partitions, torn writes, bit flips, crashes, drift: only the faults someone implemented, at the rates someone chose. Example 06 shows that even the mix of operations shapes what gets found."],
+    ["l-out", "Everything else", "invisible", C.bug, "Kernel and file-system bugs, fsync that lies, firmware, real latency and throughput, memory pressure, misconfiguration, operator mistakes, third-party libraries that do their own IO, and Byzantine (malicious) nodes. None of these exist in the simulated world."],
+  ];
+  const info = DST.$("#layerInfo");
+  const show = (i, row) => { document.querySelectorAll(".layer").forEach((r) => r.classList.remove("sel")); row.classList.add("sel");
+    info.replaceChildren(el("h4", { style: { color: L[i][3] } }, L[i][1] + " — " + L[i][2]), el("p", {}, L[i][4])); };
+  L.forEach(([cls, nm, st, col, txt], i) => {
+    const row = el("div", { class: "layer " + cls }, el("div", { class: "nm", style: { color: col } }, nm), el("div", {}, txt.split(".")[0] + "."), el("div", { class: "st", style: { color: col } }, st));
+    row.onclick = () => show(i, row); DST.$("#layers").append(row);
+  });
+  show(0, document.querySelector(".layer"));
+})();
+
+/* ---------- fault model matrix ---------- */
+(function () {
+  const ex = ["02", "03", "04", "05", "07", "08", "09", "10", "11", "12", "13", "14"];
+  const rows = [
+    ["Clock advance / jumps", "02 08 10 11 13 14"],
+    ["Clock drift between nodes", "13"],
+    ["Wall-clock steps (realtime)", "13"],
+    ["Interleaving of concurrent tasks", "03"],
+    ["Torn / lost unsynced writes", "04 10"],
+    ["Short writes + retries", "14"],
+    ["Bit flips & misdirected writes", "09"],
+    ["Process crash + restart", "04 08 10 11"],
+    ["Small inputs enumerated exhaustively", "12"],
+    ["Packet loss / duplication / delay", "05 07 08 10 11 13 14"],
+    ["Network partitions (incl. asymmetric)", "08 10 11 13"],
+    ["Rare error paths forced (BUGGIFY)", "14"],
+    ["fsync reports success but data is lost", ""],
+    ["Disk full / slow disk", ""],
+    ["Memory exhaustion", ""],
+    ["Byzantine (lying) nodes", ""],
+    ["Configuration / operator error", ""],
+  ];
+  const t = DST.$("#fm");
+  t.append(el("tr", {}, el("th", {}, "failure mode"), ex.map((e) => el("th", { class: "num" }, el("a", { href: (DST.PAGES.find((p) => p.short === e) || {}).href }, e)))));
+  rows.forEach(([name, used]) => {
+    const u = used.split(" ");
+    t.append(el("tr", {}, el("td", { style: used ? null : { color: "var(--bug)" } }, name + (used ? "" : " — not modeled anywhere")),
+      ex.map((e) => u.includes(e) ? el("td", { class: "y" }, "●") : el("td", { class: "n" }, used ? "" : "·"))));
+  });
+})();
+
+/* ---------- sleep overshoot (real data) ---------- */
+(function () {
+  const lines = DST.text("sleep").trim().split("\n");
+  const ttl = +lines[0].split(/\s+/)[1];
+  const elapsed = lines.slice(1).map((l) => { const [a, b] = l.split(/\s+/).map(Number); return b - a; });
+  const over = elapsed.map((e) => (e - ttl) / 1000).sort((a, b) => a - b); // µs
+  const q = (p) => over[Math.min(over.length - 1, Math.floor(p * over.length))];
+  const exact = elapsed.filter((e) => e === ttl).length;
+  DST.$("#sleepStats").append(...[
+    [over.length, "real sleep(5 ms) calls"], [q(0.5).toFixed(0) + " µs", "median overshoot"],
+    [q(0.99).toFixed(0) + " µs", "p99 overshoot"], [exact, "landed exactly on 5 ms"],
+  ].map(([n, l]) => el("div", { class: "stat" }, el("div", { class: "num" }, n), el("div", { class: "lbl" }, l))));
+  const buckets = 24, lo = over[0], hi = q(0.99), w = (hi - lo) / buckets || 1, cnt = Array(buckets).fill(0);
+  over.forEach((v) => { const i = Math.min(buckets - 1, Math.floor((v - lo) / w)); if (v <= hi) cnt[i]++; });
+  DST.bar("#sleepHist", cnt.map((c, i) => ({ label: `${(lo + i * w).toFixed(0)}–${(lo + (i + 1) * w).toFixed(0)} µs`, value: c, color: C.warn })), { labelW: 150, rowH: 18 });
+  DST.$("#sleepCap").textContent = `Overshoot of a real sleep(5 ms) beyond the requested time, up to the p99 (${over.filter((v) => v > hi).length} slower outliers, max ${over[over.length - 1].toFixed(0)} µs, not shown). Source: data/02/sleep-test.tsv.`;
+})();
+
+/* ---------- tools table + chooser ---------- */
+(function () {
+  const T = [
+    ["Unit / example tests", "your code, inputs you picked", "known cases, regressions", "yes", "low"],
+    ["Property-based testing", "your code, generated inputs", "edge cases in pure logic", "yes (seed)", "low"],
+    ["Coverage-guided fuzzing", "your code, mutated inputs", "parser and memory-safety bugs", "yes (corpus)", "low–medium"],
+    ["DST", "your code in a simulated world", "fault-handling and interleaving logic bugs", "yes (seed + commit)", "high up front, then cheap"],
+    ["Antithesis", "whole system in a deterministic hypervisor", "same as DST, without rewriting the code", "yes", "paid service"],
+    ["Jepsen", "real binaries on real machines", "consistency bugs on the real stack", "rarely", "medium"],
+    ["Formal methods (TLA+, P)", "a model of the design", "design bugs before code exists", "n/a (exhaustive)", "medium–high"],
+    ["Chaos engineering", "production", "operational and config failures", "no", "medium"],
+    ["Benchmarks / load tests", "real system", "performance, tail latency", "partly", "medium"],
+  ];
+  const t = DST.$("#tools");
+  t.append(el("tr", {}, ["tool", "what runs", "finds best", "reproducible?", "cost"].map((h) => el("th", {}, h))));
+  T.forEach((r) => t.append(el("tr", { style: r[0] === "DST" ? { background: "rgba(124,156,255,.08)" } : null }, r.map((c, i) => el("td", {}, i === 0 ? el("strong", {}, c) : c)))));
+  const Q = [
+    ["Is my consensus/recovery logic correct under faults?", "DST", "Simulate crashes, partitions and corrupt disks, check invariants every step, replay failures by seed (examples 08–11)."],
+    ["Is my design correct before I write code?", "Formal methods", "Model the protocol in TLA+ or P and check it exhaustively. DST then checks that the code matches the design."],
+    ["Does my parser crash on weird input?", "Fuzzing", "Coverage-guided fuzzing explores input bytes far better than a hand-written generator."],
+    ["Does the real deployed system stay consistent?", "Jepsen / Antithesis", "Jepsen tests real binaries and networks; Antithesis gives DST-style replay without rewriting code."],
+    ["Is it fast enough at p99?", "Benchmarks", "A simulator models latency; it can't measure it. Benchmark real hardware."],
+    ["What happens when someone misconfigures it?", "Chaos / game days", "Configuration and operator errors live outside every simulator's model."],
+  ];
+  const ans = DST.$("#answer");
+  const pick = (i, b) => { document.querySelectorAll("#qs button").forEach((x) => x.classList.remove("on")); b.classList.add("on");
+    ans.replaceChildren(el("h4", {}, "→ " + Q[i][1]), el("p", {}, Q[i][2])); };
+  Q.forEach((q, i) => { const b = el("button", { onclick: () => pick(i, b) }, q[0]); DST.$("#qs").append(b); if (!i) pick(0, b); });
+})();
+</script>
+</body>
+</html>

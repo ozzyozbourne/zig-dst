@@ -1,0 +1,6 @@
+PASS: 5000 seeds
+coverage: handovers=7526 tightest_handover_gap=4 ticks lease_reads=60672550 commits=17434116 realtime_steps=17742
+
+real	0m13.674s
+user	0m13.571s
+sys	0m0.100s

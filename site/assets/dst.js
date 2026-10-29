@@ -37,6 +37,12 @@
     { id: "ex08", href: "08-leader-election-partitions.html", short: "08", title: "Leader election & partitions" },
     { id: "ex09", href: "09-storage-fault-atlas.html", short: "09", title: "Storage fault atlas" },
     { id: "ex10", href: "10-mini-vopr.html", short: "10", title: "Mini-VOPR" },
+    { id: "ex11", href: "11-liveness-livelock.html", short: "11", title: "Liveness & livelock" },
+    { id: "ex12", href: "12-coverage-marks-exhaustive.html", short: "12", title: "Coverage marks & exhaustive testing" },
+    { id: "ex13", href: "13-clock-skew-leases.html", short: "13", title: "Clock skew & leases" },
+    { id: "ex14", href: "14-rare-bugs-buggify.html", short: "14", title: "Rare bugs & BUGGIFY" },
+    { id: "debug", href: "debugging.html", short: "Debug", title: "Debugging a failing seed" },
+    { id: "limits", href: "limits.html", short: "Limits", title: "What DST can't catch" },
   ];
 
   function el(tag, attrs, ...kids) {

@@ -1,0 +1,6 @@
+107e7ff1835b6b322064042d8146de2270ff67c770cb412428051a8b424848a8  replay-nomargin.txt
+107e7ff1835b6b322064042d8146de2270ff67c770cb412428051a8b424848a8  replay-nomargin-again.txt
+cmp replay-nomargin.txt replay-nomargin-again.txt: identical
+b3054d44d897eae073c58157cbea44c3936bd2af1d7d9c5df2b20b0df5712259  replay-wallclock.txt
+b3054d44d897eae073c58157cbea44c3936bd2af1d7d9c5df2b20b0df5712259  replay-wallclock-again.txt
+cmp replay-wallclock.txt replay-wallclock-again.txt: identical

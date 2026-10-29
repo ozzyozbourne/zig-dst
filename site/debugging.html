@@ -1,0 +1,2165 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Debugging a failing seed — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .mono { font-family: var(--mono); }
+  .small { font-size: .84rem; color: var(--muted); }
+  #stepper { position: sticky; top: 50px; z-index: 40; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;
+    margin: 18px 0 0; padding: 8px; background: rgba(11,15,23,.88); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--line); border-radius: var(--radius); }
+  #stepper a { display: block; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    font-size: .76rem; line-height: 1.3; transition: all .2s ease; position: relative; overflow: hidden; }
+  #stepper a:hover { text-decoration: none; border-color: var(--accent); color: var(--text); }
+  #stepper a b { display: block; font-family: var(--mono); color: var(--accent); font-size: .72rem; }
+  #stepper a .chip { display: block; font-family: var(--mono); font-size: .68rem; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #stepper a.done { border-color: #23466e; }
+  #stepper a.done b { color: var(--accent2); }
+  #stepper a.on { background: var(--accent); color: #0b0f17; border-color: var(--accent); }
+  #stepper a.on b, #stepper a.on .chip { color: #0b0f17; }
+  #stepper a::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: var(--p, 0%); background: var(--accent2); transition: width .2s; }
+  @media (max-width: 860px) { #stepper { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  h2 .stage { font-family: var(--mono); font-size: .75rem; color: var(--dim); margin-left: 10px; font-weight: 400; }
+  .viz svg text { font-family: var(--mono); }
+  .anat { font-family: var(--mono); font-size: .86rem; line-height: 2.1; background: #070b12; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; overflow-wrap: anywhere; }
+  .anat span.f { border-bottom: 2px solid; padding: 1px 2px; border-radius: 3px; cursor: help; }
+  .anat .lbl { display: inline-block; font-size: .66rem; vertical-align: super; margin-left: 2px; opacity: .85; }
+  .zoombar { display: flex; gap: 6px; flex-wrap: wrap; }
+  .zoombar button .z { color: var(--dim); font-size: .72rem; margin-left: 6px; }
+  .zoombar button.on .z { color: #0b0f17; }
+  .zdesc { font-size: .9rem; color: #ccd5e6; min-height: 3.2em; margin: 6px 2px 0; }
+  .dtable td { font-family: var(--mono); font-size: .82rem; }
+  .dtable td.bad { color: var(--bug); font-weight: 700; }
+  .dtable td.good { color: var(--ok); font-weight: 700; }
+  .dtable td.warn { color: var(--warn); font-weight: 700; }
+  .dots i { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 3px; vertical-align: -2px; border: 1px solid var(--line); background: #1a2336; }
+  .dots i.own { background: var(--accent); border-color: var(--accent); }
+  .dots i.ok { background: var(--accent2); border-color: var(--accent2); }
+  .dots i.q { outline: 1px dashed var(--muted); outline-offset: 2px; }
+  .seedrow { display: grid; grid-template-columns: repeat(50, 1fr); gap: 3px; margin: 6px 0 14px; }
+  .seedrow i { aspect-ratio: 1; border-radius: 3px; background: #1d3a2c; }
+  .seedrow i.fail { background: var(--bug); }
+  .seedrow i.three { outline: 2px solid var(--yellow); outline-offset: 1px; }
+  .diffstrip { display: flex; gap: 1px; height: 18px; margin: 8px 0; }
+  .diffstrip i { flex: 1; background: var(--ok); opacity: .75; border-radius: 1px; }
+  .diffstrip i.x { background: var(--bug); opacity: 1; }
+  .cgdesc { font-size: .92rem; min-height: 3.3em; background: #0a101b; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; color: var(--text); }
+  pre.term.short { max-height: 260px; }
+  .check { list-style: none; padding: 0; margin: 0; counter-reset: c; }
+  .check li { counter-increment: c; display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px dashed #1c2740; }
+  .check li::before { content: counter(c); font-family: var(--mono); font-weight: 700; color: #0b0f17; background: var(--accent2); border-radius: 50%; width: 26px; height: 26px; display: grid; place-items: center; font-size: .8rem; }
+  .check li b { color: var(--text); }
+  .optcmp td { font-family: var(--mono); font-size: .78rem; padding: 3px 8px; }
+  .twocol { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  @media (max-width: 860px) { .twocol { grid-template-columns: 1fr; } }
+  section { scroll-margin-top: 170px; }
+  .panel-title { font-family: var(--mono); font-size: .76rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 4px 0 6px; }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag medium">Workflow</span><span class="tag">Example 10 · mini-VOPR</span><span class="tag">--bug-commit-early</span></div>
+    <h1>Debugging a failing seed</h1>
+    <p class="lede">A sweep prints <code>FAIL at seed=3</code>. This chapter walks from that line to the root cause, a fix, and a regression
+      test that survives the fix. It uses the real output of <a href="10-mini-vopr.html">example 10, the mini-VOPR</a>, run with the planted
+      <code>--bug-commit-early</code> bug. The checker fires at the end of the run, but the wrong decision happened much
+      earlier. The work is to walk back from the symptom to that decision. Every log line, tick and hash below is parsed from
+      files captured by <code>site/tools/captures/debug.sh</code>.</p>
+    <div class="grid g4" id="herostats"></div>
+  </div>
+
+  <nav id="stepper" aria-label="debugging stages"></nav>
+
+  <!-- 1 ------------------------------------------------------------------------------------------------ -->
+  <section id="s1">
+    <h2><span class="n">1</span>Reproduce: the replay must be boring<span class="stage">stage 1 / 7</span></h2>
+    <p>The sweep runs seeds 0, 1, 2, … and stops at the first failure. It prints the reason and the exact command to replay it.
+      Before you read any log, check that the replay really is deterministic. Run it twice and compare the bytes, not only the
+      verdict. If two runs differ, the simulator has a source of nondeterminism (wall clock, hash-map order, uninitialized padding).
+      That is the first bug to fix, because nothing you learn from one run would carry over to the next.</p>
+    <div class="panel-title">the sweep that started it · <span class="mono">sweep 20000 --bug-commit-early</span></div>
+    <div id="sweepbug"></div>
+    <div class="viz">
+      <div class="twocol">
+        <div><div class="panel-title">replay A · run 3 --bug-commit-early</div><div id="replayA"></div></div>
+        <div><div class="panel-title">replay B · same command, separate process</div><div id="replayB"></div></div>
+      </div>
+      <div class="panel-title" style="margin-top:10px">line-by-line comparison (one cell per line of output)</div>
+      <div class="diffstrip" id="diffstrip"></div>
+      <div id="sha"></div>
+      <div class="cap" id="replaycap"></div>
+    </div>
+  </section>
+
+  <!-- 2 ------------------------------------------------------------------------------------------------ -->
+  <section id="s2">
+    <h2><span class="n">2</span>Read the failure: which checker, which tick, which op<span class="stage">stage 2 / 7</span></h2>
+    <p>The failure message is dense, and each field narrows the search. Hover over the parts:</p>
+    <div class="anat" id="anat"></div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card">
+        <h3>Which checker fired</h3>
+        <p>Only one place in <code>main.zig</code> prints <code>divergence: … committed op=</code>: Checker 1 in <code>check_commit</code>.
+          It runs on every commit by every replica. The first commit of op N anywhere defines the canonical op N, and every later
+          commit of op N must match it (it mirrors TigerBeetle's <code>StateChecker.check_state</code>).</p>
+<pre class="code"><span class="c">// examples/10-mini-vopr/main.zig, check_commit()</span>
+<span class="kw">if</span> (op == sim.canonical.items.len + <span class="n">1</span>) {
+    sim.canonical.<span class="fn">append</span>(...); <span class="c">// first commit of op N defines op N</span>
+    <span class="kw">return</span>;
+}
+...
+<span class="kw">const</span> canon = sim.canonical.items[op - <span class="n">1</span>];
+<span class="bad"><span class="kw">if</span> (canon.checksum != e.checksum) {</span>
+<span class="bad">    <span class="kw">return</span> sim.<span class="fn">fail</span>(<span class="s">"divergence: replica {d} committed op={d} ..."</span>, ...);</span>
+}</pre>
+      </div>
+      <div class="card">
+        <h3>The cluster when it stopped</h3>
+        <p class="small">The <code>=</code> status lines printed at exit, decoded (legend: <code>view V</code>, <code>commit/op C</code>,
+          <code>log_view LV</code>, durable WAL ops <code>Wo</code>, unsynced writes <code>W!</code>).</p>
+        <table class="data compact" id="finaltbl"></table>
+        <div class="callout warn" id="otherhalf"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 ------------------------------------------------------------------------------------------------ -->
+  <section id="s3">
+    <h2><span class="n">3</span>Narrow down: find the first tick where state was already wrong<span class="stage">stage 3 / 7</span></h2>
+    <p>The checker reports the moment two histories <em>met</em>, not the moment one of them went wrong. To find that earlier
+      moment, add the existing print-only <code>--events</code> flag. It prints one <code>@</code> line per packet send, cut, loss and
+      delivery, per WAL write and completion, and per commit with its checksum. It draws nothing from the PRNG and is not hashed,
+      so the trace stays <span class="mono" id="evtrace"></span>. Then zoom in from the whole run to the few ticks that matter:</p>
+    <div class="viz">
+      <div class="zoombar controls" id="zoombar"></div>
+      <div id="zmini"></div>
+      <div id="zoom"></div>
+      <div class="legend" id="zlegend"></div>
+      <div class="zdesc" id="zdesc"></div>
+    </div>
+    <h3>Every commit that defined a canonical op, and what the primary knew when it committed</h3>
+    <p>For each "first commit of op N" in the <code>--events</code> log, the table counts the durable copies the committing replica
+      could know about at that tick: its own <code>@durable</code> write, plus the <code>prepare_ok</code> messages it had
+      <code>@recv</code>'d in the same view for an op ≥ N. The last column counts how many replicas ever wrote that prepare to their
+      WAL before the checker fired.</p>
+    <table class="data dtable" id="dtable"></table>
+    <div class="callout bug" id="firstbad"></div>
+    <div class="panel-title">the raw <span class="mono">--events</span> lines for that op's life</div>
+    <div id="rawzoom"></div>
+  </section>
+
+  <!-- causal graph -->
+  <section id="s3b">
+    <h2><span class="n">3b</span>The causal chain, from the bad commit to the checker</h2>
+    <p>Each box is one or more real log lines, and each arrow is "made possible by". Two histories grow side by side: the
+      isolated old primary keeps acknowledging writes no one else has, while the two connected backups elect a new primary that
+      has never heard of them. Step through it:</p>
+    <div class="viz">
+      <div id="cgraph"></div>
+      <div id="cgplayer"></div>
+      <div class="cgdesc" id="cgdesc"></div>
+      <div id="cgraw"></div>
+    </div>
+  </section>
+
+  <!-- 4 ------------------------------------------------------------------------------------------------ -->
+  <section id="s4">
+    <h2><span class="n">4</span>Hypothesis, then confirm it<span class="stage">stage 4 / 7</span></h2>
+    <p><strong>Hypothesis:</strong> the primary commits an op before a replication quorum holds it durably. A falsifiable prediction
+      follows from it: in the buggy run, canonical commits are made with fewer than <em>quorum</em> known copies, and in the
+      correct run, never. The quorum condition is in <code>try_commit</code>:</p>
+    <div class="twocol">
+      <div><div class="panel-title" style="color:var(--bug)">buggy: what runs with --bug-commit-early</div>
+<pre class="code"><span class="c">/// Primary: commit every op that a replication quorum holds durably.</span>
+<span class="kw">fn</span> <span class="fn">try_commit</span>(sim: *Simulator, r: <span class="kw">u8</span>) <span class="kw">void</span> {
+    <span class="kw">const</span> rep = &amp;sim.replicas[r];
+    <span class="c">// BUG --bug-commit-early: one durable copy (the primary's own) is treated as enough.</span>
+    <span class="c">// In a calm cluster every backup acks a moment later anyway, so no test notices.</span>
+<span class="bad">    <span class="kw">const</span> needed: <span class="kw">u8</span> = <span class="kw">if</span> (bug_commit_early) <span class="n">1</span> <span class="kw">else</span> sim.<span class="fn">quorum</span>();</span>
+    <span class="kw">while</span> (rep.commit &lt; rep.log.items.len) {
+        <span class="kw">const</span> op = rep.commit + <span class="n">1</span>;
+        <span class="kw">var</span> count: <span class="kw">u8</span> = <span class="n">0</span>;
+        <span class="kw">for</span> (rep.acked[<span class="n">0</span>..sim.<span class="fn">n</span>()]) |a| count += <span class="fn">@intFromBool</span>(a &gt;= op);
+<span class="bad">        <span class="kw">if</span> (count &lt; needed) <span class="kw">break</span>;   <span class="c">// needed == 1: own durable write suffices</span></span>
+        sim.<span class="fn">commit_one</span>(r);
+    }
+}</pre></div>
+      <div><div class="panel-title" style="color:var(--ok)">fixed: the same function without the flag</div>
+<pre class="code"><span class="c">/// Primary: commit every op that a replication quorum holds durably.</span>
+<span class="kw">fn</span> <span class="fn">try_commit</span>(sim: *Simulator, r: <span class="kw">u8</span>) <span class="kw">void</span> {
+    <span class="kw">const</span> rep = &amp;sim.replicas[r];
+
+
+<span class="good">    <span class="kw">const</span> needed: <span class="kw">u8</span> = sim.<span class="fn">quorum</span>(); <span class="c">// replica_count / 2 + 1</span></span>
+    <span class="kw">while</span> (rep.commit &lt; rep.log.items.len) {
+        <span class="kw">const</span> op = rep.commit + <span class="n">1</span>;
+        <span class="kw">var</span> count: <span class="kw">u8</span> = <span class="n">0</span>;
+        <span class="kw">for</span> (rep.acked[<span class="n">0</span>..sim.<span class="fn">n</span>()]) |a| count += <span class="fn">@intFromBool</span>(a &gt;= op);
+<span class="good">        <span class="kw">if</span> (count &lt; needed) <span class="kw">break</span>;   <span class="c">// own write + prepare_oks &gt;= majority</span></span>
+        sim.<span class="fn">commit_one</span>(r);
+    }
+}</pre></div>
+    </div>
+    <p class="small"><code>rep.acked[i]</code> is set from the primary's own <code>on_write_done</code> and from each <code>prepare_ok</code>,
+      so <code>count</code> is the "copies known" column above. <code>fn quorum</code> returns <code>replica_count / 2 + 1</code>.</p>
+    <div class="viz">
+      <div class="twocol">
+        <div><div class="panel-title">bug run · copies known at each canonical commit</div><div id="hbug"></div></div>
+        <div><div class="panel-title">fixed run, same seed · copies known at each canonical commit</div><div id="hfix"></div></div>
+      </div>
+      <div class="cap" id="hcap"></div>
+    </div>
+    <div class="callout ok" id="hverdict"></div>
+    <p>TigerBeetle states the same rule in <code>src/vsr/replica.zig</code> <code>on_prepare_ok</code>. The replication quorum is
+      computed in <code>src/vsr.zig</code> <code>quorums()</code>, which asserts that it intersects the view-change quorum
+      (<code>assert(quorum_view_change + quorum_replication &gt; replica_count)</code>). That intersection is the property the bug breaks:
+      a view-change quorum {R1, R2} that shares no replica with the "commit quorum" {R0}.</p>
+<pre class="code"><span class="c">// src/vsr/replica.zig, on_prepare_ok()</span>
+<span class="c">// Wait until we have a quorum of prepare_ok messages (including ourself).</span>
+<span class="good"><span class="kw">const</span> threshold = self.quorum_replication;</span></pre>
+  </section>
+
+  <!-- 5 ------------------------------------------------------------------------------------------------ -->
+  <section id="s5">
+    <h2><span class="n">5</span>Fix and verify: the same seed, then every seed<span class="stage">stage 5 / 7</span></h2>
+    <p>Here the fix is already in the code behind the flag: running without <code>--bug-commit-early</code> runs the corrected
+      <code>try_commit</code>. Verify in two steps. First the failing seed, then the full sweep, because a fix that only makes
+      seed 3 pass might have broken seed 4.</p>
+    <div class="twocol">
+      <div><div class="panel-title">run 3 (fixed)</div><div id="run3fixed"></div></div>
+      <div><div class="panel-title">sweep 20000 (fixed)</div><div id="sweepfixed"></div>
+        <div class="grid g2" id="fixstats" style="margin-top:10px"></div></div>
+    </div>
+    <div class="viz">
+      <div class="panel-title">seeds 0–199 · with --bug-commit-early</div><div class="seedrow" id="rowbug"></div>
+      <div class="panel-title">seeds 0–199 · fixed</div><div class="seedrow" id="rowfix"></div>
+      <div class="cap" id="rowcap"></div>
+    </div>
+  </section>
+
+  <!-- 6 ------------------------------------------------------------------------------------------------ -->
+  <section id="s6">
+    <h2><span class="n">6</span>Seed stability: why "seed 3" is not a regression test<span class="stage">stage 6 / 7</span></h2>
+    <p>The tempting regression test is "add <code>run 3</code> to CI". It does not work. A seed reproduces a run only for the
+      <em>exact same code</em>. The fix changes when the primary commits and replies. Every send draws loss, duplication and
+      delay from the same simulator PRNG that also decides crashes and partitions. So from the first changed decision on, every
+      later random draw lands somewhere else. Seed 3 under the fixed code runs in a different world:</p>
+    <div class="grid g3" id="stabstats"></div>
+    <div class="viz">
+      <div class="panel-title">fault schedule of seed 3, with the bug vs fixed (real status and partition lines)</div>
+      <div id="faultlanes"></div>
+      <div class="legend" id="faultlegend"></div>
+      <div class="cap" id="faultcap"></div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h3>Where the two runs part ways</h3><div id="divergence"></div></div>
+      <div class="card"><h3>Same weather, different events</h3>
+        <p class="small">The swarm options are drawn from the seed <em>before</em> the simulator gets its own sub-PRNG, so the
+          <code>SEED=</code> block is unchanged by the fix:</p>
+        <table class="data optcmp" id="optcmp"></table></div>
+    </div>
+    <div class="callout info" id="stabnote"></div>
+
+    <h3>How TigerBeetle pins a scenario</h3>
+    <p>For scenarios that must keep being tested, TigerBeetle does not keep a seed. It writes the scenario down in
+      <code>src/vsr/replica_test.zig</code>. The tests run the real replicas in the same simulated cluster. <code>TestContext.init</code>
+      takes a fixed <code>seed: u64 = 123</code> that only shapes background randomness such as delays. The faults
+      are <em>scripted</em> with link filters (<code>drop_all</code>, <code>drop</code>, <code>pass_all</code>) and the outcome is
+      asserted. <code>t.run()</code> ticks until the cluster stops making progress for 8,200 ticks. The scenario on this page, an isolated
+      primary that must not commit, is already pinned:</p>
+<pre class="code"><span class="c">// src/vsr/replica_test.zig</span>
+<span class="kw">test</span> <span class="s">"Cluster: network: partition 1-2 (isolate primary, symmetric)"</span> {
+    <span class="c">// The primary cannot communicate with either backup, but the backups can communicate with one</span>
+    <span class="c">// another. The backups will perform a view-change since they don't receive heartbeats.</span>
+    <span class="kw">const</span> t = <span class="kw">try</span> TestContext.<span class="fn">init</span>(.{ .replica_count = <span class="n">3</span> });
+    <span class="kw">defer</span> t.<span class="fn">deinit</span>();
+
+    <span class="kw">var</span> c = t.<span class="fn">clients</span>(.{});
+    <span class="kw">try</span> c.<span class="fn">request</span>(<span class="n">2</span>, <span class="n">2</span>);
+
+<span class="good">    <span class="kw">const</span> p = t.<span class="fn">replica</span>(.A0);</span>
+<span class="good">    p.<span class="fn">drop_all</span>(.B1, .bidirectional);</span>
+<span class="good">    p.<span class="fn">drop_all</span>(.B2, .bidirectional);</span>
+    <span class="kw">try</span> c.<span class="fn">request</span>(<span class="n">3</span>, <span class="n">3</span>);
+<span class="good">    <span class="kw">try</span> <span class="fn">expectEqual</span>(p.<span class="fn">commit</span>(), <span class="n">2</span>);   <span class="c">// the isolated primary must not commit op 3</span></span>
+}</pre>
+    <p>The last line is exactly the invariant <code>--bug-commit-early</code> breaks: with that bug, the isolated <code>A0</code> would
+      commit op 3 alone. The test does not depend on a lucky seed. It survives refactors that change how many random numbers are
+      drawn, because the scenario is in the code. Related pinned scenarios in the same file:</p>
+    <table class="data compact">
+      <tr><th>test name (real, in replica_test.zig)</th><th>what it pins</th></tr>
+      <tr><td><code>Cluster: network: partition 1-2 (isolate primary, asymmetric, send-only)</code></td><td>primary can send but not receive prepare_oks; asserts the coverage mark <code>marks.check("send_commit: primary abdicating")</code> is hit</td></tr>
+      <tr><td><code>Cluster: network: partition 1-2 (isolate primary, asymmetric, receive-only)</code></td><td>primary can receive but not send; backups view-change</td></tr>
+      <tr><td><code>Cluster: network: partition 2-1 (isolate backup, symmetric)</code></td><td>the healthy side keeps committing (A0, B1 at 3), the isolated B2 stays at 2</td></tr>
+      <tr><td><code>Cluster: repair: ack committed prepare</code></td><td>A0 commits op 3, B1 only prepares it; after a view change and heal, op 3 must survive</td></tr>
+      <tr><td><code>Cluster: view-change: primary with dirty log</code></td><td>a new primary whose log needs repair</td></tr>
+      <tr><td><code>Cluster: view-change: duel of the primaries</code></td><td>two replicas both believe they lead</td></tr>
+    </table>
+    <p class="small">Note that our mini-VOPR has no scripted-fault API. Its faults come only from the PRNG. To pin this
+      scenario here, you would add one, as in TigerBeetle's <code>TestContext</code> (an exercise; not done on this page).</p>
+  </section>
+
+  <!-- 7 ------------------------------------------------------------------------------------------------ -->
+  <section id="s7">
+    <h2><span class="n">7</span>A debugging checklist, and how TigerBeetle developers do it<span class="stage">stage 7 / 7</span></h2>
+    <div class="grid g2">
+      <div class="card">
+        <h3>Checklist</h3>
+        <ol class="check">
+          <li><div><b>Reproduce twice, compare bytes.</b> Same seed and same commit should give the same trace hash and identical logs. If not, stop and fix the nondeterminism first.</div></li>
+          <li><div><b>Parse the failure message.</b> Which checker, which tick, which replica, which op, and <em>which other commit</em> it disagrees with. The canonical side usually points at the earlier moment.</div></li>
+          <li><div><b>Turn up the detail, not the noise.</b> Use an opt-in, print-only flag (<code>--events</code> here, <code>-Dvopr-log=full</code> in TigerBeetle) that does not consume randomness, and check that the trace hash is unchanged.</div></li>
+          <li><div><b>Walk backwards from the symptom.</b> Find the first tick where state was already wrong: a commit that no quorum holds, a reply for an op that later vanishes. Zoom in on that window.</div></li>
+          <li><div><b>Write the hypothesis as a falsifiable count.</b> "Every canonical commit had ≥ quorum copies" can be checked on the buggy and on the fixed run.</div></li>
+          <li><div><b>Fix, re-run the seed, then sweep everything.</b> The seed confirms the fix; the sweep checks that it broke nothing else.</div></li>
+          <li><div><b>Pin the scenario, not the seed.</b> Write a scripted test (faults by hand, assertion on the invariant), because seeds reshuffle when the code changes.</div></li>
+          <li><div><b>Check the checker.</b> Re-enable the bug and confirm the sweep still catches it (here: <span class="mono" id="recheck"></span>).</div></li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>How TigerBeetle does it</h3>
+        <p><code>docs/internals/vopr.md</code>: <em>"Because our simulator is deterministic based on a seed number and the Git
+          commit, we can perfectly reproduce any bugs discovered in testing for easy local debugging."</em> A failure is reported as
+          <strong>seed + commit</strong>, the same pair this page uses (seed 3, commit of <code>main.zig</code>).</p>
+<pre class="term"><span class="d"># docs/internals/HACKING.md: replay one seed</span>
+./zig/zig build vopr -- 123
+<span class="d"># build.zig option vopr-log: "short" (default) = state transitions only</span>
+./zig/zig build vopr -Dvopr-log=full -- 123</pre>
+        <ul class="small">
+          <li><code>-Dvopr-log=short</code> prints only state transitions through <code>Cluster.log_replica</code>, whose columns are
+            documented in <code>docs/internals/testing.md</code> ("VOPR Output"). The mini-VOPR status line imitates it.</li>
+          <li><code>src/vopr.zig</code> <code>CLIArgs</code> has runtime overrides for narrowing a run without editing code:
+            <code>--ticks-max-requests</code>, <code>--ticks-max-convergence</code>, <code>--packet-loss-ratio</code>,
+            <code>--requests-max</code>, with the comment <em>"Feel free to add more runtime overrides here!"</em></li>
+          <li>vopr.md: <em>"we also test for specific cases that are hard or slow to replicate through random simulation"</em>,
+            linking <code>src/vsr/replica_test.zig</code>, the pinned tests of stage 6.</li>
+        </ul>
+        <h3>Watch it done live</h3>
+        <p>vopr.md links <a href="https://youtu.be/kZ3xVeO0vBw">IronBeetle Episode 018: "Simulation Failure"</a> (22 March 2024),
+          where @matklad live-debugs a real simulator failure from TigerBeetle's main branch. The chapters follow the same arc as this
+          page: <em>Analyzing simulator output</em> (6:23), <em>Decoding log files</em> (12:30), <em>Tracing the view change</em> (30:18),
+          <em>Identifying the recovery bug</em> (39:12), <em>Proposing a fix</em> (45:15). That bug is subtler than ours. It is a
+          liveness failure: the cluster stops processing, and the trace shows a prepare that is present only on one replica and
+          corrupted there. He first concludes that the cluster is <em>correctly</em> unavailable, because it cannot know whether that
+          op was committed, and then asks why the simulator still flags it.</p>
+      </div>
+    </div>
+    <h3>Try it</h3>
+<pre class="term"><span class="p">$ cd examples/10-mini-vopr</span>
+<span class="p">$ zig run main.zig -- sweep 20000 --bug-commit-early</span>        <span class="d"># FAIL at seed=3</span>
+<span class="p">$ zig run main.zig -- run 3 --bug-commit-early</span>              <span class="d"># twice; compare trace=</span>
+<span class="p">$ zig run main.zig -- run 3 --bug-commit-early --events 2>&amp;1 | awk '$1>=30 &amp;&amp; $1<=41'</span>
+<span class="p">$ zig run main.zig -- run 3 --bug-commit-early --events 2>&amp;1 | grep -E '@commit|FAIL'</span>
+<span class="p">$ zig run main.zig -- run 3 &amp;&amp; zig run main.zig -- sweep 20000</span>   <span class="d"># the fix</span>
+<span class="p">$ site/tools/capture.sh debug</span>                                <span class="d"># regenerate this page's data</span></pre>
+    <p class="small">For the protocol itself (message flow, the second planted bug, 3D replay, 200-seed statistics) see
+      <a href="10-mini-vopr.html">10 · Mini-VOPR</a>.</p>
+  </section>
+</main>
+<script type="text/plain" id="log-sweepbug" data-src="data/debug/sweep-bug.txt">
+FAIL at seed=3 after 4 seeds: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+Replay with:
+  zig run main.zig -- run 3 --bug-commit-early
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-ra" data-src="data/debug/replay-a.txt">
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     5  0   / ...    0V   1/__1C   0LV   1Wo  0W!
+     7    partition side=00001 symmetric
+    38  0   / ...    0V   2/__2C   0LV   2Wo  0W!
+    61  0   / ...    0V   3/__3C   0LV   3Wo  0W!
+    78  1 v / .v.    1V   0/__1C   0LV   1Wo  0W!
+    80  2 v \ .vv    1V   0/__1C   0LV   1Wo  0W!
+    83  0   / .vv    0V   4/__4C   0LV   4Wo  0W!
+    92  0   / .vv    0V   5/__5C   0LV   5Wo  0W!
+   116  0 ! # #vv    0V   5/__6C   0LV   5Wo  1W!
+   147  2 v / #vv    2V   0/__1C   0LV   1Wo  0W!
+   150  1 v \ #vv    2V   0/__1C   0LV   1Wo  0W!
+   155  2 / / #v.    2V   0/__1C   2LV   1Wo  1W!
+   158  1 > \ #..    2V   0/__1C   2LV   1Wo  1W!
+   158  2   / #..    2V   1/__1C   2LV   1Wo  0W!
+   165  1   \ #..    2V   1/__1C   2LV   1Wo  0W!
+   195 FAIL: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+   195  2   / #..    2V   2/__2C   2LV   2Wo  0W!
+   195  0 = # #..    0V   5/__6C   0LV   5Wo  0W!
+   195  1 = \ #..    2V   1/__2C   2LV   1Wo  1W!
+   195  2 = / #..    2V   2/__2C   2LV   2Wo  0W!
+reason: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+seed=3 ticks=195 commits=5 trace=692aa09c1869a180 FAIL
+</script>
+<script type="text/plain" id="log-rb" data-src="data/debug/replay-b.txt">
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     5  0   / ...    0V   1/__1C   0LV   1Wo  0W!
+     7    partition side=00001 symmetric
+    38  0   / ...    0V   2/__2C   0LV   2Wo  0W!
+    61  0   / ...    0V   3/__3C   0LV   3Wo  0W!
+    78  1 v / .v.    1V   0/__1C   0LV   1Wo  0W!
+    80  2 v \ .vv    1V   0/__1C   0LV   1Wo  0W!
+    83  0   / .vv    0V   4/__4C   0LV   4Wo  0W!
+    92  0   / .vv    0V   5/__5C   0LV   5Wo  0W!
+   116  0 ! # #vv    0V   5/__6C   0LV   5Wo  1W!
+   147  2 v / #vv    2V   0/__1C   0LV   1Wo  0W!
+   150  1 v \ #vv    2V   0/__1C   0LV   1Wo  0W!
+   155  2 / / #v.    2V   0/__1C   2LV   1Wo  1W!
+   158  1 > \ #..    2V   0/__1C   2LV   1Wo  1W!
+   158  2   / #..    2V   1/__1C   2LV   1Wo  0W!
+   165  1   \ #..    2V   1/__1C   2LV   1Wo  0W!
+   195 FAIL: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+   195  2   / #..    2V   2/__2C   2LV   2Wo  0W!
+   195  0 = # #..    0V   5/__6C   0LV   5Wo  0W!
+   195  1 = \ #..    2V   1/__2C   2LV   1Wo  1W!
+   195  2 = / #..    2V   2/__2C   2LV   2Wo  0W!
+reason: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+seed=3 ticks=195 commits=5 trace=692aa09c1869a180 FAIL
+</script>
+<script type="text/plain" id="log-sha" data-src="data/debug/replay-sha.txt">
+0412a4f6f86c344e0010512a39229e9561d32812c02649438bcaef6f95f1ca4e  replay-a.txt
+0412a4f6f86c344e0010512a39229e9561d32812c02649438bcaef6f95f1ca4e  replay-b.txt
+</script>
+<script type="text/plain" id="log-evbug" data-src="data/debug/events-bug.txt">
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     1 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=1 at=3
+     3 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=1 at=3
+     3 @write replica=0 kind=append view=0 op=1 at=5
+     3 @send from=0 to=1 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=6
+     3 @send from=0 to=2 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=5
+     5 @recv from=0 to=2 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=5
+     5 @write replica=2 kind=append view=0 op=1 at=9
+     5 @durable replica=0 kind=append view=0 op=1
+     5 @commit replica=0 op=1 checksum=135a3546a0191492 client=0 request=1 view=0 transfer=0>3:38 result=ok
+     5  0   / ...    0V   1/__1C   0LV   1Wo  0W!
+     5 @send from=0 to=3 cmd=reply view=0 op=1 commit=0 client=0 request=1 at=8
+     6 @recv from=0 to=1 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=6
+     6 @write replica=1 kind=append view=0 op=1 at=9
+     7    partition side=00001 symmetric
+     8 @recv from=0 to=3 cmd=reply view=0 op=1 commit=0 client=0 request=1 at=8
+     9 @durable replica=1 kind=append view=0 op=1
+     9 @cut from=1 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=9
+     9 @durable replica=2 kind=append view=0 op=1
+     9 @cut from=2 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=9
+    31 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=2 at=34
+    34 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=2 at=34
+    34 @write replica=0 kind=append view=0 op=2 at=38
+    34 @cut from=0 to=1 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=34
+    34 @cut from=0 to=2 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=34
+    38 @durable replica=0 kind=append view=0 op=2
+    38 @commit replica=0 op=2 checksum=c37d68ac42d31d31 client=0 request=2 view=0 transfer=3>1:75 result=ok
+    38  0   / ...    0V   2/__2C   0LV   2Wo  0W!
+    38 @send from=0 to=3 cmd=reply view=0 op=2 commit=0 client=0 request=2 at=40
+    40 @recv from=0 to=3 cmd=reply view=0 op=2 commit=0 client=0 request=2 at=40
+    50 @cut from=0 to=1 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=50
+    50 @cut from=0 to=2 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=50
+    56 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=3 at=59
+    58 @cut from=0 to=1 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=58
+    58 @cut from=0 to=2 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=58
+    59 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=3 at=59
+    59 @write replica=0 kind=append view=0 op=3 at=61
+    59 @cut from=0 to=1 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=59
+    59 @cut from=0 to=2 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=59
+    61 @durable replica=0 kind=append view=0 op=3
+    61 @commit replica=0 op=3 checksum=e2a4014643e9180f client=0 request=3 view=0 transfer=3>1:27 result=ok
+    61  0   / ...    0V   3/__3C   0LV   3Wo  0W!
+    61 @send from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=63
+    63 @recv from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=63
+    66 @cut from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=66
+    66 @cut from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=66
+    74 @cut from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=74
+    74 @cut from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=74
+    78  1 v / .v.    1V   0/__1C   0LV   1Wo  0W!
+    78 @cut from=1 to=0 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=78
+    78 @send from=1 to=2 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=80
+    78 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=4 at=80
+    80 @recv from=1 to=2 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=80
+    80  2 v \ .vv    1V   0/__1C   0LV   1Wo  0W!
+    80 @cut from=2 to=0 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=80
+    80 @send from=2 to=1 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=83
+    80 @write replica=2 kind=view view=1 op=0 at=84
+    80 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=4 at=80
+    80 @write replica=0 kind=append view=0 op=4 at=83
+    80 @cut from=0 to=1 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=80
+    80 @cut from=0 to=2 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=80
+    82 @cut from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=82
+    82 @cut from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=82
+    83 @recv from=2 to=1 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=83
+    83 @write replica=1 kind=view view=1 op=0 at=86
+    83 @durable replica=0 kind=append view=0 op=4
+    83 @commit replica=0 op=4 checksum=d3190f4f77501faf client=0 request=4 view=0 transfer=0>3:7 result=ok
+    83  0   / .vv    0V   4/__4C   0LV   4Wo  0W!
+    83 @send from=0 to=3 cmd=reply view=0 op=4 commit=0 client=0 request=4 at=86
+    84 @durable replica=2 kind=view view=1 op=0
+    84 @lost from=2 to=1 cmd=do_view_change view=1 op=1 commit=0 client=0 request=0 at=84
+    86 @recv from=0 to=3 cmd=reply view=0 op=4 commit=0 client=0 request=4 at=86
+    86 @durable replica=1 kind=view view=1 op=0
+    87 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=89
+    89 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=89
+    89 @write replica=0 kind=append view=0 op=5 at=92
+    89 @cut from=0 to=1 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=89
+    89 @cut from=0 to=2 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=89
+    90 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=90
+    90 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=90
+    92 @durable replica=0 kind=append view=0 op=5
+    92 @commit replica=0 op=5 checksum=b6a1d86adb8cb888 client=0 request=5 view=0 transfer=3>1:31 result=ok
+    92  0   / .vv    0V   5/__5C   0LV   5Wo  0W!
+    92 @send from=0 to=3 cmd=reply view=0 op=5 commit=0 client=0 request=5 at=94
+    94 @recv from=0 to=3 cmd=reply view=0 op=5 commit=0 client=0 request=5 at=94
+    98 @cut from=0 to=1 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=98
+    98 @cut from=0 to=2 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=98
+   106 @cut from=0 to=1 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=106
+   106 @cut from=0 to=2 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=106
+   111 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=6 at=114
+   114 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=6 at=114
+   114 @write replica=0 kind=append view=0 op=6 at=118
+   114 @cut from=0 to=1 cmd=prepare view=0 op=6 commit=5 client=0 request=6 at=114
+   114 @cut from=0 to=2 cmd=prepare view=0 op=6 commit=5 client=0 request=6 at=114
+   114 @cut from=0 to=1 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=114
+   114 @cut from=0 to=2 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=114
+   116  0 ! # #vv    0V   5/__6C   0LV   5Wo  1W!
+   147  2 v / #vv    2V   0/__1C   0LV   1Wo  0W!
+   147 @cut from=2 to=0 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=147
+   147 @send from=2 to=1 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=150
+   150 @recv from=2 to=1 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=150
+   150  1 v \ #vv    2V   0/__1C   0LV   1Wo  0W!
+   150 @cut from=1 to=0 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=150
+   150 @send from=1 to=2 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=153
+   150 @send from=1 to=2 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=153
+   150 @write replica=1 kind=view view=2 op=0 at=152
+   151 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=6 at=154
+   152 @durable replica=1 kind=view view=2 op=0
+   152 @send from=1 to=2 cmd=do_view_change view=2 op=1 commit=0 client=0 request=0 at=155
+   152 @send from=1 to=2 cmd=do_view_change view=2 op=1 commit=0 client=0 request=0 at=155
+   153 @recv from=1 to=2 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=153
+   153 @write replica=2 kind=view view=2 op=0 at=155
+   153 @recv from=1 to=2 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=153
+   154 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=6 at=154
+   155 @recv from=1 to=2 cmd=do_view_change view=2 op=1 commit=0 client=0 request=0 at=155
+   155 @recv from=1 to=2 cmd=do_view_change view=2 op=1 commit=0 client=0 request=0 at=155
+   155 @durable replica=2 kind=view view=2 op=0
+   155 @write replica=2 kind=install view=2 op=1 at=158
+   155  2 / / #v.    2V   0/__1C   2LV   1Wo  1W!
+   155 @cut from=2 to=0 cmd=start_view view=2 op=1 commit=0 client=0 request=0 at=155
+   155 @send from=2 to=1 cmd=start_view view=2 op=1 commit=0 client=0 request=0 at=158
+   158 @recv from=2 to=1 cmd=start_view view=2 op=1 commit=0 client=0 request=0 at=158
+   158 @write replica=1 kind=install view=2 op=1 at=162
+   158  1 > \ #..    2V   0/__1C   2LV   1Wo  1W!
+   158 @durable replica=2 kind=install view=2 op=1
+   158 @commit replica=2 op=1 checksum=135a3546a0191492 client=0 request=1 view=0 transfer=0>3:38 result=ok
+   158  2   / #..    2V   1/__1C   2LV   1Wo  0W!
+   158 @send from=2 to=3 cmd=reply view=2 op=1 commit=0 client=0 request=1 at=161
+   158 @send from=2 to=3 cmd=reply view=2 op=1 commit=0 client=0 request=1 at=161
+   161 @recv from=2 to=3 cmd=reply view=2 op=1 commit=0 client=0 request=1 at=161
+   161 @recv from=2 to=3 cmd=reply view=2 op=1 commit=0 client=0 request=1 at=161
+   162 @durable replica=1 kind=install view=2 op=1
+   162 @send from=1 to=2 cmd=prepare_ok view=2 op=1 commit=0 client=0 request=0 at=164
+   162 @cut from=2 to=0 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=162
+   162 @send from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=165
+   164 @recv from=1 to=2 cmd=prepare_ok view=2 op=1 commit=0 client=0 request=0 at=164
+   165 @recv from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=165
+   165 @commit replica=1 op=1 checksum=135a3546a0191492 client=0 request=1 view=0 transfer=0>3:38 result=ok
+   165  1   \ #..    2V   1/__1C   2LV   1Wo  0W!
+   170 @cut from=2 to=0 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=170
+   170 @send from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=173
+   173 @recv from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=173
+   178 @cut from=2 to=0 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=178
+   178 @send from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=180
+   180 @recv from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=180
+   186 @cut from=2 to=0 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=186
+   186 @send from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=188
+   188 @recv from=2 to=1 cmd=commit view=2 op=1 commit=1 client=0 request=0 at=188
+   191 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=6 at=193
+   193 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=6 at=193
+   193 @write replica=2 kind=append view=2 op=2 at=195
+   193 @cut from=2 to=0 cmd=prepare view=2 op=2 commit=1 client=0 request=6 at=193
+   193 @send from=2 to=1 cmd=prepare view=2 op=2 commit=1 client=0 request=6 at=196
+   193 @send from=2 to=1 cmd=prepare view=2 op=2 commit=1 client=0 request=6 at=195
+   194 @cut from=2 to=0 cmd=commit view=2 op=2 commit=1 client=0 request=0 at=194
+   194 @send from=2 to=1 cmd=commit view=2 op=2 commit=1 client=0 request=0 at=197
+   195 @recv from=2 to=1 cmd=prepare view=2 op=2 commit=1 client=0 request=6 at=195
+   195 @write replica=1 kind=append view=2 op=2 at=198
+   195 @durable replica=2 kind=append view=2 op=2
+   195 @commit replica=2 op=2 checksum=9e0d1a458b510814 client=0 request=6 view=2 transfer=2>1:76 result=ok
+   195 FAIL: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+   195  2   / #..    2V   2/__2C   2LV   2Wo  0W!
+   195 @send from=2 to=3 cmd=reply view=2 op=2 commit=0 client=0 request=6 at=197
+   195  0 = # #..    0V   5/__6C   0LV   5Wo  0W!
+   195  1 = \ #..    2V   1/__2C   2LV   1Wo  1W!
+   195  2 = / #..    2V   2/__2C   2LV   2Wo  0W!
+reason: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+seed=3 ticks=195 commits=5 trace=692aa09c1869a180 FAIL
+</script>
+<script type="text/plain" id="log-evfix" data-src="data/debug/events-fixed.txt">
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     1 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=1 at=3
+     3 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=1 at=3
+     3 @write replica=0 kind=append view=0 op=1 at=5
+     3 @send from=0 to=1 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=6
+     3 @send from=0 to=2 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=5
+     5 @recv from=0 to=2 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=5
+     5 @write replica=2 kind=append view=0 op=1 at=9
+     5 @durable replica=0 kind=append view=0 op=1
+     6 @recv from=0 to=1 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=6
+     6 @write replica=1 kind=append view=0 op=1 at=10
+     8  2 ! # ..#    0V   0/__1C   0LV   0Wo  1W!
+    10 @durable replica=1 kind=append view=0 op=1
+    10 @send from=1 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=12
+    12 @recv from=1 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=12
+    12 @commit replica=0 op=1 checksum=135a3546a0191492 client=0 request=1 view=0 transfer=0>3:38 result=ok
+    12  0   / ..#    0V   1/__1C   0LV   1Wo  0W!
+    12 @send from=0 to=3 cmd=reply view=0 op=1 commit=0 client=0 request=1 at=15
+    15 @recv from=0 to=3 cmd=reply view=0 op=1 commit=0 client=0 request=1 at=15
+    16 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=2 at=19
+    19 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=2 at=19
+    19 @write replica=0 kind=append view=0 op=2 at=21
+    19 @send from=0 to=1 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=21
+    19 @send from=0 to=2 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=22
+    21 @recv from=0 to=1 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=21
+    21 @write replica=1 kind=append view=0 op=2 at=23
+    21 @commit replica=1 op=1 checksum=135a3546a0191492 client=0 request=1 view=0 transfer=0>3:38 result=ok
+    21  1   \ ..#    0V   1/__2C   0LV   1Wo  1W!
+    21 @durable replica=0 kind=append view=0 op=2
+    22 @drop from=0 to=2 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=22
+    23 @durable replica=1 kind=append view=0 op=2
+    23 @send from=1 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=25
+    25 @recv from=1 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=25
+    25 @commit replica=0 op=2 checksum=336f80a91ca35d9c client=0 request=2 view=0 transfer=2>3:11 result=ok
+    25  0   / ..#    0V   2/__2C   0LV   2Wo  0W!
+    25 @send from=0 to=3 cmd=reply view=0 op=2 commit=0 client=0 request=2 at=28
+    28 @recv from=0 to=3 cmd=reply view=0 op=2 commit=0 client=0 request=2 at=28
+    47 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=3 at=50
+    50 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=3 at=50
+    50 @write replica=0 kind=append view=0 op=3 at=52
+    50 @send from=0 to=1 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=53
+    50 @send from=0 to=2 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=53
+    50 @send from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=52
+    50 @lost from=0 to=2 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=50
+    52 @recv from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=52
+    52 @send from=1 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=55
+    52 @commit replica=1 op=2 checksum=336f80a91ca35d9c client=0 request=2 view=0 transfer=2>3:11 result=ok
+    52  1   \ ..#    0V   2/__2C   0LV   2Wo  0W!
+    52 @durable replica=0 kind=append view=0 op=3
+    53 @recv from=0 to=1 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=53
+    53 @write replica=1 kind=append view=0 op=3 at=57
+    53 @drop from=0 to=2 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=53
+    55 @recv from=1 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=55
+    55 @send from=0 to=1 cmd=start_view view=0 op=3 commit=2 client=0 request=0 at=57
+    57 @recv from=0 to=1 cmd=start_view view=0 op=3 commit=2 client=0 request=0 at=57
+    57 @durable replica=1 kind=append view=0 op=3
+    57 @send from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=60
+    58 @send from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=61
+    58 @send from=0 to=2 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=61
+    60 @recv from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=60
+    60 @commit replica=0 op=3 checksum=ffd6e7d34076b2dc client=0 request=3 view=0 transfer=3>1:76 result=ok
+    60  0   / ..#    0V   3/__3C   0LV   3Wo  0W!
+    60 @send from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=62
+    61 @recv from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=61
+    61 @lost from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=61
+    61 @drop from=0 to=2 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=61
+    62 @recv from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=62
+    66 @send from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=69
+    66 @send from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=69
+    66 @send from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=68
+    68 @drop from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=68
+    69 @recv from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=69
+    69 @commit replica=1 op=3 checksum=ffd6e7d34076b2dc client=0 request=3 view=0 transfer=3>1:76 result=ok
+    69  1   \ ..#    0V   3/__3C   0LV   3Wo  0W!
+    69 @drop from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=69
+    73 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=4 at=75
+    74 @send from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=76
+    74 @send from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=76
+    75 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=4 at=75
+    75 @write replica=0 kind=append view=0 op=4 at=79
+    75 @send from=0 to=1 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=78
+    75 @send from=0 to=1 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=78
+    75 @send from=0 to=2 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=78
+    76 @recv from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=76
+    76 @drop from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=76
+    78 @recv from=0 to=1 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=78
+    78 @write replica=1 kind=append view=0 op=4 at=81
+    78 @recv from=0 to=1 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=78
+    78 @drop from=0 to=2 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=78
+    79 @durable replica=0 kind=append view=0 op=4
+    81 @durable replica=1 kind=append view=0 op=4
+    81 @send from=1 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=83
+    82 @send from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=85
+    82 @send from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=84
+    83 @recv from=1 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=83
+    83 @commit replica=0 op=4 checksum=2cfa87c2c14a903a client=0 request=4 view=0 transfer=2>1:19 result=ok
+    83  0   / ..#    0V   4/__4C   0LV   4Wo  0W!
+    83 @send from=0 to=3 cmd=reply view=0 op=4 commit=0 client=0 request=4 at=86
+    84 @drop from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=84
+    85 @recv from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=85
+    85 @send from=1 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=87
+    86 @recv from=0 to=3 cmd=reply view=0 op=4 commit=0 client=0 request=4 at=86
+    87 @recv from=1 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=87
+    90 @send from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=92
+    90 @send from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=93
+    90    partition side=00001 symmetric
+    92 @recv from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=92
+    92 @commit replica=1 op=4 checksum=2cfa87c2c14a903a client=0 request=4 view=0 transfer=2>1:19 result=ok
+    92  1   \ ..#    0V   4/__4C   0LV   4Wo  0W!
+    93 @drop from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=93
+    98 @cut from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=98
+    98 @cut from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=98
+   106 @cut from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=106
+   106 @cut from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=106
+   109 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=111
+   111 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=111
+   111 @write replica=0 kind=append view=0 op=5 at=113
+   111 @cut from=0 to=1 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=111
+   111 @cut from=0 to=2 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=111
+   113 @durable replica=0 kind=append view=0 op=5
+   114 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=114
+   114 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=114
+   122 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=122
+   122 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=122
+   130 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=130
+   130 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=130
+   138 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=138
+   138 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=138
+   146 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=146
+   146 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=146
+   147  1 v / .v#    1V   4/__4C   0LV   4Wo  0W!
+   147 @cut from=1 to=0 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=147
+   147 @send from=1 to=2 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=149
+   149 @drop from=1 to=2 cmd=start_view_change view=1 op=0 commit=0 client=0 request=0 at=149
+   149 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=151
+   151 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=151
+   154 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=154
+   154 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=154
+   162 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=162
+   162 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=162
+   170 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=170
+   170 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=170
+   178 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=178
+   178 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=178
+   186 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=186
+   186 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=186
+   189 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=192
+   192 @drop from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=192
+   194 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=194
+   194 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=194
+   202 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=202
+   202 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=202
+   210 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=210
+   210 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=210
+   218 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=218
+   218 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=218
+   226 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=226
+   226 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=226
+   229 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=232
+   232 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=232
+   234 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=234
+   234 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=234
+   242 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=242
+   242 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=242
+   247  1 v \ .v#    2V   4/__4C   0LV   4Wo  0W!
+   247 @cut from=1 to=0 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=247
+   247 @send from=1 to=2 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=250
+   250 @drop from=1 to=2 cmd=start_view_change view=2 op=0 commit=0 client=0 request=0 at=250
+   250 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=250
+   250 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=250
+   258 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=258
+   258 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=258
+   266 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=266
+   266 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=266
+   269 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=271
+   269 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=271
+   271 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=271
+   271 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=271
+   274 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=274
+   274 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=274
+   282 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=282
+   282 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=282
+   290 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=290
+   290 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=290
+   298 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=298
+   298 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=298
+   306 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=306
+   306 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=306
+   309 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=311
+   311 @drop from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=311
+   314 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=314
+   314 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=314
+   314  1 v \ .v#    3V   4/__4C   0LV   4Wo  0W!
+   314 @cut from=1 to=0 cmd=start_view_change view=3 op=0 commit=0 client=0 request=0 at=314
+   314 @send from=1 to=2 cmd=start_view_change view=3 op=0 commit=0 client=0 request=0 at=316
+   316 @drop from=1 to=2 cmd=start_view_change view=3 op=0 commit=0 client=0 request=0 at=316
+   322 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=322
+   322 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=322
+   330 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=330
+   330 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=330
+   338 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=338
+   338 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=338
+   346 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=346
+   346 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=346
+   349 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=352
+   352 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=352
+   354 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=354
+   354 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=354
+   362 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=362
+   362 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=362
+   370 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=370
+   370 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=370
+   375  1 v / .v#    4V   4/__4C   0LV   4Wo  0W!
+   375 @cut from=1 to=0 cmd=start_view_change view=4 op=0 commit=0 client=0 request=0 at=375
+   375 @lost from=1 to=2 cmd=start_view_change view=4 op=0 commit=0 client=0 request=0 at=375
+   378 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=378
+   378 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=378
+   386 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=386
+   386 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=386
+   389 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=391
+   391 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=391
+   394 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=394
+   394 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=394
+   402 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=402
+   402 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=402
+   410 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=410
+   410 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=410
+   418 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=418
+   418 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=418
+   426 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=426
+   426 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=426
+   429 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=432
+   432 @drop from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=432
+   434 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=434
+   434 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=434
+   442 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=442
+   442 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=442
+   450 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=450
+   450 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=450
+   456  2 ^ \ .v.    0V   0/__0C   0LV   0Wo  0W!
+   458 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=458
+   458 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=458
+   466 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=466
+   466 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=466
+   469 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=472
+   472 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=472
+   474 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=474
+   474 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=474
+   478  1 v \ .v.    5V   4/__4C   0LV   4Wo  0W!
+   478 @cut from=1 to=0 cmd=start_view_change view=5 op=0 commit=0 client=0 request=0 at=478
+   478 @send from=1 to=2 cmd=start_view_change view=5 op=0 commit=0 client=0 request=0 at=481
+   481 @recv from=1 to=2 cmd=start_view_change view=5 op=0 commit=0 client=0 request=0 at=481
+   481  2 v / .vv    5V   0/__0C   0LV   0Wo  0W!
+   481 @cut from=2 to=0 cmd=start_view_change view=5 op=0 commit=0 client=0 request=0 at=481
+   481 @send from=2 to=1 cmd=start_view_change view=5 op=0 commit=0 client=0 request=0 at=484
+   481 @write replica=2 kind=view view=5 op=0 at=484
+   482 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=482
+   482 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=482
+   484 @recv from=2 to=1 cmd=start_view_change view=5 op=0 commit=0 client=0 request=0 at=484
+   484 @write replica=1 kind=view view=5 op=0 at=487
+   484 @durable replica=2 kind=view view=5 op=0
+   487 @durable replica=1 kind=view view=5 op=0
+   487 @send from=1 to=2 cmd=do_view_change view=5 op=4 commit=4 client=0 request=0 at=490
+   490 @recv from=1 to=2 cmd=do_view_change view=5 op=4 commit=4 client=0 request=0 at=490
+   490 @write replica=2 kind=install view=5 op=4 at=492
+   490  2 / / .v.    5V   0/__4C   5LV   0Wo  1W!
+   490 @cut from=2 to=0 cmd=start_view view=5 op=4 commit=4 client=0 request=0 at=490
+   490 @send from=2 to=1 cmd=start_view view=5 op=4 commit=4 client=0 request=0 at=492
+   490 @commit replica=2 op=1 checksum=135a3546a0191492 client=0 request=1 view=0 transfer=0>3:38 result=ok
+   490  2   / .v.    5V   1/__4C   5LV   0Wo  1W!
+   490 @lost from=2 to=3 cmd=reply view=5 op=1 commit=0 client=0 request=1 at=490
+   490 @commit replica=2 op=2 checksum=336f80a91ca35d9c client=0 request=2 view=0 transfer=2>3:11 result=ok
+   490  2   / .v.    5V   2/__4C   5LV   0Wo  1W!
+   490 @send from=2 to=3 cmd=reply view=5 op=2 commit=0 client=0 request=2 at=493
+   490 @commit replica=2 op=3 checksum=ffd6e7d34076b2dc client=0 request=3 view=0 transfer=3>1:76 result=ok
+   490  2   / .v.    5V   3/__4C   5LV   0Wo  1W!
+   490 @send from=2 to=3 cmd=reply view=5 op=3 commit=0 client=0 request=3 at=492
+   490 @commit replica=2 op=4 checksum=2cfa87c2c14a903a client=0 request=4 view=0 transfer=2>1:19 result=ok
+   490  2   / .v.    5V   4/__4C   5LV   0Wo  1W!
+   490 @lost from=2 to=3 cmd=reply view=5 op=4 commit=0 client=0 request=4 at=490
+   490 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=490
+   490 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=490
+   492 @recv from=2 to=1 cmd=start_view view=5 op=4 commit=4 client=0 request=0 at=492
+   492 @write replica=1 kind=install view=5 op=4 at=495
+   492  1 > \ ...    5V   4/__4C   5LV   4Wo  1W!
+   492 @recv from=2 to=3 cmd=reply view=5 op=3 commit=0 client=0 request=3 at=492
+   492 @durable replica=2 kind=install view=5 op=4
+   493 @recv from=2 to=3 cmd=reply view=5 op=2 commit=0 client=0 request=2 at=493
+   495 @durable replica=1 kind=install view=5 op=4
+   495 @send from=1 to=2 cmd=prepare_ok view=5 op=4 commit=0 client=0 request=0 at=498
+   497 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=497
+   497 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=500
+   497 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=500
+   498 @recv from=1 to=2 cmd=prepare_ok view=5 op=4 commit=0 client=0 request=0 at=498
+   498 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=498
+   498 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=498
+   500 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=500
+   500 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=500
+   505 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=505
+   505 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=507
+   506 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=506
+   506 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=506
+   507 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=507
+   509 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=512
+   512 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=5 at=512
+   513 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=513
+   513 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=515
+   514 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=514
+   514 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=514
+   515 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=515
+   521 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=521
+   521 @lost from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=521
+   522 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=522
+   522 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=522
+   529 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=529
+   529 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=532
+   530 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=530
+   530 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=530
+   532 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=532
+   537 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=537
+   537 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=540
+   538 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=538
+   538 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=538
+   540 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=540
+   545 @cut from=2 to=0 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=545
+   545 @send from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=548
+   546 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=546
+   546 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=546
+   548 @recv from=2 to=1 cmd=commit view=5 op=4 commit=4 client=0 request=0 at=548
+   549 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=552
+   552 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=5 at=552
+   552 @write replica=2 kind=append view=5 op=5 at=554
+   552 @cut from=2 to=0 cmd=prepare view=5 op=5 commit=4 client=0 request=5 at=552
+   552 @send from=2 to=1 cmd=prepare view=5 op=5 commit=4 client=0 request=5 at=554
+   553 @cut from=2 to=0 cmd=commit view=5 op=5 commit=4 client=0 request=0 at=553
+   553 @lost from=2 to=1 cmd=commit view=5 op=5 commit=4 client=0 request=0 at=553
+   554 @recv from=2 to=1 cmd=prepare view=5 op=5 commit=4 client=0 request=5 at=554
+   554 @write replica=1 kind=append view=5 op=5 at=558
+   554 @durable replica=2 kind=append view=5 op=5
+   554 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=554
+   554 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=554
+   558 @durable replica=1 kind=append view=5 op=5
+   558 @send from=1 to=2 cmd=prepare_ok view=5 op=5 commit=0 client=0 request=0 at=560
+   560 @recv from=1 to=2 cmd=prepare_ok view=5 op=5 commit=0 client=0 request=0 at=560
+   560 @commit replica=2 op=5 checksum=bc7761bca07858ac client=0 request=5 view=5 transfer=3>2:47 result=ok
+   560  2   / ...    5V   5/__5C   5LV   5Wo  0W!
+   560 @send from=2 to=3 cmd=reply view=5 op=5 commit=0 client=0 request=5 at=563
+   561 @cut from=2 to=0 cmd=commit view=5 op=5 commit=5 client=0 request=0 at=561
+   561 @send from=2 to=1 cmd=commit view=5 op=5 commit=5 client=0 request=0 at=564
+   562 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=562
+   562 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=562
+   563 @recv from=2 to=3 cmd=reply view=5 op=5 commit=0 client=0 request=5 at=563
+   563 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=6 at=565
+   564 @recv from=2 to=1 cmd=commit view=5 op=5 commit=5 client=0 request=0 at=564
+   564 @commit replica=1 op=5 checksum=bc7761bca07858ac client=0 request=5 view=5 transfer=3>2:47 result=ok
+   564  1   \ ...    5V   5/__5C   5LV   5Wo  0W!
+   565 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=6 at=565
+   565 @write replica=2 kind=append view=5 op=6 at=568
+   565 @cut from=2 to=0 cmd=prepare view=5 op=6 commit=5 client=0 request=6 at=565
+   565 @send from=2 to=1 cmd=prepare view=5 op=6 commit=5 client=0 request=6 at=567
+   567 @recv from=2 to=1 cmd=prepare view=5 op=6 commit=5 client=0 request=6 at=567
+   567 @write replica=1 kind=append view=5 op=6 at=570
+   568 @durable replica=2 kind=append view=5 op=6
+   569 @cut from=2 to=0 cmd=commit view=5 op=6 commit=5 client=0 request=0 at=569
+   569 @send from=2 to=1 cmd=commit view=5 op=6 commit=5 client=0 request=0 at=572
+   570 @durable replica=1 kind=append view=5 op=6
+   570 @send from=1 to=2 cmd=prepare_ok view=5 op=6 commit=0 client=0 request=0 at=573
+   570 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=570
+   570 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=570
+   572 @recv from=2 to=1 cmd=commit view=5 op=6 commit=5 client=0 request=0 at=572
+   572 @send from=1 to=2 cmd=prepare_ok view=5 op=6 commit=0 client=0 request=0 at=575
+   573 @recv from=1 to=2 cmd=prepare_ok view=5 op=6 commit=0 client=0 request=0 at=573
+   573 @commit replica=2 op=6 checksum=205de74aad7d0ce5 client=0 request=6 view=5 transfer=0>1:74 result=insufficient_funds
+   573  2   / ...    5V   6/__6C   5LV   6Wo  0W!
+   573 @send from=2 to=3 cmd=reply view=5 op=6 commit=0 client=0 request=6 at=576
+   575 @recv from=1 to=2 cmd=prepare_ok view=5 op=6 commit=0 client=0 request=0 at=575
+   576 @recv from=2 to=3 cmd=reply view=5 op=6 commit=0 client=0 request=6 at=576
+   577 @cut from=2 to=0 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=577
+   577 @send from=2 to=1 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=579
+   578 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=578
+   578 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=578
+   579 @recv from=2 to=1 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=579
+   579 @commit replica=1 op=6 checksum=205de74aad7d0ce5 client=0 request=6 view=5 transfer=0>1:74 result=insufficient_funds
+   579  1   \ ...    5V   6/__6C   5LV   6Wo  0W!
+   585 @cut from=2 to=0 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=585
+   585 @send from=2 to=1 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=588
+   586 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=586
+   586 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=586
+   588 @recv from=2 to=1 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=588
+   593 @cut from=2 to=0 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=593
+   593 @send from=2 to=1 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=596
+   593 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=7 at=596
+   594 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=594
+   594 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=594
+   596 @recv from=2 to=1 cmd=commit view=5 op=6 commit=6 client=0 request=0 at=596
+   596 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=7 at=596
+   596 @write replica=2 kind=append view=5 op=7 at=599
+   596 @cut from=2 to=0 cmd=prepare view=5 op=7 commit=6 client=0 request=7 at=596
+   596 @send from=2 to=1 cmd=prepare view=5 op=7 commit=6 client=0 request=7 at=598
+   598 @recv from=2 to=1 cmd=prepare view=5 op=7 commit=6 client=0 request=7 at=598
+   598 @write replica=1 kind=append view=5 op=7 at=602
+   599 @durable replica=2 kind=append view=5 op=7
+   601 @cut from=2 to=0 cmd=commit view=5 op=7 commit=6 client=0 request=0 at=601
+   601 @send from=2 to=1 cmd=commit view=5 op=7 commit=6 client=0 request=0 at=604
+   602 @durable replica=1 kind=append view=5 op=7
+   602 @send from=1 to=2 cmd=prepare_ok view=5 op=7 commit=0 client=0 request=0 at=604
+   602 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=602
+   602 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=602
+   604 @recv from=2 to=1 cmd=commit view=5 op=7 commit=6 client=0 request=0 at=604
+   604 @lost from=1 to=2 cmd=prepare_ok view=5 op=7 commit=0 client=0 request=0 at=604
+   604 @recv from=1 to=2 cmd=prepare_ok view=5 op=7 commit=0 client=0 request=0 at=604
+   604 @commit replica=2 op=7 checksum=e082d7a05c482073 client=0 request=7 view=5 transfer=3>0:6 result=ok
+   604  2   / ...    5V   7/__7C   5LV   7Wo  0W!
+   604 @send from=2 to=3 cmd=reply view=5 op=7 commit=0 client=0 request=7 at=607
+   607 @recv from=2 to=3 cmd=reply view=5 op=7 commit=0 client=0 request=7 at=607
+   609 @cut from=2 to=0 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=609
+   609 @send from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=612
+   610 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=610
+   610 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=610
+   612 @recv from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=612
+   612 @commit replica=1 op=7 checksum=e082d7a05c482073 client=0 request=7 view=5 transfer=3>0:6 result=ok
+   612  1   \ ...    5V   7/__7C   5LV   7Wo  0W!
+   617 @cut from=2 to=0 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=617
+   617 @lost from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=617
+   618 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=618
+   618 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=618
+   625 @cut from=2 to=0 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=625
+   625 @send from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=628
+   626 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=626
+   626 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=626
+   628 @recv from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=628
+   632 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=8 at=635
+   633 @cut from=2 to=0 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=633
+   633 @send from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=636
+   634 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=634
+   634 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=634
+   635 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=8 at=635
+   635 @write replica=2 kind=append view=5 op=8 at=637
+   635 @cut from=2 to=0 cmd=prepare view=5 op=8 commit=7 client=0 request=8 at=635
+   635 @send from=2 to=1 cmd=prepare view=5 op=8 commit=7 client=0 request=8 at=637
+   636 @recv from=2 to=1 cmd=commit view=5 op=7 commit=7 client=0 request=0 at=636
+   637 @recv from=2 to=1 cmd=prepare view=5 op=8 commit=7 client=0 request=8 at=637
+   637 @write replica=1 kind=append view=5 op=8 at=640
+   637 @durable replica=2 kind=append view=5 op=8
+   640 @durable replica=1 kind=append view=5 op=8
+   640 @send from=1 to=2 cmd=prepare_ok view=5 op=8 commit=0 client=0 request=0 at=643
+   641 @cut from=2 to=0 cmd=commit view=5 op=8 commit=7 client=0 request=0 at=641
+   641 @send from=2 to=1 cmd=commit view=5 op=8 commit=7 client=0 request=0 at=644
+   641 @send from=2 to=1 cmd=commit view=5 op=8 commit=7 client=0 request=0 at=644
+   642 @cut from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=642
+   642 @cut from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=642
+   643 @recv from=1 to=2 cmd=prepare_ok view=5 op=8 commit=0 client=0 request=0 at=643
+   643 @commit replica=2 op=8 checksum=ae9d58b873e37eb7 client=0 request=8 view=5 transfer=3>2:65 result=insufficient_funds
+   643  2   / ...    5V   8/__8C   5LV   8Wo  0W!
+   643 @send from=2 to=3 cmd=reply view=5 op=8 commit=0 client=0 request=8 at=645
+   644 @recv from=2 to=1 cmd=commit view=5 op=8 commit=7 client=0 request=0 at=644
+   644 @send from=1 to=2 cmd=prepare_ok view=5 op=8 commit=0 client=0 request=0 at=647
+   644 @recv from=2 to=1 cmd=commit view=5 op=8 commit=7 client=0 request=0 at=644
+   644 @send from=1 to=2 cmd=prepare_ok view=5 op=8 commit=0 client=0 request=0 at=646
+   645 @recv from=2 to=3 cmd=reply view=5 op=8 commit=0 client=0 request=8 at=645
+   645    liveness mode: core=00111
+   646 @recv from=1 to=2 cmd=prepare_ok view=5 op=8 commit=0 client=0 request=0 at=646
+   647 @recv from=1 to=2 cmd=prepare_ok view=5 op=8 commit=0 client=0 request=0 at=647
+   649 @send from=2 to=0 cmd=commit view=5 op=8 commit=8 client=0 request=0 at=651
+   649 @send from=2 to=1 cmd=commit view=5 op=8 commit=8 client=0 request=0 at=652
+   650 @send from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=652
+   650 @lost from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=650
+   651 @recv from=2 to=0 cmd=commit view=5 op=8 commit=8 client=0 request=0 at=651
+   651 @send from=0 to=2 cmd=get_view view=5 op=0 commit=0 client=0 request=0 at=653
+   652 @recv from=2 to=1 cmd=commit view=5 op=8 commit=8 client=0 request=0 at=652
+   652 @commit replica=1 op=8 checksum=ae9d58b873e37eb7 client=0 request=8 view=5 transfer=3>2:65 result=insufficient_funds
+   652  1   \ ...    5V   8/__8C   5LV   8Wo  0W!
+   652 @recv from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=652
+   653 @recv from=0 to=2 cmd=get_view view=5 op=0 commit=0 client=0 request=0 at=653
+   653 @send from=2 to=0 cmd=start_view view=5 op=8 commit=8 client=0 request=0 at=656
+   656 @recv from=2 to=0 cmd=start_view view=5 op=8 commit=8 client=0 request=0 at=656
+   656 @write replica=0 kind=install view=5 op=8 at=658
+   656  0 > \ ...    5V   4/__8C   5LV   5Wo  1W!
+   656 @commit replica=0 op=5 checksum=bc7761bca07858ac client=0 request=5 view=5 transfer=3>2:47 result=ok
+   656  0   \ ...    5V   5/__8C   5LV   5Wo  1W!
+   656 @commit replica=0 op=6 checksum=205de74aad7d0ce5 client=0 request=6 view=5 transfer=0>1:74 result=insufficient_funds
+   656  0   \ ...    5V   6/__8C   5LV   5Wo  1W!
+   656 @commit replica=0 op=7 checksum=e082d7a05c482073 client=0 request=7 view=5 transfer=3>0:6 result=ok
+   656  0   \ ...    5V   7/__8C   5LV   5Wo  1W!
+   656 @commit replica=0 op=8 checksum=ae9d58b873e37eb7 client=0 request=8 view=5 transfer=3>2:65 result=insufficient_funds
+   656  0   \ ...    5V   8/__8C   5LV   5Wo  1W!
+   656  0 = \ ...    5V   8/__8C   5LV   5Wo  1W!
+   656  1 = \ ...    5V   8/__8C   5LV   8Wo  0W!
+   656  2 = / ...    5V   8/__8C   5LV   8Wo  0W!
+seed=3 ticks=656 commits=8 trace=0decab59c35e26b8 PASS
+</script>
+<script type="text/plain" id="log-run3fix" data-src="data/debug/run3-fixed.txt">
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     8  2 ! # ..#    0V   0/__1C   0LV   0Wo  1W!
+    12  0   / ..#    0V   1/__1C   0LV   1Wo  0W!
+    21  1   \ ..#    0V   1/__2C   0LV   1Wo  1W!
+    25  0   / ..#    0V   2/__2C   0LV   2Wo  0W!
+    52  1   \ ..#    0V   2/__2C   0LV   2Wo  0W!
+    60  0   / ..#    0V   3/__3C   0LV   3Wo  0W!
+    69  1   \ ..#    0V   3/__3C   0LV   3Wo  0W!
+    83  0   / ..#    0V   4/__4C   0LV   4Wo  0W!
+    90    partition side=00001 symmetric
+    92  1   \ ..#    0V   4/__4C   0LV   4Wo  0W!
+   147  1 v / .v#    1V   4/__4C   0LV   4Wo  0W!
+   247  1 v \ .v#    2V   4/__4C   0LV   4Wo  0W!
+   314  1 v \ .v#    3V   4/__4C   0LV   4Wo  0W!
+   375  1 v / .v#    4V   4/__4C   0LV   4Wo  0W!
+   456  2 ^ \ .v.    0V   0/__0C   0LV   0Wo  0W!
+   478  1 v \ .v.    5V   4/__4C   0LV   4Wo  0W!
+   481  2 v / .vv    5V   0/__0C   0LV   0Wo  0W!
+   490  2 / / .v.    5V   0/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   1/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   2/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   3/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   4/__4C   5LV   0Wo  1W!
+   492  1 > \ ...    5V   4/__4C   5LV   4Wo  1W!
+   560  2   / ...    5V   5/__5C   5LV   5Wo  0W!
+   564  1   \ ...    5V   5/__5C   5LV   5Wo  0W!
+   573  2   / ...    5V   6/__6C   5LV   6Wo  0W!
+   579  1   \ ...    5V   6/__6C   5LV   6Wo  0W!
+   604  2   / ...    5V   7/__7C   5LV   7Wo  0W!
+   612  1   \ ...    5V   7/__7C   5LV   7Wo  0W!
+   643  2   / ...    5V   8/__8C   5LV   8Wo  0W!
+   645    liveness mode: core=00111
+   652  1   \ ...    5V   8/__8C   5LV   8Wo  0W!
+   656  0 > \ ...    5V   4/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   5/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   6/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   7/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   8/__8C   5LV   5Wo  1W!
+   656  0 = \ ...    5V   8/__8C   5LV   5Wo  1W!
+   656  1 = \ ...    5V   8/__8C   5LV   8Wo  0W!
+   656  2 = / ...    5V   8/__8C   5LV   8Wo  0W!
+seed=3 ticks=656 commits=8 trace=0decab59c35e26b8 PASS
+</script>
+<script type="text/plain" id="log-sweepfix" data-src="data/debug/sweep-fixed.txt">
+PASS: 20000 seeds
+
+real	0m4.290s
+user	0m3.715s
+sys	0m0.558s
+</script>
+<script type="text/plain" id="log-seedsbug" data-src="data/debug/seeds-bug.tsv">
+seed=0 ticks=577 commits=15 trace=1079908f7559b330 PASS	
+seed=1 ticks=393 commits=24 trace=0341e50ce40bddc2 PASS	
+seed=2 ticks=741 commits=40 trace=79f6edf2e455b10b PASS	
+reason: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)	seed=3 ticks=195 commits=5 trace=692aa09c1869a180 FAIL	
+seed=4 ticks=168 commits=10 trace=d53507fdf679fdf3 PASS	
+seed=5 ticks=547 commits=36 trace=45c92b748ea92be2 PASS	
+reason: divergence: replica 1 committed op=7 checksum=5579dafb2f41bf38 (client=0 request=5 view=1) but canonical op=7 is checksum=968a9b7031cd8948 (client=1 request=4)	seed=6 ticks=141 commits=9 trace=8ce83e5ec092e0e7 FAIL	
+seed=7 ticks=548 commits=12 trace=96bec1b6aa5009f4 PASS	
+reason: divergence: replica 1 committed op=15 checksum=5eefb12d1b89a6f9 (client=1 request=7 view=1) but canonical op=15 is checksum=2a5fdd81209ca9ce (client=1 request=4)	seed=8 ticks=431 commits=25 trace=d736807f1e3e0bea FAIL	
+seed=9 ticks=406 commits=4 trace=2da584978db18387 PASS	
+seed=10 ticks=1806 commits=36 trace=fc225d5347d2300f PASS	
+seed=11 ticks=1043 commits=45 trace=f75576195027608e PASS	
+seed=12 ticks=362 commits=20 trace=b6dac5f04dd85d2a PASS	
+reason: divergence: replica 2 committed op=3 checksum=bb18728cba283077 (client=0 request=2 view=2) but canonical op=3 is checksum=1cd381cae9b758ca (client=2 request=1)	seed=13 ticks=225 commits=4 trace=5238d809516de97c FAIL	
+reason: divergence: replica 1 committed op=27 checksum=7fdc04ecb3166b15 (client=0 request=6 view=1) but canonical op=27 is checksum=ce29e0a634a18266 (client=3 request=8)	seed=14 ticks=266 commits=31 trace=45c1c13030d2a1c6 FAIL	
+seed=15 ticks=406 commits=10 trace=d425e9d917e1e78f PASS	
+reason: divergence: replica 1 committed op=26 checksum=9d5449f11f93403f (client=3 request=9 view=1) but canonical op=26 is checksum=5ec843fd8ee73cac (client=2 request=6)	seed=16 ticks=377 commits=34 trace=20bb29aed7079174 FAIL	
+seed=17 ticks=614 commits=33 trace=dc4243a50424b1e2 PASS	
+seed=18 ticks=542 commits=15 trace=324ceac28f232f06 PASS	
+seed=19 ticks=283 commits=11 trace=1231b107636dcc6d PASS	
+seed=20 ticks=343 commits=26 trace=09ea53194bf19e6b PASS	
+seed=21 ticks=906 commits=14 trace=38f4aeface25876d PASS	
+seed=22 ticks=179 commits=12 trace=6c7a9260fdc38da5 PASS	
+seed=23 ticks=799 commits=14 trace=db7af29bfbf3a1f0 PASS	
+seed=24 ticks=220 commits=20 trace=c839fa229500f4d4 PASS	
+seed=25 ticks=307 commits=15 trace=b7d76f8bb7bbcadd PASS	
+seed=26 ticks=519 commits=5 trace=571ff32c2d845852 PASS	
+reason: divergence: replica 4 committed op=33 checksum=6a61819de725aa8c (client=3 request=10 view=4) but canonical op=33 is checksum=def6c9d7f715e3fd (client=2 request=10)	seed=27 ticks=637 commits=45 trace=646ef8701f601e9a FAIL	
+seed=28 ticks=465 commits=10 trace=6495cedee80aa04f PASS	
+seed=29 ticks=1272 commits=20 trace=2dc273b751023238 PASS	
+seed=30 ticks=497 commits=32 trace=f201ca9966ad3d55 PASS	
+seed=31 ticks=701 commits=36 trace=f8f8623a624af496 PASS	
+seed=32 ticks=1004 commits=48 trace=ca99890f5cabfbff PASS	
+reason: divergence: replica 2 committed op=22 checksum=baff92e9dc5e4535 (client=2 request=8 view=2) but canonical op=22 is checksum=bca148ae4089ef00 (client=2 request=6)	seed=33 ticks=743 commits=23 trace=d65c3b288d1bb38c FAIL	
+seed=34 ticks=1164 commits=13 trace=5692ba1c8b5865f8 PASS	
+seed=35 ticks=278 commits=20 trace=01c73548a3d38964 PASS	
+seed=36 ticks=356 commits=4 trace=eeda4fbc4e750569 PASS	
+seed=37 ticks=1195 commits=56 trace=c052ce5b3a72a3aa PASS	
+reason: divergence: replica 1 committed op=14 checksum=3bbafcd2198299fe (client=0 request=11 view=1) but canonical op=14 is checksum=595ce09b61265212 (client=0 request=10)	seed=38 ticks=344 commits=15 trace=cd95896d2ff73ca2 FAIL	
+seed=39 ticks=59 commits=4 trace=65636aea1f834df8 PASS	
+seed=40 ticks=1018 commits=28 trace=92fa4fafe0aafb3a PASS	
+seed=41 ticks=1418 commits=52 trace=640cb62373d1bedb PASS	
+seed=42 ticks=294 commits=12 trace=5601ab4cf8497299 PASS	
+seed=43 ticks=1615 commits=20 trace=6ef18e15fa96da88 PASS	
+seed=44 ticks=213 commits=16 trace=53b54834cf7a15f4 PASS	
+reason: divergence: replica 2 committed op=38 checksum=138b81beaa7ee250 (client=2 request=13 view=5) but canonical op=38 is checksum=feed88d2bfb35465 (client=1 request=13)	seed=45 ticks=1016 commits=38 trace=5bbc4d185bbc5d4b FAIL	
+reason: divergence: replica 1 committed op=34 checksum=9156927704345d15 (client=0 request=12 view=1) but canonical op=34 is checksum=4ae921414b710286 (client=0 request=11)	seed=46 ticks=530 commits=34 trace=07bb600a0524c3a9 FAIL	
+seed=47 ticks=501 commits=30 trace=df33f6fc9fc69feb PASS	
+seed=48 ticks=582 commits=48 trace=e2981ba8ca4c69a7 PASS	
+seed=49 ticks=77 commits=6 trace=81c339f3299d29ca PASS	
+seed=50 ticks=942 commits=12 trace=134b4ce3dd017534 PASS	
+seed=51 ticks=676 commits=15 trace=fa30b29d67a51b15 PASS	
+seed=52 ticks=341 commits=20 trace=1a1775efdabef909 PASS	
+seed=53 ticks=1317 commits=7 trace=0b12bff5994bc175 PASS	
+seed=54 ticks=362 commits=22 trace=28f2c0829e011a8c PASS	
+seed=55 ticks=1210 commits=40 trace=ab2c9ebe44207462 PASS	
+seed=56 ticks=104 commits=5 trace=ca610331feeacd8a PASS	
+seed=57 ticks=547 commits=33 trace=df24eb5cf4d87bdd PASS	
+seed=58 ticks=411 commits=14 trace=af68d9274d97f41a PASS	
+seed=59 ticks=580 commits=32 trace=fef0709997bb0c69 PASS	
+seed=60 ticks=646 commits=60 trace=f8dfb403a434f32c PASS	
+seed=61 ticks=150 commits=28 trace=d2bcf92348b54d74 PASS	
+seed=62 ticks=1555 commits=32 trace=5a05d0a91bee0c47 PASS	
+seed=63 ticks=460 commits=14 trace=069fd858bcd2f6f6 PASS	
+seed=64 ticks=311 commits=12 trace=50613d040c052309 PASS	
+seed=65 ticks=1143 commits=14 trace=088fe59881e36f6c PASS	
+seed=66 ticks=542 commits=13 trace=e9ea88e087f186e1 PASS	
+seed=67 ticks=1407 commits=60 trace=64dd55a69ff6f635 PASS	
+reason: divergence: replica 0 committed op=44 checksum=33fb39cf275700f3 (client=0 request=15 view=5) but canonical op=44 is checksum=921a85a61c2104da (client=1 request=15)	seed=68 ticks=1507 commits=44 trace=9a97f190f6ef842a FAIL	
+reason: divergence: replica 1 committed op=12 checksum=6556086d32833703 (client=0 request=13 view=11) but canonical op=12 is checksum=c3f4015b72924adb (client=0 request=12)	seed=69 ticks=2577 commits=12 trace=cf99a8221f566c0b FAIL	
+seed=70 ticks=855 commits=36 trace=f153036784b7c5a0 PASS	
+seed=71 ticks=232 commits=16 trace=13502f166b44a487 PASS	
+reason: divergence: replica 1 committed op=12 checksum=eb48c2879dd944ef (client=1 request=2 view=4) but canonical op=12 is checksum=c2e8c35fb4f1bda4 (client=1 request=1)	seed=72 ticks=550 commits=13 trace=754e28243cd3f302 FAIL	
+reason: divergence: replica 2 committed op=40 checksum=4bfabd449e6a0acc (client=3 request=9 view=7) but canonical op=40 is checksum=67712367319257d7 (client=0 request=13)	seed=73 ticks=1343 commits=46 trace=a0e42b8e4eacb83a FAIL	
+seed=74 ticks=441 commits=10 trace=66bac10e255ff8e9 PASS	
+seed=75 ticks=150 commits=12 trace=37742f65428d3352 PASS	
+reason: divergence: replica 2 committed op=34 checksum=ced2a55cd7f30421 (client=2 request=10 view=2) but canonical op=34 is checksum=fd4fec8f735fdc64 (client=3 request=7)	seed=76 ticks=543 commits=39 trace=95e9477d4dd1b471 FAIL	
+seed=77 ticks=1112 commits=30 trace=10d817bc4cfe760a PASS	
+seed=78 ticks=2555 commits=11 trace=dffb41591f0358b2 PASS	
+seed=79 ticks=356 commits=14 trace=daf80a482cd35c3b PASS	
+seed=80 ticks=1416 commits=26 trace=f20ecfcf2effe6c0 PASS	
+seed=81 ticks=418 commits=12 trace=6636b89a39e912dc PASS	
+seed=82 ticks=796 commits=56 trace=e02d572c631da52e PASS	
+seed=83 ticks=474 commits=56 trace=8e4779ac51e10f04 PASS	
+reason: divergence: replica 1 committed op=4 checksum=92960fe599948395 (client=0 request=5 view=1) but canonical op=4 is checksum=6377769d45a1b839 (client=0 request=4)	seed=84 ticks=288 commits=4 trace=953494e36a94c33d FAIL	
+seed=85 ticks=205 commits=21 trace=113ca6a474cc6245 PASS	
+seed=86 ticks=104 commits=8 trace=9fd92e83113c62dd PASS	
+seed=87 ticks=231 commits=18 trace=71b1d4094724c5d4 PASS	
+seed=88 ticks=1419 commits=33 trace=204ad64d3539f726 PASS	
+seed=89 ticks=660 commits=26 trace=04d7f6e9b007baf8 PASS	
+seed=90 ticks=735 commits=40 trace=c4e959a3779b9b8a PASS	
+seed=91 ticks=879 commits=20 trace=19426d809f145914 PASS	
+seed=92 ticks=100 commits=10 trace=41e14c01c75cc5f7 PASS	
+seed=93 ticks=1014 commits=45 trace=c71cd1d47d6498da PASS	
+seed=94 ticks=1084 commits=24 trace=1344ca44c35a6fcd PASS	
+seed=95 ticks=1109 commits=39 trace=25274a33e24a7575 PASS	
+seed=96 ticks=1354 commits=14 trace=9aab7e4994391f46 PASS	
+seed=97 ticks=288 commits=36 trace=8e9166d658b3fda1 PASS	
+seed=98 ticks=2577 commits=56 trace=57c648d2e5c019b1 PASS	
+seed=99 ticks=594 commits=5 trace=c0b489a9c77cd9e4 PASS	
+seed=100 ticks=820 commits=26 trace=d79b6d279f6330f3 PASS	
+reason: divergence: replica 1 committed op=29 checksum=0458113c398117f2 (client=1 request=15 view=1) but canonical op=29 is checksum=9c4caa61558f1343 (client=1 request=14)	seed=101 ticks=1135 commits=29 trace=166c0b49630b62fe FAIL	
+seed=102 ticks=1001 commits=45 trace=2523a39f283694a3 PASS	
+seed=103 ticks=157 commits=10 trace=0f1779f9d4211355 PASS	
+seed=104 ticks=415 commits=48 trace=def114b2405d33a8 PASS	
+seed=105 ticks=539 commits=8 trace=b758b47b90f211e1 PASS	
+seed=106 ticks=903 commits=60 trace=8ea8c4ef7853ec6a PASS	
+seed=107 ticks=720 commits=15 trace=eb8e37257670d85c PASS	
+seed=108 ticks=557 commits=48 trace=f344c9e31f2b894c PASS	
+seed=109 ticks=70 commits=10 trace=7c9198b550ef2be5 PASS	
+seed=110 ticks=172 commits=8 trace=e653f35e54511894 PASS	
+seed=111 ticks=53 commits=15 trace=8b38da401090300f PASS	
+seed=112 ticks=2053 commits=15 trace=44c5a7c35b343189 PASS	
+seed=113 ticks=554 commits=20 trace=66fbfb5a1c7b640a PASS	
+seed=114 ticks=349 commits=18 trace=e669354243bc54ef PASS	
+seed=115 ticks=442 commits=14 trace=33149b7fc16740ab PASS	
+seed=116 ticks=381 commits=20 trace=e0c2cf89ef4c6cef PASS	
+seed=117 ticks=1047 commits=13 trace=7781618e046fe413 PASS	
+seed=118 ticks=526 commits=11 trace=1d2a20274e9672c1 PASS	
+seed=119 ticks=662 commits=10 trace=3a765d973c2901b0 PASS	
+seed=120 ticks=1199 commits=22 trace=c43ba82f8c68eb8b PASS	
+seed=121 ticks=213 commits=8 trace=cd51d8891b4cfc97 PASS	
+reason: divergence: replica 0 committed op=37 checksum=e2d659902b0c2751 (client=1 request=8 view=3) but canonical op=37 is checksum=74ed81d9c7bc89a2 (client=2 request=7)	seed=122 ticks=760 commits=40 trace=be8db79b46ec4a51 FAIL	
+seed=123 ticks=1811 commits=12 trace=15c70c16970a00ab PASS	
+seed=124 ticks=1692 commits=13 trace=fa2375294ab15862 PASS	
+seed=125 ticks=214 commits=16 trace=4f16e850eab7ce75 PASS	
+seed=126 ticks=204 commits=8 trace=217a3d429792f61f PASS	
+seed=127 ticks=1177 commits=40 trace=37c64eed473517ef PASS	
+reason: divergence: replica 2 committed op=20 checksum=5f956617a30a92aa (client=1 request=9 view=2) but canonical op=20 is checksum=fbbc2575e35937a9 (client=1 request=7)	seed=128 ticks=1181 commits=21 trace=5c9fc11e3e76f963 FAIL	
+seed=129 ticks=165 commits=12 trace=1fc3cbea434c60ae PASS	
+seed=130 ticks=1670 commits=24 trace=b809540c4afa0c90 PASS	
+seed=131 ticks=437 commits=32 trace=915069c0605b8cc0 PASS	
+seed=132 ticks=890 commits=24 trace=3b117186ef271a5c PASS	
+seed=133 ticks=739 commits=44 trace=f0fb973dc43e8ac8 PASS	
+reason: divergence: replica 4 committed op=9 checksum=197e2b8051fae7aa (client=0 request=10 view=4) but canonical op=9 is checksum=b444e2330877124c (client=0 request=9)	seed=134 ticks=1366 commits=9 trace=cfe6e9d1cc51f8f7 FAIL	
+reason: divergence: replica 1 committed op=10 checksum=1f05655216160c4c (client=0 request=4 view=1) but canonical op=10 is checksum=d5140bd2131645a1 (client=0 request=2)	seed=135 ticks=266 commits=14 trace=256df1d7fa476719 FAIL	
+seed=136 ticks=362 commits=27 trace=d1041cabccdd13ac PASS	
+seed=137 ticks=824 commits=9 trace=8dc3e9dfd5a443ec PASS	
+seed=138 ticks=267 commits=24 trace=11236fb67ee132b8 PASS	
+seed=139 ticks=513 commits=28 trace=2583dd4d99ed8844 PASS	
+seed=140 ticks=301 commits=5 trace=a424c04be9f06e23 PASS	
+seed=141 ticks=554 commits=28 trace=2992e9d56ef0e8dc PASS	
+seed=142 ticks=296 commits=27 trace=f6f9f6fefe6bf9aa PASS	
+seed=143 ticks=128 commits=5 trace=3afd2eb7f00b0db4 PASS	
+seed=144 ticks=621 commits=18 trace=2a9c43ceedc05899 PASS	
+seed=145 ticks=843 commits=30 trace=b6a3aa1737d582d8 PASS	
+seed=146 ticks=246 commits=8 trace=e84b69d67e9380e6 PASS	
+seed=147 ticks=628 commits=15 trace=c3b6ccf6ba895f31 PASS	
+seed=148 ticks=1717 commits=45 trace=c6b1f07ecd9b4ee5 PASS	
+seed=149 ticks=727 commits=15 trace=43be9151c3df7aa5 PASS	
+seed=150 ticks=406 commits=12 trace=d499e959e0cfc98c PASS	
+seed=151 ticks=152 commits=18 trace=77c5b8a1c8c121b7 PASS	
+seed=152 ticks=255 commits=20 trace=534a1649a6afcf69 PASS	
+seed=153 ticks=290 commits=13 trace=842b7638b3c93d31 PASS	
+seed=154 ticks=828 commits=40 trace=f5d8ca1162e0617c PASS	
+seed=155 ticks=531 commits=28 trace=2144163b529a5e99 PASS	
+seed=156 ticks=688 commits=32 trace=83637a704a056b66 PASS	
+seed=157 ticks=2250 commits=27 trace=9c4b4b20e80f8392 PASS	
+seed=158 ticks=439 commits=8 trace=04f41a16bc740199 PASS	
+seed=159 ticks=502 commits=13 trace=54b454bd7a167517 PASS	
+seed=160 ticks=562 commits=15 trace=0b64441f18947e7b PASS	
+seed=161 ticks=108 commits=10 trace=53289248190ca16a PASS	
+seed=162 ticks=2471 commits=24 trace=fcf641086e0f1a2f PASS	
+seed=163 ticks=457 commits=20 trace=5ce5fd8b917e7768 PASS	
+seed=164 ticks=554 commits=18 trace=802fcc06d6b05ba4 PASS	
+seed=165 ticks=1621 commits=44 trace=e2e1e82ee8800112 PASS	
+seed=166 ticks=2415 commits=48 trace=ab1d296b43e43c2d PASS	
+seed=167 ticks=1335 commits=28 trace=81dee20fb40ca299 PASS	
+seed=168 ticks=422 commits=30 trace=0b1a52be88ef916d PASS	
+seed=169 ticks=423 commits=16 trace=3ed0f4034e031e2f PASS	
+seed=170 ticks=1149 commits=22 trace=3794812ca3abf1a3 PASS	
+reason: divergence: replica 1 committed op=29 checksum=bf4ea3f68ccd1703 (client=2 request=6 view=1) but canonical op=29 is checksum=fd59d562520a2a62 (client=3 request=8)	seed=171 ticks=276 commits=29 trace=baba7cb1dce24319 FAIL	
+seed=172 ticks=347 commits=14 trace=8c9ed75cebc9957b PASS	
+seed=173 ticks=572 commits=24 trace=a3df1d0b12f67e23 PASS	
+reason: divergence: replica 1 committed op=16 checksum=269b4c31edc23c38 (client=2 request=5 view=2) but canonical op=16 is checksum=b96eac86a7398ab4 (client=0 request=4)	seed=174 ticks=251 commits=17 trace=960a7281c8815747 FAIL	
+reason: divergence: replica 1 committed op=26 checksum=4474c7c7a52558e8 (client=0 request=15 view=1) but canonical op=26 is checksum=85cee1804de5e87e (client=1 request=14)	seed=175 ticks=421 commits=28 trace=0a89dfc1ab107fe1 FAIL	
+seed=176 ticks=994 commits=36 trace=3a2f2bc50c638b84 PASS	
+seed=177 ticks=580 commits=12 trace=66b1023eee298ca3 PASS	
+seed=178 ticks=418 commits=14 trace=820214991838cadd PASS	
+seed=179 ticks=450 commits=12 trace=3f670a3ee908858e PASS	
+seed=180 ticks=676 commits=40 trace=dd38338f7b50b6f6 PASS	
+seed=181 ticks=1157 commits=33 trace=53e125ba737c2161 PASS	
+seed=182 ticks=770 commits=27 trace=997c239889ee5907 PASS	
+seed=183 ticks=1098 commits=24 trace=b0efe515e7f1ae50 PASS	
+seed=184 ticks=926 commits=48 trace=31a7aabf786bcdc3 PASS	
+seed=185 ticks=710 commits=28 trace=264398a8950bf298 PASS	
+reason: divergence: replica 1 committed op=17 checksum=d2dde69a00a48a60 (client=2 request=2 view=1) but canonical op=17 is checksum=5925057abbe08c51 (client=3 request=12)	seed=186 ticks=259 commits=19 trace=c26eb5152875e613 FAIL	
+seed=187 ticks=209 commits=32 trace=45bbd532302c039a PASS	
+seed=188 ticks=1031 commits=33 trace=736cf1456bde59b4 PASS	
+seed=189 ticks=415 commits=32 trace=5261cbe7a45af742 PASS	
+seed=190 ticks=635 commits=10 trace=3afc101402fe9ef2 PASS	
+seed=191 ticks=454 commits=32 trace=141c5eea0ca76df1 PASS	
+seed=192 ticks=256 commits=5 trace=dde381be2473c588 PASS	
+seed=193 ticks=727 commits=5 trace=b075a822df739811 PASS	
+seed=194 ticks=255 commits=15 trace=a2f4342aafbb5487 PASS	
+seed=195 ticks=326 commits=15 trace=abb89e02561192cc PASS	
+seed=196 ticks=2820 commits=45 trace=f4d4a39ee1135029 PASS	
+seed=197 ticks=1146 commits=24 trace=cc64593b40b44bdb PASS	
+reason: divergence: replica 1 committed op=18 checksum=b94bcd85bd321a2d (client=0 request=7 view=6) but canonical op=18 is checksum=2995581ddf914970 (client=2 request=6)	seed=198 ticks=637 commits=25 trace=799c3a13aa994d48 FAIL	
+seed=199 ticks=374 commits=24 trace=99418c52d2f17e42 PASS	
+</script>
+<script type="text/plain" id="log-seedsfix" data-src="data/debug/seeds-fixed.tsv">
+seed=0 ticks=910 commits=15 trace=459c3b0299936c2f PASS
+seed=1 ticks=477 commits=24 trace=530326ac1b710494 PASS
+seed=2 ticks=887 commits=40 trace=82af04a7479bdffd PASS
+seed=3 ticks=656 commits=8 trace=0decab59c35e26b8 PASS
+seed=4 ticks=256 commits=10 trace=787d0d32b75e133d PASS
+seed=5 ticks=645 commits=36 trace=e93e3c1663a3be26 PASS
+seed=6 ticks=330 commits=14 trace=40135615d62bc8f5 PASS
+seed=7 ticks=780 commits=12 trace=9d68abbc450a4919 PASS
+seed=8 ticks=635 commits=28 trace=d09f4fa9a76dffaa PASS
+seed=9 ticks=478 commits=4 trace=b1de097a75f5045c PASS
+seed=10 ticks=1407 commits=36 trace=46f4a4dd8c36ab06 PASS
+seed=11 ticks=1014 commits=45 trace=026405717012b1d8 PASS
+seed=12 ticks=433 commits=20 trace=fcf934999ec6b726 PASS
+seed=13 ticks=964 commits=44 trace=d13bc6e0fa4a3994 PASS
+seed=14 ticks=846 commits=40 trace=ccc053298abc48f1 PASS
+seed=15 ticks=1374 commits=10 trace=ab52261dc501a9d1 PASS
+seed=16 ticks=663 commits=40 trace=93296d7c8a00381a PASS
+seed=17 ticks=708 commits=33 trace=074ab41b09c030f0 PASS
+seed=18 ticks=1294 commits=15 trace=d9c638631a967b87 PASS
+seed=19 ticks=460 commits=11 trace=fc38f67c4c461be6 PASS
+seed=20 ticks=492 commits=26 trace=f83d299dcf36d228 PASS
+seed=21 ticks=958 commits=14 trace=c0687673b87df7f2 PASS
+seed=22 ticks=116 commits=12 trace=85b3676a2f0fb3bb PASS
+seed=23 ticks=785 commits=14 trace=ebf921484b35f6b1 PASS
+seed=24 ticks=258 commits=20 trace=39b60790210b99f4 PASS
+seed=25 ticks=609 commits=15 trace=855d15d3cd49362a PASS
+seed=26 ticks=321 commits=5 trace=26e7cae1529436c8 PASS
+seed=27 ticks=1369 commits=48 trace=6d771a61e6b7b9cd PASS
+seed=28 ticks=564 commits=10 trace=dffe3d076dd2e03a PASS
+seed=29 ticks=1777 commits=20 trace=1a61461e7f2c7372 PASS
+seed=30 ticks=684 commits=32 trace=1d2a04028d521cab PASS
+seed=31 ticks=1437 commits=36 trace=2176bfd24714504f PASS
+seed=32 ticks=1001 commits=48 trace=82f4ea7ff6af7553 PASS
+seed=33 ticks=1539 commits=24 trace=8434b593e61b155c PASS
+seed=34 ticks=793 commits=13 trace=861af580daa2ee49 PASS
+seed=35 ticks=787 commits=20 trace=167dbea6e7c17a26 PASS
+seed=36 ticks=524 commits=4 trace=896b0d0cd4604f7a PASS
+seed=37 ticks=1766 commits=56 trace=9b576201ebdf504e PASS
+seed=38 ticks=662 commits=39 trace=08fbe5e84661f87f PASS
+seed=39 ticks=78 commits=4 trace=3c6af3b9366f87f5 PASS
+seed=40 ticks=1193 commits=28 trace=bc04b1129229d2cc PASS
+seed=41 ticks=2240 commits=52 trace=904f54c915bbc62b PASS
+seed=42 ticks=117 commits=12 trace=50270725c16c2ca2 PASS
+seed=43 ticks=1616 commits=20 trace=79866c51de36851e PASS
+seed=44 ticks=412 commits=16 trace=617f6ba0ff6cbe16 PASS
+seed=45 ticks=1662 commits=39 trace=433117367eeb79f2 PASS
+seed=46 ticks=893 commits=36 trace=4d9a4f0f25931cd7 PASS
+seed=47 ticks=633 commits=30 trace=264625f4585b1e42 PASS
+seed=48 ticks=799 commits=48 trace=e6d2598a1347886b PASS
+seed=49 ticks=334 commits=6 trace=c39bdc66ebbaedb5 PASS
+seed=50 ticks=719 commits=12 trace=fd0e0743bf28d674 PASS
+seed=51 ticks=760 commits=15 trace=fceb9181ffaec4e5 PASS
+seed=52 ticks=389 commits=20 trace=9aa6a5ce24c95de8 PASS
+seed=53 ticks=1074 commits=7 trace=2c1d6c8590ad0dfd PASS
+seed=54 ticks=577 commits=22 trace=2d334bf5209714b3 PASS
+seed=55 ticks=810 commits=40 trace=64821b90ccb8b2f1 PASS
+seed=56 ticks=211 commits=5 trace=78a8615e30a1cb34 PASS
+seed=57 ticks=688 commits=33 trace=f90d363ceef29314 PASS
+seed=58 ticks=888 commits=14 trace=2c902068565899dd PASS
+seed=59 ticks=1199 commits=32 trace=f53baa0df7561c01 PASS
+seed=60 ticks=1873 commits=60 trace=1ed72d061741bb50 PASS
+seed=61 ticks=215 commits=28 trace=c19b213621da9775 PASS
+seed=62 ticks=1463 commits=32 trace=2d3c4e2b0162e72b PASS
+seed=63 ticks=774 commits=14 trace=a5ba6cf4a16d4501 PASS
+seed=64 ticks=854 commits=12 trace=adbfd96fe65a6ca3 PASS
+seed=65 ticks=1315 commits=14 trace=991b7f4e403910c8 PASS
+seed=66 ticks=1097 commits=13 trace=c5b2352b2145a463 PASS
+seed=67 ticks=1627 commits=60 trace=5716692c78b59429 PASS
+seed=68 ticks=2081 commits=45 trace=8814202eba82fb57 PASS
+seed=69 ticks=2182 commits=13 trace=c5db4c1083554f8c PASS
+seed=70 ticks=764 commits=36 trace=505fdf1a0a82343c PASS
+seed=71 ticks=211 commits=16 trace=cda3f769c34d9cfd PASS
+seed=72 ticks=1601 commits=39 trace=e1fe6f61ba3ea26f PASS
+seed=73 ticks=1589 commits=56 trace=ad1686549ff40df4 PASS
+seed=74 ticks=442 commits=10 trace=7d2a7f9c6c5c2f13 PASS
+seed=75 ticks=416 commits=12 trace=b6bd35be11f79d48 PASS
+seed=76 ticks=1051 commits=60 trace=2cfb5109604713c5 PASS
+seed=77 ticks=2334 commits=30 trace=90ee9d76027417a5 PASS
+seed=78 ticks=1203 commits=11 trace=44d43b127ce2044f PASS
+seed=79 ticks=604 commits=14 trace=a0173db86ee5cfba PASS
+seed=80 ticks=1963 commits=26 trace=c98ac982f8151401 PASS
+seed=81 ticks=776 commits=12 trace=ff1a962f392e6f89 PASS
+seed=82 ticks=1525 commits=56 trace=0560adb166d7323f PASS
+seed=83 ticks=666 commits=56 trace=938ce57ae1aba177 PASS
+seed=84 ticks=501 commits=5 trace=c484904d23c12d22 PASS
+seed=85 ticks=382 commits=21 trace=e642b4f228a0129c PASS
+seed=86 ticks=519 commits=8 trace=565fcc77ceb4e44f PASS
+seed=87 ticks=312 commits=18 trace=24859ee927379426 PASS
+seed=88 ticks=1213 commits=33 trace=84c163211c52d02f PASS
+seed=89 ticks=737 commits=26 trace=afa46081977b98c7 PASS
+seed=90 ticks=757 commits=40 trace=fb7ab6a926259073 PASS
+seed=91 ticks=536 commits=20 trace=271d0c0785cdbe00 PASS
+seed=92 ticks=355 commits=10 trace=f8477464399aaa38 PASS
+seed=93 ticks=2061 commits=45 trace=4bde5d29fc919861 PASS
+seed=94 ticks=1259 commits=24 trace=dcdcb22dea8744b0 PASS
+seed=95 ticks=1782 commits=39 trace=97cdfc5f9b8cab74 PASS
+seed=96 ticks=1104 commits=14 trace=c0076c99e505804e PASS
+seed=97 ticks=436 commits=36 trace=fb958d112c75f476 PASS
+seed=98 ticks=1825 commits=56 trace=d45881466336d4f4 PASS
+seed=99 ticks=244 commits=5 trace=3ad4efb44320e0b5 PASS
+seed=100 ticks=1312 commits=26 trace=2ed5989bc3edacb8 PASS
+seed=101 ticks=636 commits=30 trace=9482e94577d30957 PASS
+seed=102 ticks=1173 commits=45 trace=d6bfe5fdfd9e58bd PASS
+seed=103 ticks=146 commits=10 trace=b1ee616307f9aaf5 PASS
+seed=104 ticks=518 commits=48 trace=b8a6e3ea0ad5b14d PASS
+seed=105 ticks=659 commits=8 trace=6be359d1f1b8205b PASS
+seed=106 ticks=1568 commits=60 trace=f75c4c7e591b5422 PASS
+seed=107 ticks=889 commits=15 trace=f4d2f949239dc003 PASS
+seed=108 ticks=687 commits=48 trace=99f76da1a7847a7e PASS
+seed=109 ticks=109 commits=10 trace=1c2af911df3aa490 PASS
+seed=110 ticks=331 commits=8 trace=9fe44e588872e9ee PASS
+seed=111 ticks=77 commits=15 trace=425e4dd85924816c PASS
+seed=112 ticks=1057 commits=15 trace=67f55ff92fb982a2 PASS
+seed=113 ticks=906 commits=20 trace=0be14e7089c03c6c PASS
+seed=114 ticks=621 commits=18 trace=6edb42b73baea4dc PASS
+seed=115 ticks=453 commits=14 trace=f618f9d49733d65b PASS
+seed=116 ticks=717 commits=20 trace=c056124f3697f069 PASS
+seed=117 ticks=1120 commits=13 trace=2a529d6b45ca8775 PASS
+seed=118 ticks=419 commits=11 trace=b61a16b8be13db93 PASS
+seed=119 ticks=2130 commits=10 trace=610f21e5bd92bf35 PASS
+seed=120 ticks=923 commits=22 trace=14e0f3c3521f8e81 PASS
+seed=121 ticks=827 commits=8 trace=19c6b9bb22e88cfd PASS
+seed=122 ticks=1199 commits=52 trace=fb74cf944073e4d3 PASS
+seed=123 ticks=1229 commits=12 trace=94ac45c6a68beeba PASS
+seed=124 ticks=1650 commits=13 trace=3d61d9fc8a975c9a PASS
+seed=125 ticks=268 commits=16 trace=2e29c1bda0682ef4 PASS
+seed=126 ticks=334 commits=8 trace=df9675b05bc47b30 PASS
+seed=127 ticks=1136 commits=40 trace=e0bebd02542b29d4 PASS
+seed=128 ticks=1732 commits=26 trace=16001db5fa9c4c2d PASS
+seed=129 ticks=351 commits=12 trace=923b74c2dfcbe705 PASS
+seed=130 ticks=1640 commits=24 trace=62139bf783f3f5c6 PASS
+seed=131 ticks=470 commits=32 trace=0582ee91858afaec PASS
+seed=132 ticks=832 commits=24 trace=112f96f669d1c001 PASS
+seed=133 ticks=681 commits=44 trace=a7e11d93d3ab0c58 PASS
+seed=134 ticks=3057 commits=15 trace=29c3da54030c79e9 PASS
+seed=135 ticks=731 commits=30 trace=bb8c616ddce2287f PASS
+seed=136 ticks=606 commits=27 trace=065ed084a55c325f PASS
+seed=137 ticks=462 commits=9 trace=fd425a4c79d3f06c PASS
+seed=138 ticks=834 commits=24 trace=3133f37f6fe72ac4 PASS
+seed=139 ticks=630 commits=28 trace=5bc0aa6cb575e4ac PASS
+seed=140 ticks=163 commits=5 trace=89428fd267c71ec6 PASS
+seed=141 ticks=471 commits=28 trace=5cedba260f3166ef PASS
+seed=142 ticks=490 commits=27 trace=33d93ec3730ae5de PASS
+seed=143 ticks=221 commits=5 trace=174f39d9b5a8e084 PASS
+seed=144 ticks=1013 commits=18 trace=2676ebe65fba9578 PASS
+seed=145 ticks=1063 commits=30 trace=798765f27c5aa379 PASS
+seed=146 ticks=384 commits=8 trace=13d8a713e102a15d PASS
+seed=147 ticks=1362 commits=15 trace=4d146c7f9ca475ba PASS
+seed=148 ticks=2686 commits=45 trace=cccc8ef47b95004e PASS
+seed=149 ticks=487 commits=15 trace=da31873109add2f6 PASS
+seed=150 ticks=1215 commits=12 trace=009ddc29a2f62f51 PASS
+seed=151 ticks=505 commits=18 trace=9bc7d2bd976e73aa PASS
+seed=152 ticks=423 commits=20 trace=2d77b693b2191db4 PASS
+seed=153 ticks=440 commits=13 trace=e1df438af804d7a2 PASS
+seed=154 ticks=783 commits=40 trace=5c0271023dfbff64 PASS
+seed=155 ticks=684 commits=28 trace=d371e3490be66088 PASS
+seed=156 ticks=434 commits=32 trace=bae7046c0b5601fc PASS
+seed=157 ticks=1502 commits=27 trace=3238332f1be4f988 PASS
+seed=158 ticks=1135 commits=8 trace=ad6aca86235f1cb4 PASS
+seed=159 ticks=750 commits=13 trace=9888dfb43404246e PASS
+seed=160 ticks=811 commits=15 trace=5bf1755273fd6058 PASS
+seed=161 ticks=300 commits=10 trace=c48c06da73bf9506 PASS
+seed=162 ticks=1191 commits=24 trace=96946f04a708ac46 PASS
+seed=163 ticks=885 commits=20 trace=f8293c21677569a7 PASS
+seed=164 ticks=883 commits=18 trace=5973a03f51b32e3e PASS
+seed=165 ticks=1259 commits=44 trace=44dc97036e05e7fa PASS
+seed=166 ticks=2019 commits=48 trace=28d49a143dba40c9 PASS
+seed=167 ticks=3713 commits=28 trace=58e2ee2be698448f PASS
+seed=168 ticks=527 commits=30 trace=1b26dac24faf96df PASS
+seed=169 ticks=351 commits=16 trace=c5a141a6ed2db0e8 PASS
+seed=170 ticks=1322 commits=22 trace=5231e477b7c5f484 PASS
+seed=171 ticks=214 commits=32 trace=7ef9af05ef1d3752 PASS
+seed=172 ticks=286 commits=14 trace=46d3da8dbfd51022 PASS
+seed=173 ticks=468 commits=24 trace=3827540fe94b2e8e PASS
+seed=174 ticks=1115 commits=44 trace=e5219ee578a03497 PASS
+seed=175 ticks=1041 commits=30 trace=59217178cb921d6c PASS
+seed=176 ticks=902 commits=36 trace=b4d6deda5d610f9b PASS
+seed=177 ticks=163 commits=12 trace=f4f3318e2b8c171c PASS
+seed=178 ticks=1114 commits=14 trace=e69edb60f61e6677 PASS
+seed=179 ticks=410 commits=12 trace=b815c947f54afed8 PASS
+seed=180 ticks=768 commits=40 trace=5bc82d5bb49bc547 PASS
+seed=181 ticks=1538 commits=33 trace=42e49916d547bbd4 PASS
+seed=182 ticks=1083 commits=27 trace=d67fd2b31f6ce299 PASS
+seed=183 ticks=1186 commits=24 trace=ac5ad37e95ce0a3b PASS
+seed=184 ticks=851 commits=48 trace=aa724ae20abd6090 PASS
+seed=185 ticks=950 commits=28 trace=e0bc19f8d43ad4b5 PASS
+seed=186 ticks=1615 commits=48 trace=1d4be1deaef4163d PASS
+seed=187 ticks=488 commits=32 trace=0136a8978d3718a9 PASS
+seed=188 ticks=665 commits=33 trace=17f7bd93bdcf35fd PASS
+seed=189 ticks=553 commits=32 trace=1eec132c606a6498 PASS
+seed=190 ticks=639 commits=10 trace=0cc96cac2be1c7b4 PASS
+seed=191 ticks=734 commits=32 trace=f0430c09d2617727 PASS
+seed=192 ticks=242 commits=5 trace=40eb26a0a354f52b PASS
+seed=193 ticks=245 commits=5 trace=dfd5b2da37cc5e06 PASS
+seed=194 ticks=686 commits=15 trace=f993ab87183dc0d4 PASS
+seed=195 ticks=444 commits=15 trace=be6f822d99349a72 PASS
+seed=196 ticks=3992 commits=45 trace=90676bcf9888fa69 PASS
+seed=197 ticks=795 commits=24 trace=1371154797df4b81 PASS
+seed=198 ticks=1450 commits=33 trace=4004c2f71e66b61a PASS
+seed=199 ticks=418 commits=24 trace=dc3d4efdddc0034d PASS
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "debug" });
+const { C, el, s, tip, term } = DST;
+
+// ---------------------------------------------------------------- parsing (all data comes from the captures)
+function parseRun(txt) {
+  const R = { opts: {}, seq: [], status: [], ev: [], faults: [], fail: null, result: null, lines: txt.split("\n") };
+  for (const raw of R.lines) {
+    let m;
+    if (!/^\s*\d/.test(raw) && (m = raw.match(/^\s+([a-z_]+)=(.+)$/))) { R.opts[m[1]] = m[2].trim(); continue; }
+    if ((m = raw.match(/^seed=(\d+) ticks=(\d+) commits=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/))) { R.result = { seed: +m[1], ticks: +m[2], commits: +m[3], trace: m[4], ok: m[5] === "PASS", raw }; continue; }
+    if ((m = raw.match(/^reason: (.*)$/))) { R.reason = m[1]; continue; }
+    if (!(m = raw.match(/^\s*(\d+) (.*)$/))) continue;
+    const t = +m[1], rest = m[2];
+    let q, item = null;
+    if ((q = rest.match(/^@(\w+) (.*)$/))) {
+      item = { type: "ev", t, ev: q[1], raw };
+      for (const p of q[2].split(" ")) { const i = p.indexOf("="); const k = p.slice(0, i), v = p.slice(i + 1); item[k] = /^\d+$/.test(v) ? +v : v; }
+      R.ev.push(item);
+    } else if ((q = rest.match(/^FAIL: (.*)$/))) { item = R.fail = { type: "fail", t, msg: q[1], raw }; }
+    else if ((q = rest.match(/^\s+partition side=(\d+) (\w+)/))) { item = { type: "fault", t, kind: "partition", side: q[1], sym: q[2], raw }; R.faults.push(item); }
+    else if (/partition healed/.test(rest)) { item = { type: "fault", t, kind: "heal", raw }; R.faults.push(item); }
+    else if ((q = rest.match(/liveness mode: core=(\d+)/))) { item = { type: "fault", t, kind: "liveness", core: q[1], raw }; R.faults.push(item); }
+    else if ((q = raw.match(/^\s*(\d+)\s+(\d) (.) (.) (\S+)\s+(\d+)V\s+(\d+)\/_*(\d+)C\s+(\d+)LV\s+(\d+)Wo\s+(\d+)W!/))) {
+      item = { type: "st", t, r: +q[2], e: q[3], role: q[4], st: q[5], view: +q[6], commit: +q[7], op: +q[8], lv: +q[9], wo: +q[10], wp: +q[11], raw };
+      R.status.push(item);
+      if (item.e === "!") R.faults.push({ type: "fault", t, kind: "crash", r: item.r, lost: item.wp, raw });
+      if (item.e === "^") R.faults.push({ type: "fault", t, kind: "restart", r: item.r, raw });
+    }
+    if (item) R.seq.push(item);
+  }
+  R.n = +R.opts.replicas; R.quorum = Math.floor(R.n / 2) + 1; R.clients = +R.opts.clients;
+  return R;
+}
+// Every "first commit of op N" (the commit that defines canonical op N) and what the committing replica knew
+// at that tick: its own durable write (>= N) plus the prepare_oks (>= N) received in its current view.
+function decisions(R) {
+  const n = R.n, view = new Array(n).fill(0), own = new Array(n).fill(0), oks = [...Array(n)].map(() => new Map());
+  const out = []; let head = 0;
+  for (const it of R.seq) {
+    if (it.type === "st") { if (it.view !== view[it.r]) { view[it.r] = it.view; own[it.r] = 0; oks[it.r] = new Map(); } continue; }
+    if (it.type !== "ev") continue;
+    if (it.ev === "durable" && it.kind !== "view" && it.view === view[it.replica]) own[it.replica] = Math.max(own[it.replica], it.op);
+    if (it.ev === "recv" && it.cmd === "prepare_ok" && it.view === view[it.to]) oks[it.to].set(it.from, Math.max(oks[it.to].get(it.from) || 0, it.op));
+    if (it.ev === "commit" && it.op === head + 1) {
+      head++;
+      const r = it.replica, okFrom = [...oks[r]].filter(([, op]) => op >= it.op).map(([b]) => b);
+      const copies = (own[r] >= it.op ? 1 : 0) + okFrom.length;
+      // Replicas that ever appended this prepare (same op, prepared in the same view) to their WAL before the run ended.
+      const holders = [...new Set(R.ev.filter((e) => e.ev === "durable" && e.kind === "append" && e.op === it.op && e.view === it.view).map((e) => e.replica))];
+      out.push({ ...it, r, okFrom, ownDurable: own[r] >= it.op, copies, quorum: R.quorum, ok: copies >= R.quorum, holders, ev: it });
+    }
+  }
+  return out;
+}
+const bug = parseRun(DST.text("log-evbug")), fix = parseRun(DST.text("log-evfix"));
+const ra = DST.text("log-ra"), rb = DST.text("log-rb");
+const plainA = parseRun(ra);
+const dBug = decisions(bug), dFix = decisions(fix);
+const failMsg = bug.fail.msg;
+const fm = failMsg.match(/replica (\d+) committed op=(\d+) checksum=([0-9a-f]+) \(client=(\d+) request=(\d+) view=(\d+)\) but canonical op=(\d+) is checksum=([0-9a-f]+) \(client=(\d+) request=(\d+)\)/);
+const F = { r: +fm[1], op: +fm[2], sum: fm[3], client: +fm[4], req: +fm[5], view: +fm[6], csum: fm[8], creq: +fm[10], t: bug.fail.t };
+const canonCommit = bug.ev.find((e) => e.ev === "commit" && e.checksum === F.csum);
+// First unsafe commit: committed with < quorum known copies AND never written by a quorum of replicas.
+const unsafe = dBug.filter((d) => !d.ok && d.holders.length < bug.quorum);
+const firstBad = unsafe[0];
+const luckyBad = dBug.filter((d) => !d.ok && d.holders.length >= bug.quorum);
+const isoPart = bug.faults.filter((f) => f.kind === "partition" && f.t <= firstBad.t).pop();
+const isolated = [...isoPart.side].reverse().map((b, i) => (b === "1" ? i : -1)).filter((i) => i >= 0); // side bits: replica i = bit i
+const clientNode = (c) => bug.n + c;
+const name = (node) => (node < bug.n ? "R" + node : "C" + (node - bug.n));
+const fmtT = (t) => "t" + t;
+
+// ---------------------------------------------------------------- hero stats
+const stat = (num, lbl, color) => el("div", { class: "stat" }, el("div", { class: "num", style: color ? { color } : null }, num), el("div", { class: "lbl" }, lbl));
+const sweepBug = DST.text("log-sweepbug"), failSeed = +sweepBug.match(/FAIL at seed=(\d+)/)[1];
+document.getElementById("herostats").append(
+  stat("seed=" + failSeed, "first failing seed of sweep 20000 --bug-commit-early", C.bug),
+  stat(fmtT(F.t), "tick where the state checker fired", C.warn),
+  stat(fmtT(firstBad.t), `tick of the first unsafe commit (op ${firstBad.op}, ${firstBad.copies}/${firstBad.quorum} copies)`, C.yellow),
+  stat(F.t - firstBad.t + " ticks", "between the wrong decision and the symptom", C.accent2));
+
+// ---------------------------------------------------------------- stepper
+const sha = DST.text("log-sha").trim().split("\n").map((l) => l.split(/\s+/));
+const sweepFix = DST.text("log-sweepfix");
+const seedsBug = DST.text("log-seedsbug").trim().split("\n").map((l) => ({ seed: +l.match(/seed=(\d+)/)[1], ok: /PASS/.test(l), trace: l.match(/trace=([0-9a-f]+)/)[1], line: l }));
+const seedsFix = DST.text("log-seedsfix").trim().split("\n").map((l) => ({ seed: +l.match(/seed=(\d+)/)[1], ok: /PASS/.test(l), trace: l.match(/trace=([0-9a-f]+)/)[1], line: l }));
+const sameTrace = seedsBug.filter((b, i) => b.trace === seedsFix[i].trace).length;
+const firstDiffTick = (() => { // first line (after the SEED= header) where the two --events logs differ
+  const a = bug.lines.filter((l) => /^\s*\d+ /.test(l)), b = fix.lines.filter((l) => /^\s*\d+ /.test(l));
+  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return { i, a: a[i], b: b[i], same: a.slice(0, i), t: Math.min(+a[i].trim().split(/\s+/)[0], +b[i].trim().split(/\s+/)[0]) };
+  return null;
+})();
+const STAGES = [
+  ["Reproduce", sha[0][0] === sha[1][0] ? "sha256 ×2 identical" : "replays differ!"],
+  ["Read the failure", `divergence @${fmtT(F.t)} op=${F.op}`],
+  ["Narrow down", `first bad ${fmtT(firstBad.t)} op=${firstBad.op}`],
+  ["Hypothesis", `${firstBad.copies} copy < quorum ${firstBad.quorum}`],
+  ["Fix & verify", sweepFix.match(/PASS: \d+ seeds/)[0]],
+  ["Seed stability", `${sameTrace}/${seedsBug.length} traces survive`],
+  ["Checklist & TB", "replica_test.zig · vopr.md"],
+];
+const stepper = document.getElementById("stepper");
+const stepLinks = STAGES.map(([title, chip], i) => {
+  const a = el("a", { href: "#s" + (i + 1) }, el("b", {}, `${i + 1} · ${title}`), el("span", { class: "chip" }, chip));
+  stepper.append(a); return a;
+});
+function updateStepper() {
+  const y = window.scrollY + 280; let cur = -1;
+  STAGES.forEach((_, i) => {
+    const sec = document.getElementById("s" + (i + 1)), next = document.getElementById(i < 6 ? "s" + (i + 2) : "s7");
+    const top = sec.offsetTop, bot = i < 6 ? next.offsetTop : top + sec.offsetHeight;
+    if (y >= top) cur = i;
+    const p = Math.max(0, Math.min(1, (y - top) / Math.max(1, bot - top)));
+    stepLinks[i].style.setProperty("--p", (p * 100).toFixed(0) + "%");
+  });
+  stepLinks.forEach((a, i) => { a.classList.toggle("on", i === cur); a.classList.toggle("done", i < cur); });
+}
+window.addEventListener("scroll", updateStepper, { passive: true }); updateStepper();
+
+// ---------------------------------------------------------------- 1. reproduce
+const tailN = (t, n) => t.trimEnd().split("\n").slice(-n).join("\n");
+const rules = [[/FAIL/, "f"], [/PASS/, "k"], [/^\s+\d+\s+@(cut|lost|drop)/, "d"], [/^\$ /, "p"]];
+term("#sweepbug", "$ mini-vopr sweep 20000 --bug-commit-early\n" + sweepBug.trimEnd(), rules);
+term("#replayA", tailN(ra, 11), rules).classList.add("short");
+term("#replayB", tailN(rb, 11), rules).classList.add("short");
+const la = ra.split("\n"), lb = rb.split("\n");
+const strip = document.getElementById("diffstrip"); let ndiff = 0;
+for (let i = 0; i < Math.max(la.length, lb.length); i++) {
+  const same = la[i] === lb[i]; if (!same) ndiff++;
+  const c = el("i", { class: same ? null : "x" }); tip(c, `line ${i + 1}: ${same ? "identical" : "DIFFERS"}\n${la[i] ?? ""}`); strip.append(c);
+}
+term("#sha", "$ sha256sum replay-a.txt replay-b.txt\n" + DST.text("log-sha").trimEnd(), [[/^\$ /, "p"], [/./, "k"]]);
+document.getElementById("replaycap").innerHTML =
+  `${la.length} lines each, <b>${ndiff}</b> differ; both end with <code>${plainA.result.raw}</code>. ` +
+  `The <code>--events</code> replay used in stage 3 prints ${bug.ev.length} extra <code>@</code> lines and ends with the same ` +
+  `<code>trace=${bug.result.trace}</code>${bug.result.trace === plainA.result.trace ? " (equal)" : " (DIFFERENT!)"}.`;
+
+// ---------------------------------------------------------------- 2. read the failure
+(function anatomy() {
+  const box = document.getElementById("anat");
+  const parts = [
+    [`${F.t}`, C.warn, "tick", `simulated tick ${F.t}: the run stops here (ticks=${bug.result.ticks})`],
+    [" FAIL: "],
+    ["divergence:", C.bug, "checker", "Checker 1, the state checker in check_commit(): a commit disagrees with the canonical history"],
+    [" "], [`replica ${F.r}`, C.accent, "who", `replica ${F.r} is the one committing now`],
+    [" committed "], [`op=${F.op}`, C.yellow, "op", `log position ${F.op}`],
+    [" "], [`checksum=${F.sum}`, C.violet, "new entry", "hash-chained checksum of the entry replica " + F.r + " has at op " + F.op],
+    [" "], [`(client=${F.client} request=${F.req} view=${F.view})`, C.accent2, "its origin", `request ${F.req}, first prepared in view ${F.view}`],
+    [" but "], [`canonical op=${F.op} is checksum=${F.csum}`, C.pink, "the earlier commit", "the FIRST commit of op " + F.op + " anywhere in the cluster defined this"],
+    [" "], [`(client=0 request=${F.creq})`, C.ok, "its origin", `request ${F.creq}: a different client request in the same slot`],
+  ];
+  for (const [txt, col, lbl, t] of parts) {
+    if (!col) { box.append(txt); continue; }
+    const sp = el("span", { class: "f", style: { borderColor: col, color: col } }, txt, el("span", { class: "lbl" }, lbl));
+    tip(sp, t); box.append(sp);
+  }
+  const fin = bug.status.filter((x) => x.e === "=");
+  const tbl = document.getElementById("finaltbl");
+  tbl.append(el("tr", {}, ["replica", "state", "view", "commit / log op", "durable WAL ops", "unsynced"].map((h) => el("th", {}, h))));
+  for (const x of fin) tbl.append(el("tr", {},
+    el("td", { class: "num" }, "R" + x.r), el("td", {}, x.role === "#" ? "down" : x.role === "/" ? "primary" : "backup"),
+    el("td", { class: "num" }, x.view), el("td", { class: "num" }, `${x.commit} / ${x.op}`), el("td", { class: "num" }, x.wo), el("td", { class: "num" }, x.wp)));
+  const r0 = fin.find((x) => x.r === canonCommit.replica);
+  document.getElementById("otherhalf").innerHTML =
+    `<strong>Follow the canonical checksum, not the replica that failed.</strong> <code>${F.csum}</code> appears in exactly one ` +
+    `<code>@commit</code> line: replica ${canonCommit.replica} at tick <b>${canonCommit.t}</b> (request ${canonCommit.request}, view ${canonCommit.view}). ` +
+    `That replica is now down (state at exit: commit ${r0.commit}, ${r0.wo} ops in its WAL, view ${r0.view}), while the live cluster is in view ${F.view}. ` +
+    `Two histories met at tick ${F.t}; one of them started ${F.t - canonCommit.t} ticks earlier.`;
+})();
+
+// ---------------------------------------------------------------- 3. zoom timeline
+document.getElementById("evtrace").textContent = `trace=${bug.result.trace}`;
+const lanesN = ["faults", ...[...Array(bug.n)].map((_, i) => "R" + i), ...[...Array(bug.clients)].map((_, i) => "C" + i)];
+const laneOf = (node) => 1 + node; // replicas then clients
+const reqSend = bug.ev.find((e) => e.ev === "send" && e.cmd === "request" && e.request === firstBad.request && e.from === clientNode(firstBad.client));
+const replyRecv = bug.ev.find((e) => e.ev === "recv" && e.cmd === "reply" && e.request === firstBad.request && e.t >= firstBad.t);
+const lastLone = unsafe.filter((d) => d.r === firstBad.r).pop();
+const newPrimary = bug.status.find((x) => x.e === "/" && x.t > firstBad.t && x.r !== firstBad.r);
+const crashOld = bug.faults.find((f) => f.kind === "crash" && f.r === firstBad.r && f.t > firstBad.t);
+const LEVELS = [
+  { name: "whole run", a: 0, b: bug.result.ticks + 2,
+    d: `All ${bug.result.ticks} ticks, ${bug.ev.length} events. The checker's ✕ is at the far right; nothing in the status lines alone says where to look.` },
+  { name: "the isolated primary", a: isoPart.t - 3, b: lastLone.t + 6,
+    d: `Tick ${isoPart.t}: <code>partition side=${isoPart.side}</code> cuts R${isolated.join(",R")} off from the other replicas. ` +
+       `R${firstBad.r} is still primary and the client can still reach it. Every prepare it sends is ✕ cut, yet it commits ${unsafe.filter((d) => d.r === firstBad.r).length} ops (ticks ${unsafe.filter((d) => d.r === firstBad.r).map((d) => d.t).join(", ")}) and replies to the client.` },
+  { name: `op ${firstBad.op}'s life`, a: reqSend.t - 1, b: replyRecv.t + 1,
+    d: `Tick ${reqSend.t}: the client sends request ${firstBad.request}. R${firstBad.r} appends op ${firstBad.op} (disk bar), both prepares are ✕ cut. ` +
+       `Tick ${firstBad.t}: its own write is durable → it commits with ${firstBad.copies} of ${firstBad.quorum} needed copies. Tick ${replyRecv.t}: the client is told "done". <b>From here on the cluster's state is wrong</b>, ${F.t - firstBad.t} ticks before any checker notices.` },
+  { name: "the checker fires", a: newPrimary.t - 12, b: F.t + 3,
+    d: `Meanwhile the backups elected R${newPrimary.r} (view ${newPrimary.view}) with a log of ${newPrimary.op} op. It assigns op ${F.op} to request ${F.req}, commits it at tick ${F.t}, and Checker 1 compares it with canonical op ${F.op}, which is still R${firstBad.r}'s request ${firstBad.request}.` },
+];
+const unsafeSet = new Set(unsafe.map((d) => d.t + ":" + d.op)), luckySet = new Set(luckyBad.map((d) => d.t + ":" + d.op));
+const CMD = { request: C.accent, prepare: C.violet, prepare_ok: C.accent2, commit: "#55627e", reply: C.ok, start_view_change: C.warn, do_view_change: C.warn, start_view: C.pink, get_view: C.yellow };
+(function zoomTimeline() {
+  const W = 1100, laneH = 40, m = { l: 64, r: 14, t: 24, b: 30 }, H = m.t + lanesN.length * laneH + m.b;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const defs = s("defs", {}, s("clipPath", { id: "zclip" }, s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H })));
+  svg.append(defs);
+  lanesN.forEach((nm, i) => {
+    svg.append(s("rect", { x: m.l, y: m.t + i * laneH, width: W - m.l - m.r, height: laneH - 4, rx: 5, fill: i % 2 ? "#111a2b" : "#0f1726" }));
+    svg.append(s("text", { x: m.l - 8, y: m.t + i * laneH + laneH / 2 + 2, "text-anchor": "end", fill: C.muted, "font-size": 12 }, nm));
+  });
+  const g = s("g", { "clip-path": "url(#zclip)" }), axis = s("g");
+  svg.append(g, axis);
+  document.getElementById("zoom").append(svg);
+  // minimap
+  const MW = 1100, MH = 26, mini = s("svg", { viewBox: `0 0 ${MW} ${MH}` });
+  const mx = (t) => m.l + (t / (bug.result.ticks + 2)) * (MW - m.l - m.r);
+  mini.append(s("rect", { x: m.l, y: 6, width: MW - m.l - m.r, height: 12, rx: 3, fill: "#111a2b" }));
+  for (const d of dBug) mini.append(s("rect", { x: mx(d.t) - 1, y: 6, width: 2, height: 12, fill: unsafeSet.has(d.t + ":" + d.op) ? C.bug : C.warn }));
+  mini.append(s("rect", { x: mx(F.t) - 1.5, y: 3, width: 3, height: 18, fill: C.bug }));
+  mini.append(s("text", { x: m.l - 8, y: 17, "text-anchor": "end", fill: C.dim, "font-size": 10 }, "run"));
+  const win = s("rect", { x: m.l, y: 2, width: 10, height: 20, rx: 3, fill: "rgba(124,156,255,.15)", stroke: C.accent, "stroke-width": 1.5 });
+  mini.append(win);
+  document.getElementById("zmini").append(mini);
+
+  const laneY = (li) => m.t + li * laneH + laneH / 2 - 2;
+  let dom = [LEVELS[0].a, LEVELS[0].b];
+  function niceTicks(lo, hi, n) {
+    const span = hi - lo || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map((k) => k * mag).find((st) => span / st <= n) || 10 * mag;
+    const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(Math.round(v)); return out;
+  }
+  function render() {
+    const [a, b] = dom, X = (t) => m.l + ((t - a) / (b - a)) * (W - m.l - m.r), pxPerTick = (W - m.l - m.r) / (b - a);
+    const detail = pxPerTick > 14; // fine zoom: show labels
+    g.replaceChildren(); axis.replaceChildren();
+    for (const t of niceTicks(a, b, 12)) {
+      axis.append(s("line", { x1: X(t), x2: X(t), y1: m.t - 4, y2: H - m.b, stroke: "#1d2840", "stroke-width": 1 }));
+      axis.append(s("text", { x: X(t), y: H - 10, "text-anchor": "middle", fill: C.dim, "font-size": 10 }, t));
+    }
+    axis.append(s("text", { x: m.l, y: 14, fill: C.dim, "font-size": 10 }, `ticks ${Math.round(a)}–${Math.round(b)}`));
+    // fault bands: partitions (until heal or end), down replicas (crash → restart or end)
+    const end = bug.result.ticks + 2;
+    for (const f of bug.faults.filter((f) => f.kind === "partition")) {
+      const heal = bug.faults.find((h) => h.kind === "heal" && h.t > f.t), t2 = heal ? heal.t : end;
+      const r = s("rect", { x: X(f.t), y: m.t + 6, width: Math.max(2, X(t2) - X(f.t)), height: laneH - 16, rx: 4, fill: C.warn, opacity: 0.8 });
+      tip(r, f.raw.trim()); g.append(r);
+      g.append(s("text", { x: Math.max(X(f.t), m.l) + 6, y: m.t + laneH / 2 + 2, fill: "#0b0f17", "font-size": 10, "font-weight": 700 }, `partition: R${isolated.join(",R")} isolated (side=${f.side})`));
+      for (const r0 of isolated) g.append(s("rect", { x: X(f.t), y: m.t + laneOf(r0) * laneH + 1, width: Math.max(2, X(t2) - X(f.t)), height: 3, fill: C.warn, opacity: 0.6 }));
+    }
+    for (const f of bug.faults.filter((f) => f.kind === "crash")) {
+      const rs = bug.faults.find((h) => h.kind === "restart" && h.r === f.r && h.t > f.t), t2 = rs ? rs.t : end;
+      const r = s("rect", { x: X(f.t), y: m.t + laneOf(f.r) * laneH + 4, width: Math.max(2, X(t2) - X(f.t)), height: laneH - 12, fill: "rgba(255,92,122,.10)" });
+      g.append(r);
+      const tx = s("text", { x: X(f.t), y: laneY(laneOf(f.r)) + 5, "text-anchor": "middle", fill: C.bug, "font-size": 15, "font-weight": 700 }, "⚡");
+      tip(tx, f.raw.trim() + `\n(crash: ${f.lost} unsynced write lost)`); g.append(tx);
+    }
+    // packets
+    for (const e of bug.ev) {
+      if (e.t < a - 6 || e.t > b + 1) continue;
+      const col = CMD[e.cmd] || C.dim, y1 = laneY(laneOf(e.from)), y2 = laneY(laneOf(e.to));
+      if (e.ev === "send" && e.from !== e.to) {
+        const ln = s("line", { x1: X(e.t), y1, x2: X(e.at), y2, stroke: col, "stroke-width": detail ? 1.6 : 1, opacity: detail ? 0.9 : 0.45 });
+        tip(ln, e.raw.trim()); g.append(ln);
+        if (detail) g.append(s("circle", { cx: X(e.at), cy: y2, r: 2.5, fill: col }));
+      } else if (e.ev === "cut" || e.ev === "lost") {
+        const len = Math.min(28, Math.max(8, pxPerTick * 1.2)), dy = (y2 - y1) * 0.35;
+        const ln = s("line", { x1: X(e.t), y1, x2: X(e.t) + len, y2: y1 + dy, stroke: col, "stroke-width": 1.2, opacity: 0.8, "stroke-dasharray": "3 2" });
+        const x = s("text", { x: X(e.t) + len, y: y1 + dy + 4, "text-anchor": "middle", fill: e.ev === "cut" ? C.bug : C.warn, "font-size": detail ? 12 : 9, "font-weight": 700 }, "✕");
+        tip(x, e.raw.trim()); tip(ln, e.raw.trim()); g.append(ln, x);
+      } else if (e.ev === "write" && e.kind !== "view") {
+        const y = laneY(laneOf(e.replica));
+        const r = s("rect", { x: X(e.t), y: y + 8, width: Math.max(2, X(e.at) - X(e.t)), height: 5, rx: 2, fill: "none", stroke: C.accent, "stroke-width": 1, opacity: 0.9 });
+        tip(r, e.raw.trim()); g.append(r);
+      } else if (e.ev === "durable" && e.kind !== "view") {
+        const y = laneY(laneOf(e.replica)), r = s("rect", { x: X(e.t) - 3, y: y + 7, width: 6, height: 7, fill: C.accent });
+        tip(r, e.raw.trim()); g.append(r);
+      }
+    }
+    // status events (view changes, new primary, installs)
+    for (const x of bug.status) {
+      if (x.t < a - 1 || x.t > b + 1 || !"v/>".includes(x.e) || x.e === " ") continue;
+      const glyph = { v: "v", "/": "★", ">": "»" }[x.e];
+      const tx = s("text", { x: X(x.t), y: laneY(laneOf(x.r)) - 7, "text-anchor": "middle", fill: x.e === "/" ? C.yellow : C.warn, "font-size": x.e === "/" ? 13 : 12, "font-weight": 700 }, glyph);
+      tip(tx, x.raw.trim() + "\n" + { v: "start view change → view " + x.view, "/": "became primary of view " + x.view + " with " + x.op + " ops", ">": "installed start_view" }[x.e]);
+      g.append(tx);
+      if (detail || x.e === "/") g.append(s("text", { x: X(x.t) + 8, y: laneY(laneOf(x.r)) - 7, fill: C.dim, "font-size": 9 }, x.e === "/" ? `view ${x.view}, ${x.op} op` : `v${x.view}`));
+    }
+    // commits
+    for (const e of bug.ev.filter((e) => e.ev === "commit")) {
+      if (e.t < a - 1 || e.t > b + 1) continue;
+      const key = e.t + ":" + e.op, isFail = e.t === F.t && e.op === F.op && e.replica === F.r;
+      const col = unsafeSet.has(key) ? C.bug : luckySet.has(key) ? C.warn : isFail ? C.bug : C.ok;
+      const y = laneY(laneOf(e.replica));
+      const c = s("circle", { cx: X(e.t), cy: y, r: detail ? 8 : 5.5, fill: col, stroke: "#0b0f17", "stroke-width": 1.5 });
+      tip(c, e.raw.trim()); g.append(c);
+      g.append(s("text", { x: X(e.t), y: y + (detail ? 3.5 : 3), "text-anchor": "middle", fill: "#0b0f17", "font-size": detail ? 10 : 7, "font-weight": 700, "pointer-events": "none" }, e.op));
+      if (detail) { const right = X(e.t) > W - 170; g.append(s("text", { x: X(e.t) + (right ? -12 : 11), y: y + (right ? -10 : 4), "text-anchor": right ? "end" : "start", fill: col, "font-size": 10 }, `commit op ${e.op} = req ${e.request}`)); }
+    }
+    // fail line
+    if (F.t >= a && F.t <= b + 2) {
+      g.append(s("line", { x1: X(F.t), x2: X(F.t), y1: m.t - 6, y2: H - m.b, stroke: C.bug, "stroke-width": 2, "stroke-dasharray": "4 3" }));
+      const tx = s("text", { x: X(F.t) - 4, y: m.t - 8, "text-anchor": "end", fill: C.bug, "font-size": 11, "font-weight": 700 }, "✕ FAIL: divergence op " + F.op);
+      tip(tx, bug.fail.raw.trim()); g.append(tx);
+    }
+    // first-bad highlight
+    if (firstBad.t >= a && firstBad.t <= b) {
+      const y = laneY(laneOf(firstBad.r));
+      g.append(s("circle", { cx: X(firstBad.t), cy: y, r: detail ? 14 : 10, fill: "none", stroke: C.yellow, "stroke-width": 2, class: "pulse" }));
+    }
+    win.setAttribute("x", mx(a)); win.setAttribute("width", Math.max(4, mx(b) - mx(a)));
+  }
+  let anim = null;
+  function zoomTo(i) {
+    const L = LEVELS[i], from = dom.slice(), to = [L.a, L.b], t0 = performance.now(), dur = 750;
+    cancelAnimationFrame(anim);
+    const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+    // zoom in/out geometrically so the motion feels like a camera zoom
+    const step = (now) => {
+      const u = ease(Math.min(1, (now - t0) / dur));
+      dom = [from[0] + (to[0] - from[0]) * u, from[1] + (to[1] - from[1]) * u];
+      render(); if (u < 1) anim = requestAnimationFrame(step);
+    };
+    anim = requestAnimationFrame(step);
+    btns.forEach((bt, j) => bt.classList.toggle("on", j === i));
+    document.getElementById("zdesc").innerHTML = `<b>${i + 1}. ${L.name}</b> (ticks ${L.a}–${L.b}): ${L.d}`;
+  }
+  const bar = document.getElementById("zoombar");
+  const btns = LEVELS.map((L, i) => { const bt = el("button", { onclick: () => zoomTo(i) }, `${i + 1} · ${L.name}`, el("span", { class: "z" }, `${L.b - L.a} ticks`)); bar.append(bt); return bt; });
+  bar.append(el("button", { onclick: () => { let i = 0; const go = () => { zoomTo(i); if (++i < 3) setTimeout(go, 1600); }; go(); } }, "▶ auto-zoom 1→3"));
+  render(); zoomTo(0);
+  document.getElementById("zlegend").append(...[
+    [C.bug, "commit with < quorum copies, never on a quorum"], [C.warn, "commit with < quorum copies, saved by luck"], [C.ok, "safe commit"],
+    [C.accent, "disk: write bar → ■ durable"], [C.violet, "prepare"], [C.accent2, "prepare_ok"], [C.ok + "aa", "reply"], [C.warn, "partition / view-change msgs"],
+  ].map(([c, t]) => el("span", {}, el("i", { class: "sw", style: { background: c } }), t)), el("span", {}, "✕ cut/lost packet · ⚡ crash · v view change · ★ new primary · » start_view installed"));
+})();
+
+// decisions table
+(function dtable() {
+  const tbl = document.getElementById("dtable");
+  tbl.append(el("tr", {}, ["tick", "replica", "op", "request", "own write durable", "prepare_ok from", "copies known / quorum", "WAL holders (ever)", "verdict"].map((h) => el("th", {}, h))));
+  for (const d of dBug) {
+    const dots = el("span", { class: "dots" }, [...Array(bug.n)].map((_, i) => el("i", { class: (i === d.r && d.ownDurable ? "own" : d.okFrom.includes(i) ? "ok" : "") })));
+    const lucky = !d.ok && d.holders.length >= d.quorum;
+    tbl.append(el("tr", {},
+      el("td", { class: "num" }, d.t), el("td", {}, "R" + d.r), el("td", { class: "num" }, d.op), el("td", { class: "num" }, d.request),
+      el("td", {}, d.ownDurable ? "yes" : "no"), el("td", {}, d.okFrom.length ? d.okFrom.map((b) => "R" + b).join(", ") : "none"),
+      el("td", { class: d.ok ? "good" : "bad" }, dots, ` ${d.copies} / ${d.quorum}`),
+      el("td", {}, d.holders.map((h) => "R" + h).join(", ") + ` (${d.holders.length})`),
+      el("td", { class: d.ok ? "good" : lucky ? "warn" : "bad" }, d.ok ? "safe" : lucky ? "unsafe decision, survived" : "unsafe: lost on view change")));
+  }
+  const okCut = bug.ev.filter((e) => e.ev === "cut" && e.cmd === "prepare_ok" && e.op === dBug[0].op);
+  document.getElementById("firstbad").innerHTML =
+    `<strong>First wrong state: tick ${firstBad.t}, op ${firstBad.op} (request ${firstBad.request}).</strong> ` +
+    `R${firstBad.r} committed it with ${firstBad.copies} copy (its own) where a quorum of ${firstBad.quorum} was needed, and op ${firstBad.op} never reached any other WAL. ` +
+    (luckyBad.length ? `Op ${luckyBad[0].op} at tick ${luckyBad[0].t} was the first wrong <em>decision</em> (also ${luckyBad[0].copies}/${luckyBad[0].quorum}; both prepare_oks were cut at tick ${okCut.map((e) => e.t)[0]}), ` +
+      `but its prepares had left before the partition at tick ${isoPart.t}, so ${luckyBad[0].holders.length} replicas held it anyway. The bug was already active there; luck hid it. ` : "") +
+    `The primary had received <b>${bug.ev.filter((e) => e.ev === "recv" && e.cmd === "prepare_ok" && e.to === firstBad.r).length}</b> prepare_oks in the whole run.`;
+  const lo = reqSend.t, hi = replyRecv.t;
+  const raw = bug.lines.filter((l) => { const m = l.match(/^\s*(\d+) /); return m && +m[1] >= lo && +m[1] <= hi && !/cmd=commit /.test(l); }).join("\n");
+  term("#rawzoom", raw, [[/@commit/, "f"], [/@cut|@lost/, "d"], [/@durable/, "k"]]);
+})();
+
+// ---------------------------------------------------------------- 3b. causal graph
+(function causal() {
+  const W = 1100, H = 430, cw = W / 7, bw = cw - 12, bh = 92, rowY = [60, 280];
+  const cut2 = bug.ev.filter((e) => e.ev === "cut" && e.cmd === "prepare" && e.op === firstBad.op && e.from === firstBad.r && e.view === firstBad.view);
+  const durable = bug.ev.find((e) => e.ev === "durable" && e.replica === firstBad.r && e.op === firstBad.op && e.kind === "append");
+  const more = unsafe.filter((d) => d.r === firstBad.r && d.op > firstBad.op);
+  const vcs = bug.status.filter((x) => x.e === "v" && x.r !== firstBad.r && x.t > isoPart.t && x.t < (crashOld ? crashOld.t : F.t));
+  const hbCut = bug.ev.filter((e) => e.ev === "cut" && e.cmd === "commit" && e.from === firstBad.r && e.t < (vcs[0] ? vcs[0].t : F.t));
+  const dvcs = bug.ev.filter((e) => e.ev === "recv" && e.cmd === "do_view_change" && e.to === newPrimary.r && e.view === newPrimary.view);
+  const req6 = bug.ev.filter((e) => e.cmd === "request" && e.request === F.req && (e.ev === "send" || e.ev === "recv"));
+  const req6recv = req6.filter((e) => e.ev === "recv" && e.to === F.r).pop();
+  const write6 = bug.ev.find((e) => e.ev === "write" && e.replica === F.r && e.op === F.op && e.view === F.view);
+  const failCommit = bug.ev.find((e) => e.ev === "commit" && e.replica === F.r && e.op === F.op && e.t === F.t);
+  const failCopies = (bug.ev.some((e) => e.ev === "durable" && e.replica === F.r && e.view === F.view && e.op >= F.op && e.t <= F.t) ? 1 : 0) +
+    new Set(bug.ev.filter((e) => e.ev === "recv" && e.cmd === "prepare_ok" && e.to === F.r && e.view === F.view && e.op >= F.op && e.t <= F.t).map((e) => e.from)).size;
+  const N = [
+    { id: "part", col: 0, row: 0, t: isoPart.t, title: "partition", lines: [`side=${isoPart.side}`, `R${isolated.join(",R")} cut off (${isoPart.sym})`], raw: [isoPart.raw], kind: "fault",
+      d: `The fault injector isolates R${isolated.join(",R")}, the current primary. Clients are not partitioned, so the client can still reach it.` },
+    { id: "cut", col: 1, row: 0, t: cut2[0].t, title: `prepares cut ×${cut2.length}`, lines: [`op ${firstBad.op} = request ${firstBad.request}`, `no backup sees op ${firstBad.op}`], raw: bug.lines.filter((l) => new RegExp(`^\\s*${cut2[0].t} @`).test(l)), kind: "net",
+      d: `R${firstBad.r} accepts request ${firstBad.request} and appends op ${firstBad.op}. Both prepares hit the partition. No backup can ever acknowledge it.` },
+    { id: "bad", col: 2, row: 0, t: firstBad.t, title: `commit op ${firstBad.op}: ${firstBad.copies}/${firstBad.quorum}`, lines: ["ROOT CAUSE", `own write + ${firstBad.okFrom.length} acks`], raw: [durable.raw, firstBad.ev.raw], kind: "root",
+      d: `<b>The wrong decision.</b> Only its own write is durable (${firstBad.copies} copy, quorum ${firstBad.quorum}). With <code>needed = 1</code>, try_commit commits anyway. This commit becomes canonical op ${firstBad.op} in the state checker.` },
+    { id: "reply", col: 3, row: 0, t: replyRecv.t, title: `client told "done"`, lines: [`reply request ${firstBad.request}`, `op ${firstBad.op} acknowledged`], raw: [replyRecv.raw], kind: "net",
+      d: `The client receives the reply. To the outside world, request ${firstBad.request} is durable. It exists on one disk, on the wrong side of a partition.` },
+    { id: "more", col: 4, row: 0, t: more[0].t, title: `ops ${more.map((d) => d.op).join(",")} alone`, lines: [`ticks ${more.map((d) => d.t).join(", ")}`, `each ${more[0].copies}/${more[0].quorum} copies`], raw: more.map((d) => d.ev.raw), kind: "root",
+      d: `The same decision repeats for ${more.length} more requests. Each is replied to, and none is on any other replica.` },
+    { id: "crash", col: 5, row: 0, t: crashOld.t, title: `R${crashOld.r} crashes`, lines: [`${crashOld.lost} unsynced write lost`, "client will retry"], raw: [crashOld.raw], kind: "fault",
+      d: `The isolated primary crashes. Its in-flight request ${F.req} is never answered, so the client times out and retries at the next replica.` },
+    { id: "vc", col: 3, row: 1, t: vcs[0].t, title: `view change v${vcs[0].view}`, lines: [vcs.map((x) => `R${x.r}@${x.t}`).join(" "), `${hbCut.length} heartbeats cut`], raw: vcs.map((x) => x.raw), kind: "vc",
+      d: `The backups hear no <code>commit</code> heartbeats (${hbCut.length} were cut) and start a view change. Their logs hold ${vcs[0].op} op.` },
+    { id: "np", col: 4, row: 1, t: newPrimary.t, title: `R${newPrimary.r} primary of v${newPrimary.view}`, lines: [`log = ${newPrimary.op} op (DVC ×${dvcs.length})`, `ops ${firstBad.op}–${lastLone.op} unknown`], raw: [...dvcs.map((e) => e.raw), newPrimary.raw], kind: "vc",
+      d: `R${newPrimary.r} collects do_view_change messages from the connected replicas and installs the best log it can see: ${newPrimary.op} op. Correct VSR assumes a commit is on a quorum, and every quorum intersects this one. That assumption is false here.` },
+    { id: "req6", col: 5, row: 1, t: req6recv.t, title: `request ${F.req} → op ${F.op}`, lines: [`recv at R${F.r}`, `appended: op ${write6.op}, v${write6.view}`], raw: [req6recv.raw, write6.raw], kind: "net",
+      d: `The client's retried request ${F.req} reaches the new primary, which puts it in the next free slot: op ${F.op}. That is the slot R${firstBad.r} already "committed" for request ${firstBad.request}.` },
+    { id: "c6", col: 6, row: 1, t: failCommit.t, title: `R${F.r} commits op ${F.op}`, lines: [`= request ${F.req}`, `checksum ${F.sum.slice(0, 8)}…`], raw: [failCommit.raw], kind: "root",
+      d: `R${F.r} commits op ${F.op} = request ${F.req}. (It commits with ${failCopies} known cop${failCopies === 1 ? "y" : "ies"}, since the bug is on every primary. But the conflict does not depend on that: with the correct rule, R${F.r} would commit the same op ${F.op} = request ${F.req} once R${dvcs[0] ? dvcs[0].from : "?"}'s prepare_ok arrived.)` },
+    { id: "fail", col: 6, row: 0, t: F.t, title: "FAIL: divergence", lines: [`op ${F.op}: req ${F.req} ≠ req ${F.creq}`, "state checker"], raw: [bug.fail.raw], kind: "fail",
+      d: `Checker 1 compares the new commit with canonical op ${F.op}, which is R${firstBad.r}'s request ${firstBad.request} from tick ${firstBad.t}, and stops the run. ${F.t - firstBad.t} ticks after the real mistake.` },
+  ];
+  const E = [["part", "cut"], ["cut", "bad"], ["bad", "reply"], ["bad", "more"], ["more", "crash"], ["part", "vc"], ["vc", "np"], ["crash", "req6"], ["np", "req6"], ["req6", "c6"], ["c6", "fail"], ["bad", "fail"]];
+  const pos = Object.fromEntries(N.map((n) => [n.id, { x: 9 + n.col * cw, y: rowY[n.row] }]));
+  const KC = { fault: C.warn, net: C.accent, root: C.bug, vc: C.violet, fail: C.bug };
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(s("defs", {}, ...Object.entries({ a: C.dim, h: C.yellow }).map(([k, c]) => s("marker", { id: "cg" + k, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: c })))));
+  svg.append(s("text", { x: 10, y: 30, fill: C.muted, "font-size": 12 }, `old primary R${firstBad.r} (isolated): commits nobody else has`));
+  svg.append(s("text", { x: 10, y: 250, fill: C.muted, "font-size": 12 }, `connected replicas: elect a new primary without those ops`));
+  svg.append(s("line", { x1: 10, x2: W - 10, y1: 210, y2: 210, stroke: C.warn, "stroke-dasharray": "6 6", opacity: 0.5 }));
+  svg.append(s("text", { x: W - 12, y: 205, "text-anchor": "end", fill: C.warn, "font-size": 11, opacity: 0.8 }, "partition"));
+  const edgeEls = E.map(([a, b]) => {
+    const p = pos[a], q = pos[b];
+    let d;
+    if (a === "bad" && b === "fail") d = `M${p.x + bw / 2},${p.y} C${p.x + bw / 2},${p.y - 50} ${q.x + bw / 2},${q.y - 50} ${q.x + bw / 2},${q.y}`;
+    else if (p.y === q.y) d = `M${p.x + bw},${p.y + bh / 2} L${q.x},${q.y + bh / 2}`;
+    else if (p.x === q.x) d = p.y < q.y ? `M${p.x + bw / 2},${p.y + bh} L${q.x + bw / 2},${q.y}` : `M${p.x + bw / 2},${p.y} L${q.x + bw / 2},${q.y + bh}`;
+    else d = p.y < q.y ? `M${p.x + bw / 2},${p.y + bh} C${p.x + bw / 2},${q.y + bh / 2} ${q.x - 40},${q.y + bh / 2} ${q.x},${q.y + bh / 2}`
+                       : `M${p.x + bw},${p.y + bh / 2} C${q.x + bw / 2},${p.y + bh / 2} ${q.x + bw / 2},${p.y + bh / 2} ${q.x + bw / 2},${q.y + bh}`;
+    const path = s("path", { d, fill: "none", stroke: C.dim, "stroke-width": 1.6, "marker-end": "url(#cga)" });
+    svg.append(path); return { a, b, path };
+  });
+  const nodeEls = N.map((n, i) => {
+    const p = pos[n.id], col = KC[n.kind];
+    const gEl = s("g", { style: "cursor:pointer", onclick: () => player.go(order.indexOf(n.id)) });
+    gEl.append(s("rect", { x: p.x, y: p.y, width: bw, height: bh, rx: 10, fill: "#0f1726", stroke: col, "stroke-width": n.kind === "root" || n.kind === "fail" ? 2 : 1.3 }));
+    gEl.append(s("text", { x: p.x + 8, y: p.y + 16, fill: C.dim, "font-size": 10 }, "tick " + n.t));
+    gEl.append(s("text", { x: p.x + 8, y: p.y + 36, fill: col, "font-size": 11.5, "font-weight": 700 }, n.title));
+    n.lines.forEach((ln, j) => gEl.append(s("text", { x: p.x + 8, y: p.y + 56 + j * 16, fill: j === 0 && n.kind === "root" && ln === "ROOT CAUSE" ? C.yellow : "#c9d4ea", "font-size": 10 }, ln)));
+    tip(gEl, n.raw.map((r) => r.trim()).join("\n"));
+    svg.append(gEl); return gEl;
+  });
+  document.getElementById("cgraph").append(svg);
+  const order = N.slice().sort((x, y) => x.t - y.t || (x.id === "fail" ? 1 : -1)).map((n) => n.id);
+  const rawBox = el("div"); document.getElementById("cgraw").append(rawBox);
+  const player = new DST.Player("#cgplayer", { count: order.length, speed: 1, label: (i) => `${i + 1}/${order.length} · tick ${N.find((n) => n.id === order[i]).t}`,
+    onStep(i) {
+      const seen = new Set(order.slice(0, i + 1)), cur = order[i], n = N.find((x) => x.id === cur);
+      nodeEls.forEach((gEl, j) => { gEl.style.opacity = seen.has(N[j].id) ? 1 : 0.22; gEl.firstChild.setAttribute("fill", N[j].id === cur ? "#1b2538" : "#0f1726"); });
+      edgeEls.forEach((e) => {
+        const on = seen.has(e.a) && seen.has(e.b), into = e.b === cur && seen.has(e.a);
+        e.path.setAttribute("opacity", on ? 1 : 0.15); e.path.setAttribute("stroke", into ? C.yellow : C.dim);
+        e.path.setAttribute("marker-end", into ? "url(#cgh)" : "url(#cga)"); e.path.classList.toggle("flow", into);
+      });
+      document.getElementById("cgdesc").innerHTML = `<b>tick ${n.t} · ${n.title}.</b> ${n.d}`;
+      rawBox.replaceChildren(); term(rawBox, n.raw.join("\n"), [[/FAIL|@commit/, "f"], [/@cut|@lost/, "d"]]).classList.add("short");
+    } });
+})();
+
+// ---------------------------------------------------------------- 4. hypothesis
+(function hypo() {
+  const rows = (D, tag) => D.map((d) => ({ label: `op ${d.op} @t${d.t} R${d.r}`, value: d.copies, color: d.ok ? C.ok : C.bug, note: `${d.ev.raw.trim()}\nown durable: ${d.ownDurable}, prepare_ok from: ${d.okFrom.map((b) => "R" + b).join(",") || "none"}` }));
+  const fmt = (v, r) => `${v} / quorum ${bug.quorum}`;
+  DST.bar("#hbug", rows(dBug), { max: bug.n, labelW: 150, width: 520, fmt });
+  DST.bar("#hfix", rows(dFix), { max: fix.n, labelW: 150, width: 520, fmt });
+  const badB = dBug.filter((d) => !d.ok).length, badF = dFix.filter((d) => !d.ok).length;
+  document.getElementById("hcap").innerHTML = `Bars are the "copies known" count derived from <code>@durable</code> and <code>@recv … cmd=prepare_ok</code> lines. Bar length is out of ${bug.n} replicas.`;
+  document.getElementById("hverdict").innerHTML = `<strong>Prediction holds.</strong> With the bug, ${badB} of ${dBug.length} canonical commits were made below quorum. ` +
+    `Under the fixed code, the same seed makes ${dFix.length} canonical commits, and ${badF} of them are below quorum (every one is own write + ${[...new Set(dFix.flatMap((d) => d.okFrom))].map((b) => "R" + b).join("/")}'s prepare_ok). ` +
+    `The only difference between the two runs is the value of <code>needed</code>.`;
+})();
+
+// ---------------------------------------------------------------- 5. fix & verify
+(function verify() {
+  const r3 = DST.text("log-run3fix");
+  term("#run3fixed", "$ mini-vopr run 3\n" + tailN(r3, 9), rules).classList.add("short");
+  term("#sweepfixed", "$ mini-vopr sweep 20000\n" + sweepFix.trimEnd(), rules);
+  const real = sweepFix.match(/real\s+(\S+)/)[1], n = +sweepFix.match(/PASS: (\d+) seeds/)[1];
+  const rf = parseRun(r3).result;
+  document.getElementById("fixstats").append(stat(rf.ok ? "PASS" : "FAIL", `seed 3 fixed: ${rf.ticks} ticks, ${rf.commits} commits`, rf.ok ? C.ok : C.bug), stat(n.toLocaleString(), `seeds pass (wall time ${real})`, C.ok));
+  const row = (id, arr) => { const box = document.getElementById(id); for (const x of arr) { const c = el("i", { class: (x.ok ? "" : "fail") + (x.seed === failSeed ? " three" : "") }); tip(c, x.line.replace(/\t/g, "\n").trim()); box.append(c); } };
+  row("rowbug", seedsBug); row("rowfix", seedsFix);
+  const fb = seedsBug.filter((x) => !x.ok), ff = seedsFix.filter((x) => !x.ok);
+  document.getElementById("rowcap").innerHTML = `Each cell is one real <code>run &lt;seed&gt;</code> (hover for its result line). With the bug, ${fb.length} of ${seedsBug.length} seeds fail ` +
+    `(first: ${fb.slice(0, 6).map((x) => x.seed).join(", ")}, …); ${fb.filter((x) => /reason: divergence/.test(x.line)).length} of them by <code>divergence</code>. Fixed: ${ff.length} fail. Seed ${failSeed} is outlined.`;
+  document.getElementById("recheck").textContent = sweepBug.split("\n")[0].slice(0, 40) + "…";
+})();
+
+// ---------------------------------------------------------------- 6. seed stability
+(function stability() {
+  const fixPart = fix.faults.filter((f) => f.kind === "partition");
+  const same = (a, b) => a.kind === b.kind && a.t === b.t && a.r === b.r && a.side === b.side;
+  const fb = bug.faults.filter((f) => f.kind !== "liveness"), ff = fix.faults.filter((f) => f.kind !== "liveness");
+  const shared = fb.filter((a) => ff.some((b) => same(a, b))).length;
+  document.getElementById("stabstats").append(
+    stat(`${shared} / ${fb.length}`, "fault events of the bug run that recur, at the same tick, in the fixed run", shared ? C.ok : C.bug),
+    stat(fmtT(firstDiffTick.t), "first tick where the two --events logs differ", C.warn),
+    stat(`${sameTrace} / ${seedsBug.length}`, "seeds 0–199 with the same trace hash, bug vs fixed", sameTrace ? C.ok : C.bug));
+  const fl = (R, lane) => R.faults.map((f) => {
+    const end = R.result.ticks;
+    if (f.kind === "partition") { const h = R.faults.find((x) => x.kind === "heal" && x.t > f.t) || R.faults.find((x) => x.kind === "liveness" && x.t > f.t); return { lane, t: f.t, t2: h ? h.t : end, color: C.warn, label: `isolated side=${f.side}`, tip: f.raw.trim() }; }
+    if (f.kind === "crash") { const rs = R.faults.find((x) => x.kind === "restart" && x.r === f.r && x.t > f.t); return { lane, t: f.t, t2: rs ? rs.t : end, color: C.bug, label: `R${f.r} down`, tip: f.raw.trim() }; }
+    if (f.kind === "liveness") return { lane, t: f.t, color: C.accent2, r: 6, tip: f.raw.trim() };
+    return null;
+  }).filter(Boolean);
+  const evs = [...fl(bug, 0), ...fl(fix, 1)];
+  evs.push({ lane: 0, t: bug.fail.t, kind: "x", color: C.bug, tip: bug.fail.raw.trim() });
+  evs.push({ lane: 1, t: fix.result.ticks, color: C.ok, r: 6, tip: fix.result.raw });
+  for (const d of dBug) evs.push({ lane: 2, t: d.t, color: d.ok ? C.ok : C.bug, r: 4, tip: d.ev.raw.trim() });
+  for (const d of dFix) evs.push({ lane: 3, t: d.t, color: d.ok ? C.ok : C.bug, r: 4, tip: d.ev.raw.trim() });
+  DST.lanes("#faultlanes", ["faults · bug", "faults · fixed", "commits · bug", "commits · fixed"], evs, { tmin: 0, tmax: fix.result.ticks, labelW: 120, tlabel: "tick" });
+  document.getElementById("faultlegend").append(...[[C.warn, "partition"], [C.bug, "replica down (crash → restart)"], [C.accent2, "liveness phase starts"], [C.ok, "safe canonical commit / PASS"], [C.bug, "below-quorum commit / ✕ FAIL"]].map(([c, t]) => el("span", {}, el("i", { class: "sw", style: { background: c } }), t)));
+  const iso = fix.ev.filter((e) => e.ev === "recv" && e.cmd === "request" && e.to === 0 && fixPart[0] && e.t > fixPart[0].t && e.t < 200);
+  const fixCommitsByR0 = fix.ev.filter((e) => e.ev === "commit" && e.replica === 0 && fixPart[0] && e.t > fixPart[0].t && e.t < 200).length;
+  document.getElementById("faultcap").innerHTML = `Bug run fault lines: ${bug.faults.filter((f) => f.kind !== "liveness").map((f) => f.raw.trim().replace(/\s+/g, " ")).map((r) => `<code>${r}</code>`).join(", ")}. ` +
+    `Fixed run fault lines: ${fix.faults.filter((f) => f.kind !== "liveness").map((f) => `<code>${f.raw.trim().replace(/\s+/g, " ")}</code>`).join(", ")}. ` +
+    (fixPart.length ? `The fixed run also isolates R0 (at tick ${fixPart[0].t}, not ${isoPart.t}), but with R2 already down. R0 then receives ${iso.length} request${iso.length === 1 ? "" : "s"} and correctly commits ${fixCommitsByR0}. It is a different scenario from the one that exposed the bug.` : "");
+  const dv = document.getElementById("divergence");
+  dv.append(el("p", { class: "small" }, `The first ${firstDiffTick.i} event lines are identical. Line ${firstDiffTick.i + 1} is the first difference:`));
+  term(dv, "bug:   " + firstDiffTick.a + "\nfixed: " + firstDiffTick.b, [[/^bug/, "f"], [/^fixed/, "k"]]);
+  dv.append(el("p", { class: "small" }, `At tick ${firstDiffTick.t} the buggy primary commits op 1 on its own write and sends a reply. That send draws loss, duplication and delay from the simulator PRNG, ` +
+    `which also schedules crashes and partitions. Every later draw lands elsewhere. Even the ${seedsBug.filter((x) => x.ok).length} seeds that pass with the bug get a different trace hash when the fix is applied (seed 0: ${seedsBug[0].trace} vs ${seedsFix[0].trace}).`));
+  const t = document.getElementById("optcmp"); let eq = 0;
+  const keys = Object.keys(bug.opts);
+  for (const k of keys) { const a = bug.opts[k], b = fix.opts[k]; if (a === b) eq++; }
+  t.append(el("tr", {}, el("th", {}, "option"), el("th", {}, "bug"), el("th", {}, "fixed")));
+  for (const k of keys.slice(0, 7)) t.append(el("tr", {}, el("td", {}, k), el("td", {}, bug.opts[k]), el("td", { style: { color: bug.opts[k] === fix.opts[k] ? C.ok : C.bug } }, fix.opts[k])));
+  t.append(el("tr", {}, el("td", { colspan: 3, style: { color: C.muted } }, `… ${eq} of ${keys.length} options identical`)));
+  document.getElementById("stabnote").innerHTML = `<strong>So: a seed is a coordinate, not a scenario.</strong> "Seed 3" means "partition at tick ${isoPart.t}" only for the buggy binary. ` +
+    `Keep the seed in the bug report (with the commit hash) to reproduce it, and keep running random sweeps. But the regression test must describe the scenario itself: isolate the primary, send a request, assert that it does not commit.`;
+})();
+</script>
+</body></html>

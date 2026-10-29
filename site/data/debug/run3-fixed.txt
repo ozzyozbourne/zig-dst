@@ -1,0 +1,65 @@
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     8  2 ! # ..#    0V   0/__1C   0LV   0Wo  1W!
+    12  0   / ..#    0V   1/__1C   0LV   1Wo  0W!
+    21  1   \ ..#    0V   1/__2C   0LV   1Wo  1W!
+    25  0   / ..#    0V   2/__2C   0LV   2Wo  0W!
+    52  1   \ ..#    0V   2/__2C   0LV   2Wo  0W!
+    60  0   / ..#    0V   3/__3C   0LV   3Wo  0W!
+    69  1   \ ..#    0V   3/__3C   0LV   3Wo  0W!
+    83  0   / ..#    0V   4/__4C   0LV   4Wo  0W!
+    90    partition side=00001 symmetric
+    92  1   \ ..#    0V   4/__4C   0LV   4Wo  0W!
+   147  1 v / .v#    1V   4/__4C   0LV   4Wo  0W!
+   247  1 v \ .v#    2V   4/__4C   0LV   4Wo  0W!
+   314  1 v \ .v#    3V   4/__4C   0LV   4Wo  0W!
+   375  1 v / .v#    4V   4/__4C   0LV   4Wo  0W!
+   456  2 ^ \ .v.    0V   0/__0C   0LV   0Wo  0W!
+   478  1 v \ .v.    5V   4/__4C   0LV   4Wo  0W!
+   481  2 v / .vv    5V   0/__0C   0LV   0Wo  0W!
+   490  2 / / .v.    5V   0/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   1/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   2/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   3/__4C   5LV   0Wo  1W!
+   490  2   / .v.    5V   4/__4C   5LV   0Wo  1W!
+   492  1 > \ ...    5V   4/__4C   5LV   4Wo  1W!
+   560  2   / ...    5V   5/__5C   5LV   5Wo  0W!
+   564  1   \ ...    5V   5/__5C   5LV   5Wo  0W!
+   573  2   / ...    5V   6/__6C   5LV   6Wo  0W!
+   579  1   \ ...    5V   6/__6C   5LV   6Wo  0W!
+   604  2   / ...    5V   7/__7C   5LV   7Wo  0W!
+   612  1   \ ...    5V   7/__7C   5LV   7Wo  0W!
+   643  2   / ...    5V   8/__8C   5LV   8Wo  0W!
+   645    liveness mode: core=00111
+   652  1   \ ...    5V   8/__8C   5LV   8Wo  0W!
+   656  0 > \ ...    5V   4/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   5/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   6/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   7/__8C   5LV   5Wo  1W!
+   656  0   \ ...    5V   8/__8C   5LV   5Wo  1W!
+   656  0 = \ ...    5V   8/__8C   5LV   5Wo  1W!
+   656  1 = \ ...    5V   8/__8C   5LV   8Wo  0W!
+   656  2 = / ...    5V   8/__8C   5LV   8Wo  0W!
+seed=3 ticks=656 commits=8 trace=0decab59c35e26b8 PASS

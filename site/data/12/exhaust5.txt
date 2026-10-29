@@ -1,0 +1,12 @@
+exhaust: domain=0..7 capacity=3 ranges of 1..3 blocks, max_len=5
+len=1 sequences=36 ops=36 hits: insert_disjoint=18 insert_full=0 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=18 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+len=2 sequences=1296 ops=2592 hits: insert_disjoint=1092 insert_full=0 insert_extend=204 insert_coalesce=0 insert_fill_gap=0 remove_miss=1164 remove_trim=72 remove_delete=55 remove_split=5 remove_split_full=0
+len=3 sequences=46656 ops=139968 hits: insert_disjoint=51204 insert_full=0 insert_extend=18312 insert_coalesce=353 insert_fill_gap=115 remove_miss=57417 remove_trim=6864 remove_delete=4982 remove_split=721 remove_split_full=0
+len=4 sequences=1679616 ops=6718464 hits: insert_disjoint=2183624 insert_full=42 insert_extend=1125068 insert_coalesce=38178 insert_fill_gap=12320 remove_miss=2552458 remove_trim=439632 remove_delete=307404 remove_split=59714 remove_split_full=24
+len=5 sequences=60466176 ops=302330880 hits: insert_disjoint=88874672 insert_full=4782 insert_extend=58777710 insert_coalesce=2655414 insert_fill_gap=852862 remove_miss=107584348 remove_trim=23664380 remove_delete=16082680 remove_split=3830938 remove_split_full=3094
+PASS: every sequence up to len=5: 62193780 sequences, 309191940 ops
+exhaust trace=5dddad567ca7f562 PASS
+
+real	0m12.872s
+user	0m12.871s
+sys	0m0.000s

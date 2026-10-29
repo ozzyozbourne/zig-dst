@@ -1,0 +1,7 @@
+INVARIANT VIOLATED: slots 2,3 out of order or touching: [1040774,1040862) then [214004,319265)
+FAIL at seed=1 after 2 seeds (124 ops). Replay with:
+  zig run main.zig -- run 1 --gen-boundaries --bug-fill-gap
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s

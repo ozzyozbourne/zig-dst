@@ -1,0 +1,15 @@
+cluster_recoverable: yes (core=3/4 nodes, quorum=3, all up, all core links healthy)
+LIVENESS VIOLATED: no stable leader 3000 ticks after heal: terms advanced 62->162 during the convergence window with no leader elected
+  100 election rounds: 52 split votes (52 simultaneous: all candidates timed out within 6 ticks, before any RequestVote could arrive), 47 lone candidates refused by a voter with a longer log
+  term 157: timed out at ticks 4823..4824, quorum 3, votes: 0<-{0,2} 3<-{3} refused-for-log:{3} leader=none
+  term 158: timed out at ticks 4853..4854, quorum 3, votes: 0<-{0} 2<-{2} refused-for-log:{3} leader=none
+  term 159: timed out at ticks 4883..4883, quorum 3, votes: 0<-{0,2} refused-for-log:{3} leader=none
+  term 160: timed out at ticks 4913..4914, quorum 3, votes: 0<-{0} 2<-{2} refused-for-log:{3} leader=none
+  term 161: timed out at ticks 4943..4943, quorum 3, votes: 0<-{0,2} refused-for-log:{3} leader=none
+  term 162: timed out at ticks 4973..4974, quorum 3, votes: 0<-{0} 2<-{2} 3<-{3} refused-for-log:{3} leader=none
+FAIL at seed=11 (no_stable_leader) after 12 seeds. Replay with:
+  zig run main.zig -- run 11 --bug-fixed-timeout
+
+real	0m0.007s
+user	0m0.007s
+sys	0m0.000s

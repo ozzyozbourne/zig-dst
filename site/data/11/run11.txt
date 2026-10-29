@@ -1,0 +1,145 @@
+seed=11 nodes=4 clients=1 requests_per_client=7 election_timeout=20..40
+  partition_mode=isolate_single partition_probability=45/10000 unpartition_probability=152/10000 partition_stability=104
+  crash_probability=86/100000 restart_probability=38/1000 loss=5/1000 delay=2..6
+  safety phase: ticks 0..2000; liveness window: 3000 ticks
+  tick node event role [cluster] term votedFor leader commit/log
+    22 3 ? ? [\\\?]   1T v3 L- c0/0
+    26 2 > \ [\\\?]   1T v- L- c0/0
+    26 2 v \ [\\\?]   1T v3 L- c0/0
+    27 0 > \ [\\\?]   1T v- L- c0/0
+    27 0 v \ [\\\?]   1T v3 L- c0/0
+    28 1 > \ [\\\?]   1T v- L- c0/0
+    28 1 v \ [\\\?]   1T v3 L- c0/0
+    32 3 * / [\\\/]   1T v3 L3 c0/0
+    38 c0 S #1 node=0
+    45 c0 R #1 node=3
+    51 c0 A #1 node=3
+    59 c0 D #1 node=3
+    59 c0 = counter=1 at index 2 after 21 ticks
+   106 1 ! # [\#\/]   1T v3 L- c0/2
+   120 c0 S #2 node=3
+   127 c0 A #2 node=3
+   137 c0 D #2 node=3
+   137 c0 = counter=2 at index 3 after 17 ticks
+   146 c0 S #3 node=3
+   154 c0 A #3 node=3
+   158 c0 D #3 node=3
+   158 c0 = counter=3 at index 4 after 12 ticks
+   200 1 ^ \ [\\\/]   1T v3 L- c0/2
+   211 c0 S #4 node=3
+   221 c0 A #4 node=3
+   228 c0 D #4 node=3
+   228 c0 = counter=4 at index 5 after 17 ticks
+   267 c0 S #5 node=3
+   273 c0 A #5 node=3
+   285 c0 D #5 node=3
+   285 c0 = counter=5 at index 6 after 18 ticks
+   323 c0 S #6 node=3
+   333 c0 A #6 node=3
+   339 c0 D #6 node=3
+   339 c0 = counter=6 at index 7 after 16 ticks
+   400 - P partition 2|013
+   412 c0 S #7 node=3
+   418 c0 A #7 node=3
+   429 c0 D #7 node=3
+   429 c0 = counter=7 at index 8 after 17 ticks
+   434 2 ? ? [\\?/]   2T v2 L- c7/7
+   466 2 ? ? [\\?/]   3T v2 L- c7/7
+   495 2 ? ? [\\?/]   4T v2 L- c7/7
+   526 - H heal
+   533 3 > \ [\\?\]   4T v- L- c8/8
+   533 2 ? ? [\\?\]   5T v2 L- c7/7
+   534 1 > \ [\\?\]   4T v- L- c8/8
+   536 0 > \ [\\?\]   4T v- L- c8/8
+   536 0 > \ [\\?\]   5T v- L- c8/8
+   537 1 > \ [\\?\]   5T v- L- c8/8
+   538 3 > \ [\\?\]   5T v- L- c8/8
+   557 1 ? ? [\??\]   6T v1 L- c8/8
+   559 0 > \ [\??\]   6T v- L- c8/8
+   559 0 v \ [\??\]   6T v1 L- c8/8
+   559 2 > \ [\?\\]   6T v- L- c7/7
+   559 2 v \ [\?\\]   6T v1 L- c7/7
+   561 3 > \ [\?\\]   6T v- L- c8/8
+   561 3 v \ [\?\\]   6T v1 L- c8/8
+   562 1 * / [\/\\]   6T v1 L1 c8/8
+   612 3 ! # [\/\#]   6T v1 L- c0/9
+   628 3 ^ \ [\/\\]   6T v1 L- c0/9
+   645 - P partition 0|123
+   669 0 ? ? [?/\\]   7T v0 L- c9/9
+   705 0 ? ? [?/\\]   8T v0 L- c9/9
+   730 3 ! # [?/\#]   6T v1 L- c0/9
+   736 0 ? ? [?/\#]   9T v0 L- c9/9
+   738 3 ^ \ [?/\\]   6T v1 L- c0/9
+   740 0 ! # [#/\\]   9T v0 L- c0/9
+   756 0 ^ \ [\/\\]   9T v0 L- c0/9
+   774 - H heal
+   786 1 > \ [\\\\]   9T v- L- c9/9
+   790 0 ? ? [?\\\]  10T v0 L- c0/9
+   795 1 > \ [?\\\]  10T v- L- c9/9
+   795 1 v \ [?\\\]  10T v0 L- c9/9
+   796 2 > \ [?\\\]  10T v- L- c9/9
+   796 2 v \ [?\\\]  10T v0 L- c9/9
+   796 3 > \ [?\\\]  10T v- L- c9/9
+   796 3 v \ [?\\\]  10T v0 L- c9/9
+   801 0 * / [/\\\]  10T v0 L0 c0/9
+   908 - P partition 1|023
+   932 1 ? ? [/?\\]  11T v1 L- c10/10
+   957 1 ? ? [/?\\]  12T v1 L- c10/10
+   985 1 ? ? [/?\\]  13T v1 L- c10/10
+  1006 1 ? ? [/?\\]  14T v1 L- c10/10
+  1019 - H heal
+  1026 3 > \ [/?\\]  14T v- L- c10/10
+  1026 3 v \ [/?\\]  14T v1 L- c10/10
+  1027 0 > \ [\?\\]  14T v- L- c10/10
+  1027 0 v \ [\?\\]  14T v1 L- c10/10
+  1028 2 > \ [\?\\]  14T v- L- c10/10
+  1028 2 v \ [\?\\]  14T v1 L- c10/10
+  1030 1 ! # [\#\\]  14T v1 L- c0/10
+  1049 3 ? ? [\#\?]  15T v3 L- c10/10
+  1051 2 > \ [\#\?]  15T v- L- c10/10
+  1051 2 v \ [\#\?]  15T v3 L- c10/10
+  1052 0 > \ [\#\?]  15T v- L- c10/10
+  1052 0 v \ [\#\?]  15T v3 L- c10/10
+  1056 3 * / [\#\/]  15T v3 L3 c10/10
+  1079 1 ^ \ [\\\/]  14T v1 L- c0/10
+  1087 1 > \ [\\\/]  15T v- L- c0/10
+  1157 1 ! # [\#\/]  15T v- L- c0/11
+  1163 - P partition 3|012
+  1187 2 ? ? [\#?/]  16T v2 L- c11/11
+  1190 0 > \ [\#?/]  16T v- L- c11/11
+  1190 0 v \ [\#?/]  16T v2 L- c11/11
+  1222 2 ? ? [\#?/]  17T v2 L- c11/11
+  1227 0 ? ? [?#?/]  17T v0 L- c11/11
+  1235 1 ^ \ [?\?/]  15T v- L- c0/11
+  1236 1 > \ [?\?/]  17T v- L- c0/11
+  1236 1 v \ [?\?/]  17T v0 L- c0/11
+  1254 0 ? ? [?\?/]  18T v0 L- c11/11
+  1255 2 ? ? [?\?/]  18T v2 L- c11/11
+  1257 1 > \ [?\?/]  18T v- L- c0/11
+  1257 1 v \ [?\?/]  18T v0 L- c0/11
+  1275 2 ? ? [?\?/]  19T v2 L- c11/11
+  1276 - H heal
+  1278 0 > \ [\\?/]  19T v- L- c11/11
+  1278 0 v \ [\\?/]  19T v2 L- c11/11
+  1280 1 > \ [\\?/]  19T v- L- c0/11
+  1280 1 v \ [\\?/]  19T v2 L- c0/11
+  1282 3 > \ [\\?\]  19T v- L- c11/11
+  1284 3 v \ [\\?\]  19T v2 L- c11/11
+  1285 2 * / [\\/\]  19T v2 L2 c11/11
+  1814 - P partition 0|123
+  1837 0 ? ? [?\/\]  20T v0 L- c12/12
+  1859 0 ? ? [?\/\]  21T v0 L- c12/12
+  1880 0 ? ? [?\/\]  22T v0 L- c12/12
+  1907 0 ? ? [?\/\]  23T v0 L- c12/12
+  1943 0 ? ? [?\/\]  24T v0 L- c12/12
+  1983 0 ? ? [?\/\]  25T v0 L- c12/12
+  2000 - L liveness mode: core=023 (cut off for good: 1)
+  2002 2 > \ [?\\\]  25T v- L- c12/12
+  2002 2 v \ [?\\\]  25T v0 L- c12/12
+  2002 3 > \ [?\\\]  25T v- L- c12/12
+  2002 3 v \ [?\\\]  25T v0 L- c12/12
+  2003 0 * / [/\\\]  25T v0 L0 c12/12
+  2006 - stable leader: node 0 in term 25, 6 ticks after heal
+  2011 - converged: every request committed and applied by the core, 11 ticks after heal
+safety: OK: election safety held (6 leaders, at most one per term, highest led term 25); committed prefix of 13 entries never rewritten; counter exactly-once
+seed=11 ticks=2011 trace=9191ccd8de56db0b PASS

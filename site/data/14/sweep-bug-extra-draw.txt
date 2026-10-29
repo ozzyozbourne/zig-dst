@@ -1,0 +1,11 @@
+CORRUPTION: file offset 15 now holds record 16 (tick 31, request #11)
+path short_write_retry hits=480 seeds=480 of=229450
+path timeout_in_flush hits=8818 seeds=8657 of=229450
+path full_while_reconnect hits=148 seeds=148 of=229450
+path short_retry_then_timeout hits=1 seeds=1 of=229450
+FAIL at seed=229449 (corruption) after 229450 seeds. Replay with:
+  zig run main.zig -- run 229449 --bug-stale-offset --extra-draw
+
+real	0m0.734s
+user	0m0.734s
+sys	0m0.000s

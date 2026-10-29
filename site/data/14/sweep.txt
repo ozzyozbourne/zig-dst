@@ -1,0 +1,9 @@
+path short_write_retry hits=4489 seeds=4486 of=2000000
+path timeout_in_flush hits=76406 seeds=75118 of=2000000
+path full_while_reconnect hits=1243 seeds=1243 of=2000000
+path short_retry_then_timeout hits=18 seeds=18 of=2000000
+PASS: 2000000 seeds (from seed 0)
+
+real	0m6.166s
+user	0m6.162s
+sys	0m0.000s

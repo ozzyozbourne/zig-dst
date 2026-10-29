@@ -1,0 +1,18 @@
+PASS: 1000000 seeds (100000000 ops)
+coverage: 1000000 seeds, generator=uniform
+  mark                 seeds_hit        hits
+  insert_disjoint        1000000    32023197
+  insert_full            1000000    32593030
+  insert_extend           317517      381452
+  insert_coalesce            484         484
+  insert_fill_gap              0           0   <-- NEVER HIT
+  remove_miss            1000000    34797620
+  remove_trim             127276      135888
+  remove_delete            33856       34459
+  remove_split             11033       11090
+  remove_split_full        22526       22780
+--require-all: FAIL, 1 mark(s) never hit
+
+real	0m15.971s
+user	0m15.900s
+sys	0m0.016s

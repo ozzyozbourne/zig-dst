@@ -1,0 +1,17 @@
+CORRUPTION: file offset 2 now holds record 3 (tick 40, request #5)
+path short_write_retry hits=20 seeds=12 of=41
+path timeout_in_flush hits=48 seeds=14 of=41
+path full_while_reconnect hits=12 seeds=6 of=41
+path short_retry_then_timeout hits=1 seeds=1 of=41
+buggify short_write active_seeds=14 fired=24 of=41
+buggify tiny_timeout active_seeds=4 fired=19 of=41
+buggify delay_ack active_seeds=11 fired=37 of=41
+buggify drop_connection active_seeds=13 fired=54 of=41
+buggify small_buffer active_seeds=6 fired=2 of=41
+buggify slow_reconnect active_seeds=14 fired=10 of=41
+FAIL at seed=40 (corruption) after 41 seeds. Replay with:
+  zig run main.zig -- run 40 --bug-stale-offset --buggify
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s

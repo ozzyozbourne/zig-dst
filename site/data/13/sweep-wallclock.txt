@@ -1,0 +1,6 @@
+FAIL at seed=37 (stale_read) after 38 seeds. Replay with:
+  zig run main.zig -- run 37 --bug-wall-clock
+
+real	0m0.101s
+user	0m0.101s
+sys	0m0.000s

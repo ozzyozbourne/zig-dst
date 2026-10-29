@@ -1,0 +1,9 @@
+cluster_recoverable: yes (core=2/3 nodes, quorum=2, all up, all core links healthy)
+LIVENESS VIOLATED: request c0#8 pending for 4378 ticks (submitted at tick 622, last sent at tick 622)
+  accepted by node 1 in term 6 as index 19 at tick 626; index 19 was committed with a term-7 no-op instead: the entry was discarded by a later leader, and the client never re-sent it
+FAIL at seed=3 (request_stuck) after 4 seeds. Replay with:
+  zig run main.zig -- run 3 --bug-no-retry-on-leader-change
+
+real	0m0.002s
+user	0m0.002s
+sys	0m0.000s

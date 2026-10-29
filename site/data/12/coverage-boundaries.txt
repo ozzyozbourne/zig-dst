@@ -1,0 +1,18 @@
+PASS: 100000 seeds (10000000 ops)
+coverage: 100000 seeds, generator=boundaries
+  mark                 seeds_hit        hits
+  insert_disjoint         100000     2555583
+  insert_full              24362       88296
+  insert_extend           100000     3646939
+  insert_coalesce          27515       34300
+  insert_fill_gap          82999      174804
+  remove_miss             100000     2225183
+  remove_trim              98659      458963
+  remove_delete            86947      202341
+  remove_split             96842      593886
+  remove_split_full        13027       19705
+--require-all: every mark hit
+
+real	0m9.897s
+user	0m9.896s
+sys	0m0.000s

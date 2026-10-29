@@ -1,0 +1,200 @@
+seed=0 ticks=577 commits=15 trace=1079908f7559b330 PASS	
+seed=1 ticks=393 commits=24 trace=0341e50ce40bddc2 PASS	
+seed=2 ticks=741 commits=40 trace=79f6edf2e455b10b PASS	
+reason: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)	seed=3 ticks=195 commits=5 trace=692aa09c1869a180 FAIL	
+seed=4 ticks=168 commits=10 trace=d53507fdf679fdf3 PASS	
+seed=5 ticks=547 commits=36 trace=45c92b748ea92be2 PASS	
+reason: divergence: replica 1 committed op=7 checksum=5579dafb2f41bf38 (client=0 request=5 view=1) but canonical op=7 is checksum=968a9b7031cd8948 (client=1 request=4)	seed=6 ticks=141 commits=9 trace=8ce83e5ec092e0e7 FAIL	
+seed=7 ticks=548 commits=12 trace=96bec1b6aa5009f4 PASS	
+reason: divergence: replica 1 committed op=15 checksum=5eefb12d1b89a6f9 (client=1 request=7 view=1) but canonical op=15 is checksum=2a5fdd81209ca9ce (client=1 request=4)	seed=8 ticks=431 commits=25 trace=d736807f1e3e0bea FAIL	
+seed=9 ticks=406 commits=4 trace=2da584978db18387 PASS	
+seed=10 ticks=1806 commits=36 trace=fc225d5347d2300f PASS	
+seed=11 ticks=1043 commits=45 trace=f75576195027608e PASS	
+seed=12 ticks=362 commits=20 trace=b6dac5f04dd85d2a PASS	
+reason: divergence: replica 2 committed op=3 checksum=bb18728cba283077 (client=0 request=2 view=2) but canonical op=3 is checksum=1cd381cae9b758ca (client=2 request=1)	seed=13 ticks=225 commits=4 trace=5238d809516de97c FAIL	
+reason: divergence: replica 1 committed op=27 checksum=7fdc04ecb3166b15 (client=0 request=6 view=1) but canonical op=27 is checksum=ce29e0a634a18266 (client=3 request=8)	seed=14 ticks=266 commits=31 trace=45c1c13030d2a1c6 FAIL	
+seed=15 ticks=406 commits=10 trace=d425e9d917e1e78f PASS	
+reason: divergence: replica 1 committed op=26 checksum=9d5449f11f93403f (client=3 request=9 view=1) but canonical op=26 is checksum=5ec843fd8ee73cac (client=2 request=6)	seed=16 ticks=377 commits=34 trace=20bb29aed7079174 FAIL	
+seed=17 ticks=614 commits=33 trace=dc4243a50424b1e2 PASS	
+seed=18 ticks=542 commits=15 trace=324ceac28f232f06 PASS	
+seed=19 ticks=283 commits=11 trace=1231b107636dcc6d PASS	
+seed=20 ticks=343 commits=26 trace=09ea53194bf19e6b PASS	
+seed=21 ticks=906 commits=14 trace=38f4aeface25876d PASS	
+seed=22 ticks=179 commits=12 trace=6c7a9260fdc38da5 PASS	
+seed=23 ticks=799 commits=14 trace=db7af29bfbf3a1f0 PASS	
+seed=24 ticks=220 commits=20 trace=c839fa229500f4d4 PASS	
+seed=25 ticks=307 commits=15 trace=b7d76f8bb7bbcadd PASS	
+seed=26 ticks=519 commits=5 trace=571ff32c2d845852 PASS	
+reason: divergence: replica 4 committed op=33 checksum=6a61819de725aa8c (client=3 request=10 view=4) but canonical op=33 is checksum=def6c9d7f715e3fd (client=2 request=10)	seed=27 ticks=637 commits=45 trace=646ef8701f601e9a FAIL	
+seed=28 ticks=465 commits=10 trace=6495cedee80aa04f PASS	
+seed=29 ticks=1272 commits=20 trace=2dc273b751023238 PASS	
+seed=30 ticks=497 commits=32 trace=f201ca9966ad3d55 PASS	
+seed=31 ticks=701 commits=36 trace=f8f8623a624af496 PASS	
+seed=32 ticks=1004 commits=48 trace=ca99890f5cabfbff PASS	
+reason: divergence: replica 2 committed op=22 checksum=baff92e9dc5e4535 (client=2 request=8 view=2) but canonical op=22 is checksum=bca148ae4089ef00 (client=2 request=6)	seed=33 ticks=743 commits=23 trace=d65c3b288d1bb38c FAIL	
+seed=34 ticks=1164 commits=13 trace=5692ba1c8b5865f8 PASS	
+seed=35 ticks=278 commits=20 trace=01c73548a3d38964 PASS	
+seed=36 ticks=356 commits=4 trace=eeda4fbc4e750569 PASS	
+seed=37 ticks=1195 commits=56 trace=c052ce5b3a72a3aa PASS	
+reason: divergence: replica 1 committed op=14 checksum=3bbafcd2198299fe (client=0 request=11 view=1) but canonical op=14 is checksum=595ce09b61265212 (client=0 request=10)	seed=38 ticks=344 commits=15 trace=cd95896d2ff73ca2 FAIL	
+seed=39 ticks=59 commits=4 trace=65636aea1f834df8 PASS	
+seed=40 ticks=1018 commits=28 trace=92fa4fafe0aafb3a PASS	
+seed=41 ticks=1418 commits=52 trace=640cb62373d1bedb PASS	
+seed=42 ticks=294 commits=12 trace=5601ab4cf8497299 PASS	
+seed=43 ticks=1615 commits=20 trace=6ef18e15fa96da88 PASS	
+seed=44 ticks=213 commits=16 trace=53b54834cf7a15f4 PASS	
+reason: divergence: replica 2 committed op=38 checksum=138b81beaa7ee250 (client=2 request=13 view=5) but canonical op=38 is checksum=feed88d2bfb35465 (client=1 request=13)	seed=45 ticks=1016 commits=38 trace=5bbc4d185bbc5d4b FAIL	
+reason: divergence: replica 1 committed op=34 checksum=9156927704345d15 (client=0 request=12 view=1) but canonical op=34 is checksum=4ae921414b710286 (client=0 request=11)	seed=46 ticks=530 commits=34 trace=07bb600a0524c3a9 FAIL	
+seed=47 ticks=501 commits=30 trace=df33f6fc9fc69feb PASS	
+seed=48 ticks=582 commits=48 trace=e2981ba8ca4c69a7 PASS	
+seed=49 ticks=77 commits=6 trace=81c339f3299d29ca PASS	
+seed=50 ticks=942 commits=12 trace=134b4ce3dd017534 PASS	
+seed=51 ticks=676 commits=15 trace=fa30b29d67a51b15 PASS	
+seed=52 ticks=341 commits=20 trace=1a1775efdabef909 PASS	
+seed=53 ticks=1317 commits=7 trace=0b12bff5994bc175 PASS	
+seed=54 ticks=362 commits=22 trace=28f2c0829e011a8c PASS	
+seed=55 ticks=1210 commits=40 trace=ab2c9ebe44207462 PASS	
+seed=56 ticks=104 commits=5 trace=ca610331feeacd8a PASS	
+seed=57 ticks=547 commits=33 trace=df24eb5cf4d87bdd PASS	
+seed=58 ticks=411 commits=14 trace=af68d9274d97f41a PASS	
+seed=59 ticks=580 commits=32 trace=fef0709997bb0c69 PASS	
+seed=60 ticks=646 commits=60 trace=f8dfb403a434f32c PASS	
+seed=61 ticks=150 commits=28 trace=d2bcf92348b54d74 PASS	
+seed=62 ticks=1555 commits=32 trace=5a05d0a91bee0c47 PASS	
+seed=63 ticks=460 commits=14 trace=069fd858bcd2f6f6 PASS	
+seed=64 ticks=311 commits=12 trace=50613d040c052309 PASS	
+seed=65 ticks=1143 commits=14 trace=088fe59881e36f6c PASS	
+seed=66 ticks=542 commits=13 trace=e9ea88e087f186e1 PASS	
+seed=67 ticks=1407 commits=60 trace=64dd55a69ff6f635 PASS	
+reason: divergence: replica 0 committed op=44 checksum=33fb39cf275700f3 (client=0 request=15 view=5) but canonical op=44 is checksum=921a85a61c2104da (client=1 request=15)	seed=68 ticks=1507 commits=44 trace=9a97f190f6ef842a FAIL	
+reason: divergence: replica 1 committed op=12 checksum=6556086d32833703 (client=0 request=13 view=11) but canonical op=12 is checksum=c3f4015b72924adb (client=0 request=12)	seed=69 ticks=2577 commits=12 trace=cf99a8221f566c0b FAIL	
+seed=70 ticks=855 commits=36 trace=f153036784b7c5a0 PASS	
+seed=71 ticks=232 commits=16 trace=13502f166b44a487 PASS	
+reason: divergence: replica 1 committed op=12 checksum=eb48c2879dd944ef (client=1 request=2 view=4) but canonical op=12 is checksum=c2e8c35fb4f1bda4 (client=1 request=1)	seed=72 ticks=550 commits=13 trace=754e28243cd3f302 FAIL	
+reason: divergence: replica 2 committed op=40 checksum=4bfabd449e6a0acc (client=3 request=9 view=7) but canonical op=40 is checksum=67712367319257d7 (client=0 request=13)	seed=73 ticks=1343 commits=46 trace=a0e42b8e4eacb83a FAIL	
+seed=74 ticks=441 commits=10 trace=66bac10e255ff8e9 PASS	
+seed=75 ticks=150 commits=12 trace=37742f65428d3352 PASS	
+reason: divergence: replica 2 committed op=34 checksum=ced2a55cd7f30421 (client=2 request=10 view=2) but canonical op=34 is checksum=fd4fec8f735fdc64 (client=3 request=7)	seed=76 ticks=543 commits=39 trace=95e9477d4dd1b471 FAIL	
+seed=77 ticks=1112 commits=30 trace=10d817bc4cfe760a PASS	
+seed=78 ticks=2555 commits=11 trace=dffb41591f0358b2 PASS	
+seed=79 ticks=356 commits=14 trace=daf80a482cd35c3b PASS	
+seed=80 ticks=1416 commits=26 trace=f20ecfcf2effe6c0 PASS	
+seed=81 ticks=418 commits=12 trace=6636b89a39e912dc PASS	
+seed=82 ticks=796 commits=56 trace=e02d572c631da52e PASS	
+seed=83 ticks=474 commits=56 trace=8e4779ac51e10f04 PASS	
+reason: divergence: replica 1 committed op=4 checksum=92960fe599948395 (client=0 request=5 view=1) but canonical op=4 is checksum=6377769d45a1b839 (client=0 request=4)	seed=84 ticks=288 commits=4 trace=953494e36a94c33d FAIL	
+seed=85 ticks=205 commits=21 trace=113ca6a474cc6245 PASS	
+seed=86 ticks=104 commits=8 trace=9fd92e83113c62dd PASS	
+seed=87 ticks=231 commits=18 trace=71b1d4094724c5d4 PASS	
+seed=88 ticks=1419 commits=33 trace=204ad64d3539f726 PASS	
+seed=89 ticks=660 commits=26 trace=04d7f6e9b007baf8 PASS	
+seed=90 ticks=735 commits=40 trace=c4e959a3779b9b8a PASS	
+seed=91 ticks=879 commits=20 trace=19426d809f145914 PASS	
+seed=92 ticks=100 commits=10 trace=41e14c01c75cc5f7 PASS	
+seed=93 ticks=1014 commits=45 trace=c71cd1d47d6498da PASS	
+seed=94 ticks=1084 commits=24 trace=1344ca44c35a6fcd PASS	
+seed=95 ticks=1109 commits=39 trace=25274a33e24a7575 PASS	
+seed=96 ticks=1354 commits=14 trace=9aab7e4994391f46 PASS	
+seed=97 ticks=288 commits=36 trace=8e9166d658b3fda1 PASS	
+seed=98 ticks=2577 commits=56 trace=57c648d2e5c019b1 PASS	
+seed=99 ticks=594 commits=5 trace=c0b489a9c77cd9e4 PASS	
+seed=100 ticks=820 commits=26 trace=d79b6d279f6330f3 PASS	
+reason: divergence: replica 1 committed op=29 checksum=0458113c398117f2 (client=1 request=15 view=1) but canonical op=29 is checksum=9c4caa61558f1343 (client=1 request=14)	seed=101 ticks=1135 commits=29 trace=166c0b49630b62fe FAIL	
+seed=102 ticks=1001 commits=45 trace=2523a39f283694a3 PASS	
+seed=103 ticks=157 commits=10 trace=0f1779f9d4211355 PASS	
+seed=104 ticks=415 commits=48 trace=def114b2405d33a8 PASS	
+seed=105 ticks=539 commits=8 trace=b758b47b90f211e1 PASS	
+seed=106 ticks=903 commits=60 trace=8ea8c4ef7853ec6a PASS	
+seed=107 ticks=720 commits=15 trace=eb8e37257670d85c PASS	
+seed=108 ticks=557 commits=48 trace=f344c9e31f2b894c PASS	
+seed=109 ticks=70 commits=10 trace=7c9198b550ef2be5 PASS	
+seed=110 ticks=172 commits=8 trace=e653f35e54511894 PASS	
+seed=111 ticks=53 commits=15 trace=8b38da401090300f PASS	
+seed=112 ticks=2053 commits=15 trace=44c5a7c35b343189 PASS	
+seed=113 ticks=554 commits=20 trace=66fbfb5a1c7b640a PASS	
+seed=114 ticks=349 commits=18 trace=e669354243bc54ef PASS	
+seed=115 ticks=442 commits=14 trace=33149b7fc16740ab PASS	
+seed=116 ticks=381 commits=20 trace=e0c2cf89ef4c6cef PASS	
+seed=117 ticks=1047 commits=13 trace=7781618e046fe413 PASS	
+seed=118 ticks=526 commits=11 trace=1d2a20274e9672c1 PASS	
+seed=119 ticks=662 commits=10 trace=3a765d973c2901b0 PASS	
+seed=120 ticks=1199 commits=22 trace=c43ba82f8c68eb8b PASS	
+seed=121 ticks=213 commits=8 trace=cd51d8891b4cfc97 PASS	
+reason: divergence: replica 0 committed op=37 checksum=e2d659902b0c2751 (client=1 request=8 view=3) but canonical op=37 is checksum=74ed81d9c7bc89a2 (client=2 request=7)	seed=122 ticks=760 commits=40 trace=be8db79b46ec4a51 FAIL	
+seed=123 ticks=1811 commits=12 trace=15c70c16970a00ab PASS	
+seed=124 ticks=1692 commits=13 trace=fa2375294ab15862 PASS	
+seed=125 ticks=214 commits=16 trace=4f16e850eab7ce75 PASS	
+seed=126 ticks=204 commits=8 trace=217a3d429792f61f PASS	
+seed=127 ticks=1177 commits=40 trace=37c64eed473517ef PASS	
+reason: divergence: replica 2 committed op=20 checksum=5f956617a30a92aa (client=1 request=9 view=2) but canonical op=20 is checksum=fbbc2575e35937a9 (client=1 request=7)	seed=128 ticks=1181 commits=21 trace=5c9fc11e3e76f963 FAIL	
+seed=129 ticks=165 commits=12 trace=1fc3cbea434c60ae PASS	
+seed=130 ticks=1670 commits=24 trace=b809540c4afa0c90 PASS	
+seed=131 ticks=437 commits=32 trace=915069c0605b8cc0 PASS	
+seed=132 ticks=890 commits=24 trace=3b117186ef271a5c PASS	
+seed=133 ticks=739 commits=44 trace=f0fb973dc43e8ac8 PASS	
+reason: divergence: replica 4 committed op=9 checksum=197e2b8051fae7aa (client=0 request=10 view=4) but canonical op=9 is checksum=b444e2330877124c (client=0 request=9)	seed=134 ticks=1366 commits=9 trace=cfe6e9d1cc51f8f7 FAIL	
+reason: divergence: replica 1 committed op=10 checksum=1f05655216160c4c (client=0 request=4 view=1) but canonical op=10 is checksum=d5140bd2131645a1 (client=0 request=2)	seed=135 ticks=266 commits=14 trace=256df1d7fa476719 FAIL	
+seed=136 ticks=362 commits=27 trace=d1041cabccdd13ac PASS	
+seed=137 ticks=824 commits=9 trace=8dc3e9dfd5a443ec PASS	
+seed=138 ticks=267 commits=24 trace=11236fb67ee132b8 PASS	
+seed=139 ticks=513 commits=28 trace=2583dd4d99ed8844 PASS	
+seed=140 ticks=301 commits=5 trace=a424c04be9f06e23 PASS	
+seed=141 ticks=554 commits=28 trace=2992e9d56ef0e8dc PASS	
+seed=142 ticks=296 commits=27 trace=f6f9f6fefe6bf9aa PASS	
+seed=143 ticks=128 commits=5 trace=3afd2eb7f00b0db4 PASS	
+seed=144 ticks=621 commits=18 trace=2a9c43ceedc05899 PASS	
+seed=145 ticks=843 commits=30 trace=b6a3aa1737d582d8 PASS	
+seed=146 ticks=246 commits=8 trace=e84b69d67e9380e6 PASS	
+seed=147 ticks=628 commits=15 trace=c3b6ccf6ba895f31 PASS	
+seed=148 ticks=1717 commits=45 trace=c6b1f07ecd9b4ee5 PASS	
+seed=149 ticks=727 commits=15 trace=43be9151c3df7aa5 PASS	
+seed=150 ticks=406 commits=12 trace=d499e959e0cfc98c PASS	
+seed=151 ticks=152 commits=18 trace=77c5b8a1c8c121b7 PASS	
+seed=152 ticks=255 commits=20 trace=534a1649a6afcf69 PASS	
+seed=153 ticks=290 commits=13 trace=842b7638b3c93d31 PASS	
+seed=154 ticks=828 commits=40 trace=f5d8ca1162e0617c PASS	
+seed=155 ticks=531 commits=28 trace=2144163b529a5e99 PASS	
+seed=156 ticks=688 commits=32 trace=83637a704a056b66 PASS	
+seed=157 ticks=2250 commits=27 trace=9c4b4b20e80f8392 PASS	
+seed=158 ticks=439 commits=8 trace=04f41a16bc740199 PASS	
+seed=159 ticks=502 commits=13 trace=54b454bd7a167517 PASS	
+seed=160 ticks=562 commits=15 trace=0b64441f18947e7b PASS	
+seed=161 ticks=108 commits=10 trace=53289248190ca16a PASS	
+seed=162 ticks=2471 commits=24 trace=fcf641086e0f1a2f PASS	
+seed=163 ticks=457 commits=20 trace=5ce5fd8b917e7768 PASS	
+seed=164 ticks=554 commits=18 trace=802fcc06d6b05ba4 PASS	
+seed=165 ticks=1621 commits=44 trace=e2e1e82ee8800112 PASS	
+seed=166 ticks=2415 commits=48 trace=ab1d296b43e43c2d PASS	
+seed=167 ticks=1335 commits=28 trace=81dee20fb40ca299 PASS	
+seed=168 ticks=422 commits=30 trace=0b1a52be88ef916d PASS	
+seed=169 ticks=423 commits=16 trace=3ed0f4034e031e2f PASS	
+seed=170 ticks=1149 commits=22 trace=3794812ca3abf1a3 PASS	
+reason: divergence: replica 1 committed op=29 checksum=bf4ea3f68ccd1703 (client=2 request=6 view=1) but canonical op=29 is checksum=fd59d562520a2a62 (client=3 request=8)	seed=171 ticks=276 commits=29 trace=baba7cb1dce24319 FAIL	
+seed=172 ticks=347 commits=14 trace=8c9ed75cebc9957b PASS	
+seed=173 ticks=572 commits=24 trace=a3df1d0b12f67e23 PASS	
+reason: divergence: replica 1 committed op=16 checksum=269b4c31edc23c38 (client=2 request=5 view=2) but canonical op=16 is checksum=b96eac86a7398ab4 (client=0 request=4)	seed=174 ticks=251 commits=17 trace=960a7281c8815747 FAIL	
+reason: divergence: replica 1 committed op=26 checksum=4474c7c7a52558e8 (client=0 request=15 view=1) but canonical op=26 is checksum=85cee1804de5e87e (client=1 request=14)	seed=175 ticks=421 commits=28 trace=0a89dfc1ab107fe1 FAIL	
+seed=176 ticks=994 commits=36 trace=3a2f2bc50c638b84 PASS	
+seed=177 ticks=580 commits=12 trace=66b1023eee298ca3 PASS	
+seed=178 ticks=418 commits=14 trace=820214991838cadd PASS	
+seed=179 ticks=450 commits=12 trace=3f670a3ee908858e PASS	
+seed=180 ticks=676 commits=40 trace=dd38338f7b50b6f6 PASS	
+seed=181 ticks=1157 commits=33 trace=53e125ba737c2161 PASS	
+seed=182 ticks=770 commits=27 trace=997c239889ee5907 PASS	
+seed=183 ticks=1098 commits=24 trace=b0efe515e7f1ae50 PASS	
+seed=184 ticks=926 commits=48 trace=31a7aabf786bcdc3 PASS	
+seed=185 ticks=710 commits=28 trace=264398a8950bf298 PASS	
+reason: divergence: replica 1 committed op=17 checksum=d2dde69a00a48a60 (client=2 request=2 view=1) but canonical op=17 is checksum=5925057abbe08c51 (client=3 request=12)	seed=186 ticks=259 commits=19 trace=c26eb5152875e613 FAIL	
+seed=187 ticks=209 commits=32 trace=45bbd532302c039a PASS	
+seed=188 ticks=1031 commits=33 trace=736cf1456bde59b4 PASS	
+seed=189 ticks=415 commits=32 trace=5261cbe7a45af742 PASS	
+seed=190 ticks=635 commits=10 trace=3afc101402fe9ef2 PASS	
+seed=191 ticks=454 commits=32 trace=141c5eea0ca76df1 PASS	
+seed=192 ticks=256 commits=5 trace=dde381be2473c588 PASS	
+seed=193 ticks=727 commits=5 trace=b075a822df739811 PASS	
+seed=194 ticks=255 commits=15 trace=a2f4342aafbb5487 PASS	
+seed=195 ticks=326 commits=15 trace=abb89e02561192cc PASS	
+seed=196 ticks=2820 commits=45 trace=f4d4a39ee1135029 PASS	
+seed=197 ticks=1146 commits=24 trace=cc64593b40b44bdb PASS	
+reason: divergence: replica 1 committed op=18 checksum=b94bcd85bd321a2d (client=0 request=7 view=6) but canonical op=18 is checksum=2995581ddf914970 (client=2 request=6)	seed=198 ticks=637 commits=25 trace=799c3a13aa994d48 FAIL	
+seed=199 ticks=374 commits=24 trace=99418c52d2f17e42 PASS	

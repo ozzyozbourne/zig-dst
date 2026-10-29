@@ -1,0 +1,20 @@
+exhaust: domain=0..7 capacity=3 ranges of 1..3 blocks, max_len=4
+len=1 sequences=36 ops=36 hits: insert_disjoint=18 insert_full=0 insert_extend=0 insert_coalesce=0 insert_fill_gap=0 remove_miss=18 remove_trim=0 remove_delete=0 remove_split=0 remove_split_full=0
+len=2 sequences=1296 ops=2592 hits: insert_disjoint=1092 insert_full=0 insert_extend=204 insert_coalesce=0 insert_fill_gap=0 remove_miss=1164 remove_trim=72 remove_delete=55 remove_split=5 remove_split_full=0
+len=3 sequences=46656 ops=139968 hits: insert_disjoint=51204 insert_full=0 insert_extend=18312 insert_coalesce=353 insert_fill_gap=115 remove_miss=57417 remove_trim=6864 remove_delete=4982 remove_split=721 remove_split_full=0
+len=4 sequences=8212 ops=32848 hits: insert_disjoint=11630 insert_full=0 insert_extend=12834 insert_coalesce=303 insert_fill_gap=89 remove_miss=4333 remove_trim=2336 remove_delete=879 remove_split=444 remove_split_full=0
+FAIL at len=4: sequence 8212 of this length, 56200 sequences and 175444 ops in total
+minimal failing sequence (every shorter sequence passed), replayed:
+  step op              mark                slots (live | stale)
+     - start                                | · · ·
+     1 insert [0,1)    insert_disjoint     [0,1) | · ·
+     2 insert [2,3)    insert_disjoint     [0,1) [2,3) | ·
+     3 insert [4,5)    insert_disjoint     [0,1) [2,3) [4,5) |
+     4 insert [1,2)    insert_fill_gap     [4,5) [0,3) | [4,5)
+INVARIANT VIOLATED: slots 0,1 out of order or touching: [4,5) then [0,3)
+replay trace=262a5491113ac8ff
+exhaust trace=d4b4290b4d04a09a FAIL
+
+real	0m0.008s
+user	0m0.008s
+sys	0m0.000s

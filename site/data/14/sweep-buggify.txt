@@ -1,0 +1,15 @@
+path short_write_retry hits=45608 seeds=20725 of=100000
+path timeout_in_flush hits=146843 seeds=39049 of=100000
+path full_while_reconnect hits=16804 seeds=10831 of=100000
+path short_retry_then_timeout hits=6198 seeds=3582 of=100000
+buggify short_write active_seeds=25249 fired=51829 of=100000
+buggify tiny_timeout active_seeds=24997 fired=103163 of=100000
+buggify delay_ack active_seeds=25038 fired=87953 of=100000
+buggify drop_connection active_seeds=24955 fired=89015 of=100000
+buggify small_buffer active_seeds=24926 fired=6321 of=100000
+buggify slow_reconnect active_seeds=24773 fired=5329 of=100000
+PASS: 100000 seeds (from seed 0)
+
+real	0m0.380s
+user	0m0.380s
+sys	0m0.000s

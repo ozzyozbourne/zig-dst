@@ -1,0 +1,68 @@
+seed=112 drift_mode=extremes drift_ppm=2000,-2000,2000 realtime_offset_ms=-41.711,+15.559,-37.865
+  delay=1..1 loss=40/1000 steps=9/100000 per node per tick, up to 100ms
+  partitions=44/100000 per tick, 1000..10736 ticks, healthy>=1573 ticks
+  lease=5000ms drift_bound=2000ppm drift_margin=20.000ms guard=2.000ms leader_lease=5000.000ms clock=monotonic
+  tick node ev role term m=<monotonic ms> r=<realtime ms> detail
+   627 1 ? C   1T m=625.746 r=641.305 term=1
+   628 0 v F   1T m=629.256 r=587.545 for=1
+   628 2 v F   1T m=629.256 r=591.391 for=1
+   629 1 * L   1T m=627.742 r=643.301 votes=011
+   630 0 p F   1T m=631.260 r=589.549 leader=1 until=5631.260
+   630 2 p F   1T m=631.260 r=593.395 leader=1 until=5631.260
+   631 1 W L   1T m=629.738 r=645.297 key=0 val=0 ver=1.1 recovery
+   631 1 W L   1T m=629.738 r=645.297 key=1 val=0 ver=1.2 recovery
+   631 1 c L   1T m=629.738 r=645.297 recovered
+   631 1 + L   1T m=629.738 r=645.297 until=5627.742 clock=mono
+   636 1 W L   1T m=634.728 r=650.287 key=1 val=1 ver=1.3
+   640 1 W L   1T m=638.720 r=654.279 key=1 val=2 ver=1.4
+   642 1 W L   1T m=640.716 r=656.275 key=1 val=3 ver=1.5
+   644 1 W L   1T m=642.712 r=658.271 key=1 val=4 ver=1.6
+   649 1 W L   1T m=647.702 r=663.261 key=0 val=5 ver=1.7
+   652 1 W L   1T m=650.696 r=666.255 key=0 val=6 ver=1.8
+   666 1 W L   1T m=664.668 r=680.227 key=0 val=7 ver=1.9
+   677 1 W L   1T m=675.646 r=691.205 key=1 val=8 ver=1.10
+   681 1 W L   1T m=679.638 r=695.197 key=0 val=9 ver=1.11
+   692 1 W L   1T m=690.616 r=706.175 key=0 val=10 ver=1.12
+   696 1 W L   1T m=694.608 r=710.167 key=1 val=11 ver=1.13
+   700 1 W L   1T m=698.600 r=714.159 key=0 val=12 ver=1.14
+   705 1 W L   1T m=703.590 r=719.149 key=1 val=13 ver=1.15
+   710 1 W L   1T m=708.580 r=724.139 key=0 val=14 ver=1.16
+   725 1 W L   1T m=723.550 r=739.109 key=0 val=15 ver=1.17
+   726 1 W L   1T m=724.548 r=740.107 key=1 val=16 ver=1.18
+   739 1 W L   1T m=737.522 r=753.081 key=1 val=17 ver=1.19
+   741 1 W L   1T m=739.518 r=755.077 key=1 val=18 ver=1.20
+   748 1 W L   1T m=746.504 r=762.063 key=0 val=19 ver=1.21
+   758 1 W L   1T m=756.484 r=772.043 key=1 val=20 ver=1.22
+   760 1 W L   1T m=758.480 r=774.039 key=1 val=21 ver=1.23
+   766 1 W L   1T m=764.468 r=780.027 key=1 val=22 ver=1.24
+   768 1 W L   1T m=766.464 r=782.023 key=0 val=23 ver=1.25
+   776 1 W L   1T m=774.448 r=790.007 key=0 val=24 ver=1.26
+   791 1 W L   1T m=789.418 r=804.977 key=0 val=25 ver=1.27
+   792 1 W L   1T m=790.416 r=805.975 key=1 val=26 ver=1.28
+   809 1 W L   1T m=807.382 r=822.941 key=1 val=27 ver=1.29
+   826 1 W L   1T m=824.348 r=839.907 key=1 val=28 ver=1.30
+   827 1 W L   1T m=825.346 r=840.905 key=0 val=29 ver=1.31
+   829 - P - ---- isolate=1 ticks=7156
+   829 1 W L   1T m=827.342 r=842.901 key=1 val=30 ver=1.32
+  1633 0 S F   1T m=1636.266 r=1534.442 step=-60.113ms
+  5621 0 ? C   2T m=5632.242 r=5530.418 term=2
+  5621 2 ? C   2T m=5632.242 r=5594.377 term=2
+  5621 0 e C   2T m=5632.242 r=5530.418 promise_expired
+  5621 2 e C   2T m=5632.242 r=5594.377 promise_expired
+  5626 0 v F   3T m=5637.252 r=5535.428 for=2
+  5627 2 * L   3T m=5638.254 r=5600.389 votes=101
+  5628 0 p F   3T m=5639.256 r=5537.432 leader=2 until=10639.256
+  5629 2 W L   3T m=5640.258 r=5602.393 key=0 val=29 ver=3.1 recovery
+  5629 2 W L   3T m=5640.258 r=5602.393 key=1 val=30 ver=3.2 recovery
+  5629 2 c L   3T m=5640.258 r=5602.393 recovered
+  5629 2 + L   3T m=5640.258 r=5602.393 until=10638.254 clock=mono
+LEASE OVERLAP: node 1 and node 2 both hold a lease at tick 5629 (true time)
+  5632 2 W L   3T m=5643.264 r=5605.399 key=1 val=952 ver=3.3
+  5632 1 r L   1T m=5620.736 r=5636.295 key=1 val=30 ver=1.32 STALE
+STALE READ: node 1 read key 1 = 30 at tick 5632, but the latest committed write is 952 (committed by node 2 at tick 5632)
+  5633 1 r L   1T m=5621.734 r=5637.293 key=1 val=30 ver=1.32 STALE
+  5635 1 r L   1T m=5623.730 r=5639.289 key=1 val=30 ver=1.32 STALE
+  5636 1 r L   1T m=5624.728 r=5640.287 key=1 val=30 ver=1.32 STALE
+  5640 1 - L   1T m=5628.720 r=5644.279 expired
+summary: handovers=1 min_gap=-11 pair=1->2 expiry_gap=-11 expiry_pair=1->2 overlap_ticks=11 stale_reads=4 lease_reads=2540 commits=35 elections=4 steps=1
+seed=112 ticks=5640 trace=48931e3b549bf699 FAIL

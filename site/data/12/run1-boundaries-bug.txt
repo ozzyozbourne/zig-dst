@@ -1,0 +1,30 @@
+seed=1 generator=boundaries domain=1048576 capacity=32 ops=100
+  step op                        mark                len
+     0 insert [359035,359186)     insert_disjoint      1
+     1 insert [359186,359321)     insert_extend        1
+     2 remove [431906,432066)     remove_miss          1
+     3 remove [359035,359131)     remove_trim          1
+     4 insert [359321,359376)     insert_extend        1
+     5 remove [390821,391014)     remove_miss          1
+     6 remove [799077,799140)     remove_miss          1
+     7 insert [756918,757058)     insert_disjoint      2
+     8 insert [1040774,1040862)   insert_disjoint      3
+     9 remove [359131,359200)     remove_trim          3
+    10 insert [131601,131614)     insert_disjoint      4
+    11 insert [777930,778175)     insert_disjoint      5
+    12 insert [319061,319265)     insert_disjoint      6
+    13 insert [55128,55143)       insert_disjoint      7
+    14 remove [938990,939226)     remove_miss          7
+    15 insert [91179,131601)      insert_extend        7
+    16 remove [505368,505427)     remove_miss          7
+    17 insert [214004,214080)     insert_disjoint      8
+    18 insert [131614,131737)     insert_extend        8
+    19 remove [818568,818591)     remove_miss          8
+    20 insert [757058,757193)     insert_extend        8
+    21 insert [362475,362599)     insert_disjoint      9
+    22 insert [750148,750205)     insert_disjoint     10
+    23 insert [214080,319061)     insert_fill_gap      9
+INVARIANT VIOLATED: slots 2,3 out of order or touching: [1040774,1040862) then [214004,319265)
+  slots: [55128,55143) [91179,131737) [1040774,1040862) [214004,319265) [359200,359376) [362475,362599) [750148,750205) [756918,757193) [777930,778175) | [1040774,1040862) · · · · · · · · · · · · · · · · · · · · · ·
+marks: insert_disjoint=10 insert_full=0 insert_extend=5 insert_coalesce=0 insert_fill_gap=1 remove_miss=6 remove_trim=2 remove_delete=0 remove_split=0 remove_split_full=0
+seed=1 ops=24 trace=45c5296705eb5176 FAIL

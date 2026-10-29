@@ -1,5 +1,5 @@
 PASS: 100000 seeds, simulated 9498765621 s (2638546 h) of clock time
 
-real	0m0.926s
-user	0m0.788s
-sys	0m0.032s
+real	0m0.753s
+user	0m0.752s
+sys	0m0.000s

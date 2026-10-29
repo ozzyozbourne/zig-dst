@@ -1,0 +1,23 @@
+scenario short-write-then-timeout: no PRNG; every fault comes from the script
+  step: append 4
+    0 append     seq=0                          | base=0 buf=0..0 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=1                          | base=0 buf=0..1 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=2                          | base=0 buf=0..2 cap=8 flush=- conn=up net=- disk=....
+    0 append     seq=3                          | base=0 buf=0..3 cap=8 flush=- conn=up net=- disk=....
+  step: next disk write persists only 2 records
+  step: run 3 ticks
+    0 send       #1 off=0 n=4 first             | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=....
+    1 write      off=0 wrote 2/4 SHORT          | base=0 buf=0..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 short_ack  #1 written=2 of 4              | base=2 buf=2..3 cap=8 flush=#1@0+4 dl=12 conn=up net=- disk=01..
+    2 send       #2 off=2 n=2 retry             | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=01..
+  step: drop the next 1 ack(s)
+  step: run 20 ticks
+    3 write      off=2 wrote 2/2                | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=0123
+    3 lost       ack #2 lost                    | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=0123
+   14 timeout    #2 not acked                   | base=2 buf=2..3 cap=8 flush=#2@2+2 dl=14 conn=up net=- disk=0123
+   14 send       #3 off=2 n=2 resend            | base=2 buf=2..3 cap=8 flush=#3@2+2 dl=26 conn=up net=- disk=0123
+   15 write      off=2 wrote 2/2                | base=2 buf=2..3 cap=8 flush=#3@2+2 dl=26 conn=up net=- disk=0123
+   16 ack        #3 written=2                   | base=4 buf=- cap=8 flush=- conn=up net=- disk=0123
+  step: expect 4 records durable (writer base=4, file prefix=4)
+paths: short_write_retry=1 timeout_in_flush=1 full_while_reconnect=0 short_retry_then_timeout=1
+scenario=short-write-then-timeout ticks=23 trace=ef8e58044952d8e8 PASS

@@ -33,7 +33,7 @@
 <main>
   <div class="hero fade-in seedhero">
     <div>
-      <div class="tags"><span class="tag">Zig 0.17</span><span class="tag">TigerBeetle VOPR</span><span class="tag easy">10 runnable projects</span></div>
+      <div class="tags"><span class="tag">Zig 0.17</span><span class="tag">TigerBeetle VOPR</span><span class="tag easy">14 runnable projects</span></div>
       <h1>Deterministic Simulation Testing</h1>
       <p class="lede">Run your <strong>real code</strong> inside a <strong>fake world</strong> — fake clock, fake network,
         fake disk, fake scheduler — where every event is chosen by <strong>one random seed</strong>. Throw faults at it,
@@ -103,7 +103,7 @@
   </section>
 
   <section>
-    <h2><span class="n">05</span>Real results: 16 planted bugs, all found, all replayable</h2>
+    <h2><span class="n">05</span>Real results: every planted bug found, every failure replayable</h2>
     <p>Captured by <code>site/tools/captures/home.sh</code>: every example's default sweep with the correct code, then the same sweep with each
       planted bug. The bar is the <strong>first failing seed</strong> (how long the search took). Hover for the trace hash of the replay.</p>
     <div class="grid g4" id="stats"></div>
@@ -126,6 +126,11 @@
     <p>Projects build on each other. <span style="color:var(--accent2)">●</span> = used, highlighted cell = introduced in that project.</p>
     <div class="viz" style="overflow-x:auto"><table class="data matrix" id="matrix"></table></div>
     <div class="grid g3" id="cards"></div>
+    <h3>Two chapters</h3>
+    <div class="grid g2">
+      <a class="card" href="debugging.html"><h3>🔎 Debugging a failing seed</h3><p>From "FAIL at seed=3" to the root cause 157 ticks earlier, a fix, and why a seed is not a regression test.</p></a>
+      <a class="card" href="limits.html"><h3>🚧 What DST can't catch</h3><p>The fault model as a boundary, real timer data, bugs in the harness itself, and the tools that cover the rest.</p></a>
+    </div>
   </section>
 
   <section>
@@ -167,38 +172,50 @@ cd site &amp;&amp; python3 -m http.server 8000</pre>
 <script type="text/plain" id="sweeps" data-src="data/home/sweeps.tsv">
 id	flag	count	result	seed	trace	ms
 01	none	10000	PASS	-	-	5
-01	--bug	10000	FAIL	0	5e8db608ab3a4b37	2
-02	none	100000	PASS	-	-	767
-02	--bug	100000	FAIL	1	b51d0a68fc5da3f4	2
-03	none	1000000	PASS	-	-	4169
+01	--bug	10000	FAIL	0	5e8db608ab3a4b37	3
+02	none	100000	PASS	-	-	772
+02	--bug	100000	FAIL	1	b51d0a68fc5da3f4	3
+03	none	1000000	PASS	-	-	4172
 03	--bug	1000000	FAIL	0	60d07731b56382d1	2
 03	--bug-deadlock	1000000	FAIL	1	026ddce53296649e	2
-04	none	2000	PASS	-	-	3035
-04	--bug-ack-before-fsync	2000	FAIL	0	05849ac5c0fa49b0	2
-04	--bug-no-checksum	2000	FAIL	0	826972d8c8dd33cc	2
-05	none	10000	PASS	-	-	1052
-05	--bug-no-dedup	10000	FAIL	0	d88bc34622415f6f	2
+04	none	2000	PASS	-	-	3064
+04	--bug-ack-before-fsync	2000	FAIL	0	05849ac5c0fa49b0	3
+04	--bug-no-checksum	2000	FAIL	0	826972d8c8dd33cc	3
+05	none	10000	PASS	-	-	917
+05	--bug-no-dedup	10000	FAIL	0	d88bc34622415f6f	3
 05	--bug-reply-stale	10000	FAIL	0	967f8d2b76791c6e	2
-06	none	20000	PASS	-	-	930
-06	--bug	20000	FAIL	21	b3e7bd86bc13f598	4
-07	none	100000	PASS	-	-	1066
+06	none	20000	PASS	-	-	927
+06	--bug	20000	FAIL	21	b3e7bd86bc13f598	3
+07	none	100000	PASS	-	-	1007
 07	--bug	100000	FAIL	1	3e1850e49d1b089a	2
-08	none	5000	PASS	-	-	1468
-08	--bug-volatile-vote	5000	FAIL	86	3dfa85464a32b0b4	30
-08	--bug-no-quorum	5000	FAIL	0	02dcb41e2bd60ee0	2
-09	none	10000	PASS	-	-	5943
-09	--bug-trust-read	10000	FAIL	0	ed1a70000c0e0d2e	2
+08	none	5000	PASS	-	-	1366
+08	--bug-volatile-vote	5000	FAIL	86	3dfa85464a32b0b4	27
+08	--bug-no-quorum	5000	FAIL	0	02dcb41e2bd60ee0	3
+09	none	10000	PASS	-	-	5945
+09	--bug-trust-read	10000	FAIL	0	ed1a70000c0e0d2e	3
 09	--bug-misdirect	10000	FAIL	1	54ce8d97a0503e62	3
-10	none	20000	PASS	-	-	20465
-10	--bug-commit-early	20000	FAIL	3	692aa09c1869a180	39
-10	--bug-view-change-log	20000	FAIL	3	33f68caccfde5918	4
+10	none	20000	PASS	-	-	4133
+10	--bug-commit-early	20000	FAIL	3	692aa09c1869a180	3
+10	--bug-view-change-log	20000	FAIL	3	33f68caccfde5918	3
+11	none	20000	PASS	-	-	6198
+11	--bug-fixed-timeout	20000	FAIL	11	366aa43a8fe148f1	8
+11	--bug-no-retry-on-leader-change	20000	FAIL	3	88582559ded66ffd	4
+12	none	100000	PASS	-	-	1583
+12	--bug-fill-gap	100000	PASS	-	-	1568
+12	--bug-fill-gap+--gen-boundaries	100000	FAIL	1	45c5296705eb5176	3
+13	none	5000	PASS	-	-	13662
+13	--bug-no-drift-margin	5000	FAIL	43	8c045de5bbdbd080	120
+13	--bug-wall-clock	5000	FAIL	37	9559a5f9ce773e31	103
+14	none	2000000	PASS	-	-	6186
+14	--bug-stale-offset	2000000	FAIL	290087	75ece4944c1a73ff	929
+14	--bug-stale-offset+--buggify	2000000	FAIL	40	e81d6e1afe4aba43	2
 </script>
 <script type="text/plain" id="tcomp" data-src="data/home/time-compression.txt">
 PASS: 100000 seeds, simulated 9498765621 s (2638546 h) of clock time
 
-real	0m0.926s
-user	0m0.788s
-sys	0m0.032s
+real	0m0.753s
+user	0m0.752s
+sys	0m0.000s
 </script>
 <script type="text/plain" id="swon" data-src="data/home/swarm-on.txt">
 FAIL at seed=21 after 22 seeds. Replay with:
@@ -339,14 +356,15 @@ const { el, s, C } = DST;
   const stats = [
     [`${correct.filter((r) => r.result === "PASS").length}/${correct.length}`, "correct examples pass their full default sweep"],
     [seedsRun.toLocaleString(), "seeds simulated for those sweeps"],
-    [`${bugs.filter((r) => r.result === "FAIL").length}/${bugs.length}`, "planted bugs found by their sweep"],
+    [`${bugs.filter((r) => r.result === "FAIL").length}/${bugs.length}`, "bug sweeps that failed (12's plain random sweep is meant to miss its bug)"],
     [`${(correct.reduce((a, r) => a + r.ms, 0) / 1000).toFixed(1)} s`, "total wall time of the correct-code sweeps"],
   ];
   DST.$("#stats").append(...stats.map(([n, l]) => el("div", { class: "stat fade-in" }, el("div", { class: "num" }, n), el("div", { class: "lbl" }, l))));
   const title = (id) => (DST.PAGES.find((p) => p.short === id) || {}).title || id;
-  DST.bar("#firstseed", bugs.map((r) => ({ label: `${r.id} ${r.flag}`, value: r.seed ?? 0, color: r.seed > 10 ? C.warn : C.bug, note: `${title(r.id)}\n${r.flag}: FAIL at seed=${r.seed}\nreplay trace=${r.trace}` })),
-    { labelW: 300, fmt: (v) => `seed ${v}`, max: Math.max(...bugs.map((r) => r.seed)) });
-  DST.$("#firstseed").append(el("div", { class: "cap" }, "Most bugs fall at seed 0–3 because the examples crank fault rates up; 06 and 08 need a real search."));
+  const found = bugs.filter((r) => r.seed != null);
+  DST.bar("#firstseed", found.map((r) => ({ label: `${r.id} ${r.flag}`, value: r.seed ?? 0, color: r.seed > 10 ? C.warn : C.bug, note: `${title(r.id)}\n${r.flag}: FAIL at seed=${r.seed}\nreplay trace=${r.trace}` })),
+    { labelW: 340, log: true, fmt: (v) => `seed ${v.toLocaleString()}`, max: Math.max(...found.map((r) => r.seed)) * 4 });
+  DST.$("#firstseed").append(el("div", { class: "cap" }, "Log scale. Most bugs fall at seed 0–3 because the examples crank fault rates up. Example 14 shows what realistic rates cost (seed 290,087) and how BUGGIFY brings it back down. Example 12's plain random sweep never finds its bug at all; see the table."));
   const t = DST.$("#sweeptable");
   t.append(el("tr", {}, ["#", "project", "flag", "seeds", "result", "first fail", "replay trace", "wall ms"].map((h, i) => el("th", { class: i >= 3 && i !== 4 && i !== 6 ? "num" : null }, h))));
   rows.forEach((r) => t.append(el("tr", {},
@@ -381,7 +399,7 @@ const { el, s, C } = DST;
 
 /* ---------- progression matrix ---------- */
 (function matrix() {
-  const cols = ["seed", "biased gen", "sim time", "scheduler", "sim disk", "crashes", "sim network", "liveness phase", "swarm", "shrinking", "history oracle", "partitions", "corruption", "consensus"];
+  const cols = ["seed", "biased gen", "sim time", "scheduler", "sim disk", "crashes", "sim network", "liveness phase", "swarm", "shrinking", "history oracle", "partitions", "corruption", "consensus", "livelock check", "coverage marks", "exhaustive", "clock drift", "buggify"];
   const ex = [
     ["01", "Seeded randomness", "Easy", "seed,biased gen", "Integer overflow in average()"],
     ["02", "Simulated time", "Easy", "sim time", "TTL off-by-one exactly at the deadline"],
@@ -393,8 +411,12 @@ const { el, s, C } = DST;
     ["08", "Leader election & partitions", "Hard", "partitions", "votedFor not persisted · reachable-majority quorum"],
     ["09", "Storage fault atlas", "Hard", "corruption", "Trusting local reads · checksum without address"],
     ["10", "Mini-VOPR", "Hardest", "consensus", "Commit before quorum · bad view-change log"],
+    ["11", "Liveness & livelock", "Hard", "livelock check", "Fixed election timeout · client never retries"],
+    ["12", "Coverage marks & exhaustive testing", "Med–Hard", "coverage marks,exhaustive", "Fill-gap fast path breaks sort order"],
+    ["13", "Clock skew & leases", "Hard", "clock drift", "No drift margin · lease on the wall clock"],
+    ["14", "Rare bugs & BUGGIFY", "Hard", "buggify", "Stale offset after short write + timeout"],
   ];
-  const uses = { "01": "", "02": "seed", "03": "seed", "04": "seed,sim time", "05": "seed,sim time", "06": "seed,biased gen", "07": "seed,sim network", "08": "seed,sim time,sim network,crashes,liveness phase", "09": "seed,sim disk,liveness phase,swarm", "10": "seed,sim time,sim disk,crashes,sim network,liveness phase,swarm,partitions" };
+  const uses = { "01": "", "02": "seed", "03": "seed", "04": "seed,sim time", "05": "seed,sim time", "06": "seed,biased gen", "07": "seed,sim network", "08": "seed,sim time,sim network,crashes,liveness phase", "09": "seed,sim disk,liveness phase,swarm", "10": "seed,sim time,sim disk,crashes,sim network,liveness phase,swarm,partitions", "11": "seed,sim time,crashes,sim network,liveness phase,partitions,consensus", "12": "seed", "13": "seed,sim time,sim network,partitions", "14": "seed,sim time,sim disk,sim network,swarm" };
   const t = DST.$("#matrix");
   t.append(el("tr", {}, el("th", {}, "#"), el("th", {}, "project"), cols.map((c) => el("th", { style: { writingMode: "vertical-rl", transform: "rotate(180deg)", height: "110px", textAlign: "left" } }, c))));
   ex.forEach(([id, name, lvl, introduces]) => {

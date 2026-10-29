@@ -3,7 +3,7 @@
 This guide has three parts:
 1. What DST is, why it exists, and where it helps.
 2. How TigerBeetle's simulator (the **VOPR**) works, from its source code at commit `0450c32b2`.
-3. Ten runnable Zig 0.17 projects, ordered from easy to hard. Each one adds one idea.
+3. Fourteen runnable Zig 0.17 projects, ordered from easy to hard. Each one adds one idea.
 
 Every number in this guide comes from a real run in this orb.
 
@@ -129,7 +129,7 @@ continuously on many machines (VOPR Hub/CFO). A failure is filed as `(commit, se
 
 ---
 
-## Part 3 — Ten projects, easy → hard
+## Part 3 — Fourteen projects, easy → hard
 
 Each directory has `main.zig` (Zig 0.17, std only) and `NOTES.md`, which covers the concept,
 what is simulated, the invariants, why normal tests miss the bug, the TigerBeetle parallel,
@@ -153,6 +153,14 @@ zig run -OReleaseSafe main.zig -- run <seed> [--bug-flag]      # replay one seed
 | 08 | Hard | [Leader election under partitions](examples/08-leader-election-partitions) | Symmetric/asymmetric partitions, crash with persisted state | volatile `votedFor` → 86; reachable-majority quorum → 0 |
 | 09 | Hard | [Storage fault atlas](examples/09-storage-fault-atlas) | Bit flips, misdirected writes, repair, scrubber, byte-identical checker; only inject faults that can be recovered | trust local read → 0; checksum without address → 1 |
 | 10 | Hardest | [Mini-VOPR](examples/10-mini-vopr) | Everything combined: VSR-style log, swarm faults, canonical-commit checker, safety + liveness | commit before quorum → 3; bad view-change log choice → 3 |
+| 11 | Hard | [Liveness & livelock](examples/11-liveness-livelock) | Bugs where nothing goes wrong but nothing happens; liveness checker that says *why* | fixed election timeout (livelock) → 11; client never retries → 3 |
+| 12 | Med–Hard | [Coverage marks & exhaustive testing](examples/12-coverage-marks-exhaustive) | Prove the risky path ran; enumerate every small input | fill-gap fast path → **random sweep passes**, mark hit 0× in 1M seeds; `exhaust 4` finds it in 8 ms |
+| 13 | Hard | [Clock skew & leases](examples/13-clock-skew-leases) | Per-node drifting clocks, monotonic vs wall clock, lease margins | no drift margin → 43; lease on wall clock → 37 |
+| 14 | Hard | [Rare bugs & BUGGIFY](examples/14-rare-bugs-buggify) | Realistic fault rates need a real search; fault points make rare paths common; seeds aren't regression tests | stale offset → 290,087 at realistic rates, **40 with `--buggify`** |
+
+### Two chapters (in the visual site)
+- **Debugging a failing seed** (`site/debugging.html`): example 10, seed 3, from the checker's failure back to the bad commit 157 ticks earlier, the fix, and why seeds are not durable regression tests.
+- **What DST can't catch** (`site/limits.html`): the fault model as the boundary, real timer measurements, bugs in the harness itself, and how DST compares with fuzzing, Jepsen, Antithesis and TLA+.
 
 ### How the progression builds
 - **01–02:** make inputs and time deterministic. That alone fixes most "flaky test" problems.
@@ -165,11 +173,12 @@ zig run -OReleaseSafe main.zig -- run <seed> [--bug-flag]      # replay one seed
 - **08–09:** the classic distributed-systems failures, with ideas taken straight from TigerBeetle
   (persisting votes/views before acting; checksums that cover the address; the fault atlas).
 - **10:** a small version of `src/vopr.zig`. Read it side by side with the real thing.
+- **11–14:** the questions after "it passes": does it make progress (11), did the test reach the risky code (12), what if nodes disagree about time (13), and what does a realistic search cost and how do you shorten it (14).
 
 ### Verification done for this guide
 Every example was compiled with Zig 0.17.0 (ReleaseSafe). For each one:
 - the default sweep passes with no bug flag;
-- every one of the 16 bug flags is found by its sweep;
+- every bug flag is found by its sweep (26 bug sweeps in total). The one deliberate exception is example 12, whose plain random sweep passes while missing its bug; `exhaust` and `--gen-boundaries` find it;
 - running the failing seed twice produced byte-identical output (sha256 compared).
 
 See each `NOTES.md` for the full transcripts.

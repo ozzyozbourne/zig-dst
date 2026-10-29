@@ -1,0 +1,148 @@
+seed=3 nodes=3 clients=2 requests_per_client=9 election_timeout=20..40
+  partition_mode=isolate_single partition_probability=71/10000 unpartition_probability=346/10000 partition_stability=101
+  crash_probability=25/100000 restart_probability=77/1000 loss=2/1000 delay=1..5
+  safety phase: ticks 0..2000; liveness window: 3000 ticks
+  tick node event role [cluster] term votedFor leader commit/log
+    12 c1 S #1 node=1
+    23 c0 S #1 node=0
+    25 0 ? ? [?\\]   1T v0 L- c0/0
+    25 1 ? ? [??\]   1T v1 L- c0/0
+    28 2 > \ [??\]   1T v- L- c0/0
+    28 2 v \ [??\]   1T v1 L- c0/0
+    30 1 * / [?/\]   1T v1 L1 c0/0
+    72 c1 R #1 node=2
+    75 c1 R #1 node=1
+    80 c1 A #1 node=1
+    83 c0 R #1 node=1
+    87 c1 D #1 node=1
+    87 c1 = counter=1 at index 2 after 75 ticks
+    89 c0 A #1 node=1
+    93 c0 D #1 node=1
+    93 c0 = counter=2 at index 3 after 70 ticks
+   103 c0 S #2 node=1
+   105 c1 S #2 node=1
+   109 c0 A #2 node=1
+   112 c1 A #2 node=1
+   113 c1 D #2 node=1
+   113 c1 = counter=4 at index 5 after 8 ticks
+   114 c0 D #2 node=1
+   114 c0 = counter=3 at index 4 after 11 ticks
+   155 c1 S #3 node=1
+   161 c1 A #3 node=1
+   167 c1 D #3 node=1
+   167 c1 = counter=5 at index 6 after 12 ticks
+   201 c0 S #3 node=1
+   205 c0 A #3 node=1
+   216 c0 D #3 node=1
+   216 c0 = counter=6 at index 7 after 15 ticks
+   220 c1 S #4 node=1
+   224 c1 A #4 node=1
+   229 c1 D #4 node=1
+   229 c1 = counter=7 at index 8 after 9 ticks
+   255 c1 S #5 node=1
+   263 c1 A #5 node=1
+   266 c1 D #5 node=1
+   266 c1 = counter=8 at index 9 after 11 ticks
+   278 c0 S #4 node=1
+   286 c0 A #4 node=1
+   290 - P partition 0|12
+   293 c0 D #4 node=1
+   293 c0 = counter=9 at index 10 after 15 ticks
+   293 c1 S #6 node=1
+   298 c1 A #6 node=1
+   304 c1 D #6 node=1
+   304 c1 = counter=10 at index 11 after 11 ticks
+   318 0 ? ? [?/\]   2T v0 L- c9/10
+   327 c1 S #7 node=1
+   334 c1 A #7 node=1
+   337 c1 D #7 node=1
+   337 c1 = counter=11 at index 12 after 10 ticks
+   349 0 ? ? [?/\]   3T v0 L- c9/10
+   351 c0 S #5 node=1
+   357 c0 A #5 node=1
+   366 c0 D #5 node=1
+   366 c0 = counter=12 at index 13 after 15 ticks
+   386 0 ? ? [?/\]   4T v0 L- c9/10
+   404 c1 S #8 node=1
+   412 2 ! # [?/#]   1T v1 L- c0/14
+   412 c1 A #8 node=1
+   414 - H heal
+   417 1 > \ [?\#]   4T v- L- c14/14
+   419 c0 S #6 node=1
+   420 c1 D #8 node=1
+   420 c1 = counter=13 at index 14 after 16 ticks
+   422 2 ^ \ [?\\]   1T v1 L- c0/14
+   424 0 ? ? [?\\]   5T v0 L- c9/10
+   426 2 > \ [?\\]   4T v- L- c0/14
+   427 1 > \ [?\\]   5T v- L- c14/14
+   428 2 > \ [?\\]   5T v- L- c0/14
+   448 c1 S #9 node=1
+   452 1 ? ? [??\]   6T v1 L- c14/14
+   453 2 > \ [??\]   6T v- L- c0/14
+   453 2 v \ [??\]   6T v1 L- c0/14
+   454 0 > \ [\?\]   6T v- L- c9/10
+   454 0 v \ [\?\]   6T v1 L- c9/10
+   456 1 * / [\/\]   6T v1 L1 c14/14
+   479 c0 R #6 node=2
+   486 c0 R #6 node=1
+   493 c0 A #6 node=1
+   496 c0 D #6 node=1
+   496 c0 = counter=14 at index 16 after 77 ticks
+   508 c1 R #9 node=2
+   515 c1 R #9 node=1
+   521 c1 A #9 node=1
+   522 c0 S #7 node=1
+   527 c1 D #9 node=1
+   527 c1 = counter=15 at index 17 after 79 ticks
+   528 c0 A #7 node=1
+   534 c0 D #7 node=1
+   534 c0 = counter=16 at index 18 after 12 ticks
+   572 - P partition 1|02
+   598 0 ? ? [?/\]   7T v0 L- c18/18
+   601 2 > \ [?/\]   7T v- L- c18/18
+   601 2 v \ [?/\]   7T v0 L- c18/18
+   604 0 * / [//\]   7T v0 L0 c18/18
+   622 c0 S #8 node=1
+   626 c0 A #8 node=1
+   697 - H heal
+   701 1 > \ [/\\]   7T v- L- c18/19
+   701 1 x \ [/\\]   7T v- L0 c18/18
+  1093 - P partition 1|02
+  1130 1 ? ? [/?\]   8T v1 L- c19/19
+  1167 1 ? ? [/?\]   9T v1 L- c19/19
+  1192 1 ? ? [/?\]  10T v1 L- c19/19
+  1204 - H heal
+  1206 2 > \ [/?\]  10T v- L- c19/19
+  1206 2 v \ [/?\]  10T v1 L- c19/19
+  1207 0 > \ [\?\]  10T v- L- c19/19
+  1207 0 v \ [\?\]  10T v1 L- c19/19
+  1207 1 * / [\/\]  10T v1 L1 c19/19
+  1597 - P partition 1|02
+  1623 0 ? ? [?/\]  11T v0 L- c20/20
+  1628 2 > \ [?/\]  11T v- L- c20/20
+  1628 2 v \ [?/\]  11T v0 L- c20/20
+  1631 0 * / [//\]  11T v0 L0 c20/20
+  1670 2 ! # [//#]  11T v0 L- c0/21
+  1676 2 ^ \ [//\]  11T v0 L- c0/21
+  1724 - H heal
+  1730 1 > \ [/\\]  11T v- L- c20/20
+  1860 - P partition 0|12
+  1871 1 ! # [/#\]  11T v- L- c0/21
+  1880 2 ? ? [/#?]  12T v2 L- c21/21
+  1913 2 ? ? [/#?]  13T v2 L- c21/21
+  1915 1 ^ \ [/\?]  11T v- L- c0/21
+  1915 1 > \ [/\?]  13T v- L- c0/21
+  1915 1 v \ [/\?]  13T v2 L- c0/21
+  1919 2 * / [/\/]  13T v2 L2 c21/21
+  2000 - L liveness mode: core=01 (cut off for good: 2)
+  2003 0 > \ [\\/]  13T v- L- c21/21
+  2017 1 ? ? [\?/]  14T v1 L- c22/22
+  2018 0 > \ [\?/]  14T v- L- c21/21
+  2018 0 v \ [\?/]  14T v1 L- c21/21
+  2020 1 * / [\//]  14T v1 L1 c22/22
+  2022 - stable leader: node 1 in term 14, 22 ticks after heal
+cluster_recoverable: yes (core=2/3 nodes, quorum=2, all up, all core links healthy)
+LIVENESS VIOLATED: request c0#8 pending for 4378 ticks (submitted at tick 622, last sent at tick 622)
+  accepted by node 1 in term 6 as index 19 at tick 626; index 19 was committed with a term-7 no-op instead: the entry was discarded by a later leader, and the client never re-sent it
+safety: OK: election safety held (7 leaders, at most one per term, highest led term 14); committed prefix of 23 entries never rewritten; counter exactly-once
+seed=3 ticks=5000 trace=88582559ded66ffd FAIL request_stuck
