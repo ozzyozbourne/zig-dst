@@ -1,0 +1,17 @@
+    pub fn tick(simulator: *Simulator) void {
+        // TODO(Zig): Remove (see on_cluster_reply()).
+        simulator.cluster.context = simulator;
+
+        simulator.cluster.tick();
+        simulator.tick_requests();
+        simulator.tick_upgrade();
+        simulator.tick_crash();
+        simulator.tick_pause();
+
+        if (simulator.options.replica_missing_until_request) |request| {
+            if (simulator.requests_replied >= request) {
+                simulator.options.replica_missing_until_request = null;
+                simulator.replica_restart(simulator.options.replica_missing.?, false);
+            }
+        }
+    }

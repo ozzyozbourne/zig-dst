@@ -1,0 +1,137 @@
+        pub fn check_state(state_checker: *StateChecker, replica_index: u8) !void {
+            const replica = &state_checker.replicas[replica_index];
+            if (replica.syncing == .updating_checkpoint) {
+                // Allow a syncing replica to fast-forward its commit.
+                //
+                // But "fast-forwarding" may actually move commit_min slightly backwards:
+                // 1. Suppose op X is a checkpoint trigger.
+                // 2. We are committing op X-1 but are stuck due to a block that does not exist in
+                //    the cluster anymore.
+                // 3. When we sync, `commit_min` "backtracks", to `X - lsm_compaction_ops`.
+                const commit_min_source = state_checker.commit_mins[replica_index];
+                const commit_min_target =
+                    replica.syncing.updating_checkpoint.header.op;
+                assert(commit_min_source <= commit_min_target + constants.lsm_compaction_ops);
+                state_checker.commit_mins[replica_index] = commit_min_target;
+                return;
+            }
+
+            assert(replica.view >= state_checker.replica_head_max[replica_index].view);
+
+            const commit_root_op = replica.superblock.working.vsr_state.checkpoint.header.op;
+            const commit_root = replica.superblock.working.vsr_state.checkpoint.header.checksum;
+
+            const commit_a = state_checker.commit_mins[replica_index];
+            const commit_b = replica.commit_min;
+
+            const header_b = replica.journal.header_with_op(replica.commit_min);
+
+            if (header_b == null and replica.commit_min != replica.op_checkpoint()) {
+                // The slot with commit_min may have been overwritten by an op from the next wrap.
+                // Further, the op may then also be truncated as part of a view change.
+                if (replica.journal.header_for_op(replica.commit_min)) |header| {
+                    assert(header.op == replica.commit_min + constants.journal_slot_count);
+                }
+                return;
+            }
+
+            if (header_b != null) assert(header_b.?.op == commit_b);
+
+            const checksum_a = state_checker.commits.items[commit_a].header.checksum;
+            // Even if we have header_b, if its op is commit_root_op, we can't trust it.
+            // If we just finished state sync, the header in our log might not have been
+            // committed (it might be left over from before sync).
+            const checksum_b = if (commit_b == commit_root_op) commit_root else header_b.?.checksum;
+
+            assert(checksum_b != commit_root or
+                replica.commit_min == replica.superblock.working.vsr_state.checkpoint.header.op);
+            assert((commit_a == commit_b) == (checksum_a == checksum_b));
+
+            if (checksum_a == checksum_b) return;
+
+            assert(commit_b < commit_a or commit_a + 1 == commit_b);
+            state_checker.commit_mins[replica_index] = commit_b;
+
+            // If some other replica has already reached this state, then it will be in the commit
+            // history:
+            if (replica.commit_min < state_checker.commits.items.len) {
+                const commit = &state_checker.commits.items[commit_b];
+                if (replica.op_checkpoint() < replica.commit_min) {
+                    if (commit.release) |release| assert(release.value == replica.release.value);
+                } else {
+                    // When op_checkpoint==commit_min, we recovered from checkpoint, so it is ok if
+                    // the release doesn't match. (commit_min is not actually being executed.)
+                    assert(replica.op_checkpoint() == replica.commit_min);
+                }
+
+                assert(checksum_b == commit.header.checksum);
+                commit.replicas.set(replica_index);
+
+                assert(replica.commit_min < state_checker.commits.items.len);
+                // A replica may transition more than once to the same state, for example, when
+                // restarting after a crash and replaying the log. The more important invariant is
+                // that the cluster as a whole may not transition to the same state more than once,
+                // and once transitioned may not regress.
+                return;
+            }
+
+            if (header_b == null) return;
+            assert(header_b.?.checksum == checksum_b);
+            assert(header_b.?.parent == checksum_a);
+            assert(header_b.?.op > 0);
+            assert(header_b.?.command == .prepare);
+            assert(header_b.?.operation != .reserved);
+
+            if (header_b.?.client == 0) {
+                assert(header_b.?.operation == .upgrade or
+                    header_b.?.operation == .pulse);
+            } else {
+                if (state_checker.clients_exhaustive) {
+                    // The replica has transitioned to state `b` that is not yet in the commit
+                    // history. Check if this is a valid new state based on the originating client's
+                    // inflight request.
+                    const client: *const Client = for (state_checker.clients) |*client| {
+                        if (client.*.?.id == header_b.?.client) break &client.*.?;
+                    } else unreachable;
+
+                    if (client.request_inflight == null) {
+                        return error.ReplicaTransitionedToInvalidState;
+                    }
+
+                    const request = client.request_inflight.?.message;
+                    assert(request.header.client == header_b.?.client);
+                    assert(request.header.checksum == header_b.?.request_checksum);
+                    assert(request.header.request == header_b.?.request);
+                    assert(request.header.command == .request);
+                    assert(request.header.operation == header_b.?.operation);
+                    assert(request.header.size == header_b.?.size);
+                    // `checksum_body` will not match; the leader's StateMachine updated the
+                    // timestamps in the prepare body's accounts/transfers.
+                } else {
+                    // Either:
+                    // - The cluster is running with one or more raw MessageBus "clients", so there
+                    //   may be requests not found in `Cluster.clients`.
+                    // - The test includes one or more client evictions.
+                }
+            }
+
+            state_checker.requests_committed += 1;
+            assert(state_checker.requests_committed == header_b.?.op);
+
+            const release = release: {
+                if (header_b.?.operation == .root or
+                    header_b.?.operation == .upgrade)
+                {
+                    break :release null;
+                } else {
+                    break :release replica.release;
+                }
+            };
+
+            assert(state_checker.commits.items.len == header_b.?.op);
+            state_checker.commits.append(state_checker.allocator, .{
+                .header = header_b.?.*,
+                .release = release,
+            }) catch unreachable;
+            state_checker.commits.items[header_b.?.op].replicas.set(replica_index);
+        }

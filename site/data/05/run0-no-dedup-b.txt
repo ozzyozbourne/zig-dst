@@ -1,0 +1,69 @@
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    2] server: apply c2 r1 amount=219 (no dedup)
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] client 3: send r1 transfer(244)
+  [    5] server: apply c2 r2 amount=898 (no dedup)
+  [    5] server: apply c3 r1 amount=244 (no dedup)
+  [    7] client 2: reply r2 balance=1117
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    9] server: apply c3 r2 amount=844 (no dedup)
+  [    9] client 2: send r3 transfer(329)
+  [   10] server: apply c2 r3 amount=329 (no dedup)
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] client 2: reply r3 balance=2534
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   14] server: apply c1 r1 amount=730 (no dedup)
+  [   14] client 3: send r3 transfer(13)
+  [   16] client 0: send r1 transfer(801)
+  [   17] server: apply c0 r1 amount=801 (no dedup)
+  [   18] client 0: reply r1 balance=4065
+  [   18] server: apply c3 r3 amount=13 (no dedup)
+  [   18] client 2: send r4 transfer(555)
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   25] server: apply c2 r4 amount=555 (no dedup)
+  [   26] client 2: reply r4 balance=4633
+  [   29] client 2: send r5 transfer(856)
+  [   29] client 3: send r4 transfer(436)
+  [   31] server: apply c2 r5 amount=856 (no dedup)
+  [   31] server: apply c3 r4 amount=436 (no dedup)
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] client 3: reply r4 balance=5925
+  [   32] server: apply c1 r2 amount=860 (no dedup)
+  [   32] client 0: send r2 transfer(455)
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   36] server: apply c3 r5 amount=533 (no dedup)
+  [   37] client 1: send r3 transfer(246)
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] client 3: reply r5 balance=7318
+  [   39] server: apply c1 r3 amount=246 (no dedup)
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   41] client 3: send r6 transfer(203)
+  [   42] server: apply c0 r2 amount=455 (no dedup)
+  [   42] server: apply c3 r6 amount=203 (no dedup)
+  [   43] server: apply c0 r2 amount=455 (no dedup)
+  [   43] INVARIANT VIOLATED: server balance=8677, sum of distinct requests=8222
+seed=0 ticks=43 trace=d88bc34622415f6f FAIL

@@ -1,0 +1,1152 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>06 · Swarm testing &amp; shrinking — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .ringgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 960px) { .ringgrid { grid-template-columns: 1fr; } }
+  .kv { font: 13px/1.7 var(--mono); }
+  .kv b { color: var(--accent2); font-weight: 700; }
+  .math { font: 15px/1.9 var(--mono); background: #0a101b; border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+  .math .bad { color: var(--bug); font-weight: 700; } .math .good { color: var(--ok); font-weight: 700; }
+  .cells { display: flex; flex-wrap: wrap; gap: 4px; }
+  .cell { width: 30px; height: 34px; border-radius: 5px; font: 10px/1.1 var(--mono); display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid var(--line); transition: opacity .5s, transform .5s, background .5s, border-color .3s; }
+  .cell .i { color: var(--dim); font-size: 9px; }
+  .cell.push { background: #1f2c55; color: #b9c9ff; } .cell.pop { background: #4a2a1a; color: var(--warn); } .cell.resize { background: #10433d; color: var(--accent2); }
+  .cell.gone { opacity: 0.08; transform: scale(.8); }
+  .cell.now { border-color: var(--bug); box-shadow: 0 0 0 2px var(--bug); opacity: .55; }
+  .cell.cut { opacity: 0.08; }
+  #ring svg { max-width: 470px; margin: 0 auto; }
+  .wrapterm pre.term { white-space: pre-wrap; }
+  .bignum { font: 700 3rem/1 var(--mono); color: var(--accent2); transition: color .3s; }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag medium">Medium</span><span class="tag">Example 06</span></div>
+    <h1>Swarm testing &amp; shrinking</h1>
+    <p class="lede">A ring buffer forgets everything when it is resized while <em>completely full</em>. A uniform random mix of
+      operations almost never fills the queue, so it never sees the bug. <strong>Swarm testing</strong> lets each seed choose its own
+      lopsided mix, and it hits the bug at the 22nd seed. A deterministic <strong>shrinker</strong> then replays edited operation
+      lists until the 1000-op failure becomes a 33-op reproduction a human can read. Everything below is parsed from real runs of
+      <code>examples/06-swarm-testing-and-shrinking/main.zig</code>.</p>
+    <div class="grid g4" id="hero-stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>One seed, one configuration</h2>
+    <p>The seed drives a single <code>DefaultPrng</code>. <code>gen_weights()</code> first decides how many of the 5 operation kinds to
+      enable (1..5), then <em>which</em> ones as a uniform random combination, and gives each enabled kind a weight in 1..100. After
+      that come the initial capacity (32..64) and 1000 operations. The operations do not depend on the queue's state, which is what
+      lets the shrinker cut them up later. Each operation is applied to the real <code>RingQueue</code> and to a dumb array
+      <code>Model</code>, and <code>check()</code> compares the two after every op.</p>
+    <div class="viz" id="arch"></div>
+    <h3>Swarm weights, seed by seed</h3>
+    <p>Each column is one seed's mix, normalised to 100%. The column on the far right is the classic uniform mix
+      (<code>--no-swarm</code>, every weight 1). Most swarm seeds are lopsided: whole kinds are switched off, and one kind dominates.
+      Seed 21 is outlined.</p>
+    <div class="viz" id="weights"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>How deep does the queue get?</h2>
+    <p>The bug needs a <em>full</em> queue, and the capacity is never below 32. Below is the deepest queue reached by each of seeds
+      0–499 running the correct code, with and without swarm (from <code>per-seed.tsv</code>). Under the uniform mix, pop and clear
+      together make up 40% of operations, so the depth is a random walk that keeps getting pulled back to zero.</p>
+    <div class="viz" id="depth"></div>
+    <div class="grid g3 wrapterm"><div id="sw0"></div><div id="sw1"></div><div id="sw2"></div></div>
+    <div id="sw3"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Inside the ring: <code>run 21 --bug</code>, op by op</h2>
+    <p>This is the real failing seed, captured with <code>--ops</code>, a flag that only prints <code>head/tail/count/cap</code> after
+      each op (the trace is unchanged: <code id="hash-check"></code>). Filled slots are the live elements, coloured by the op that pushed
+      them. <span style="color:var(--accent2)">H</span> is <code>head</code> (the oldest element), and <span style="color:var(--warn)">T</span>
+      is <code>tail</code> (where the next push goes). Watch the queue wrap around and fill up. Once it is full, T lands on H.</p>
+    <div class="ringgrid">
+      <div class="viz" id="ring" style="margin:0"></div>
+      <div>
+        <div class="kv" id="ring-state"></div>
+        <div class="panel-h" style="font:600 .78rem var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:12px 0 4px">resize's count, recomputed from the indices</div>
+        <div class="math" id="ring-math"></div>
+        <div class="viz" id="ring-depth" style="margin:12px 0 0"></div>
+      </div>
+    </div>
+    <div id="ring-player"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>The bug: full looks exactly like empty</h2>
+    <div class="grid g2">
+      <div><h3 style="margin-top:0">The planted line in <code>RingQueue.resize</code></h3>
+<pre class="code" style="white-space:pre-wrap"><span class="kw">fn</span> <span class="fn">resize</span>(q: *RingQueue, new_cap: u32) bool {
+    assert(new_cap &gt;= cap_min <span class="kw">and</span> new_cap &lt;= cap_max);
+    <span class="kw">if</span> (new_cap &lt; q.count) <span class="kw">return false</span>;
+<span class="bad">    <span class="kw">const</span> n = <span class="kw">if</span> (bug_enabled) (q.tail + q.cap - q.head) % q.cap</span>
+<span class="good">              <span class="kw">else</span> q.count;</span>
+    <span class="c">// Linearize into scratch (handles wrap-around), then copy back starting at 0.</span>
+    <span class="kw">var</span> scratch: [cap_max]u32 = <span class="kw">undefined</span>;
+    <span class="kw">for</span> (<span class="n">0</span>..n) |i| scratch[i] = q.get(@intCast(i));
+    @memcpy(q.buf[<span class="n">0</span>..n], scratch[<span class="n">0</span>..n]);
+    q.cap = new_cap;
+    q.head = <span class="n">0</span>;
+    q.count = n;
+    q.tail = n % new_cap;
+    <span class="kw">return true</span>;
+}</pre></div>
+      <div><h3 style="margin-top:0">Why ordinary tests miss it</h3>
+        <p><code>(tail − head) mod cap</code> is right for every count from 0 to cap−1. At count = cap, <code>tail</code> has wrapped
+          all the way around to <code>head</code>, and the formula gives 0. Hitting it takes at least 32 net pushes with no clear,
+          followed by a resize that is not rejected.</p>
+        <p>The model has no indices to get wrong. Right after op 69, <code>check()</code> sees <code>q.count != m.len</code>:</p>
+        <div id="fail-term"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>The shrinker, round by round</h2>
+    <p><code>shrink 21 --bug --ops</code> logs every deletion it keeps, as indices into the <em>original</em> op list (logging only:
+      the output is otherwise identical to plain <code>shrink</code>). The shrinker uses no randomness. It truncates after the failing
+      op, deletes chunks of len/2, len/4, …, 1 while the failure still reproduces with the <strong>same kind</strong>
+      (<code>count_mismatch</code>), then moves arguments toward their simplest values, and repeats until nothing changes.</p>
+    <div class="grid g4" style="grid-template-columns: 200px 1fr; align-items:center">
+      <div class="stat"><div class="bignum" id="sh-n">1000</div><div class="lbl" id="sh-lbl">ops</div></div>
+      <div class="viz" id="sh-steps" style="margin:0"></div>
+    </div>
+    <div class="viz"><div class="cells" id="cells"></div>
+      <div class="legend"><span><i class="sw" style="background:#1f2c55"></i>push</span><span><i class="sw" style="background:#4a2a1a"></i>pop</span><span><i class="sw" style="background:#10433d"></i>resize</span><span><i class="sw" style="background:transparent;border:2px solid var(--bug)"></i>chunk deleted in this step</span></div>
+      <div class="cap" id="sh-cap"></div></div>
+    <div id="sh-player"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>The minimal reproduction, and determinism</h2>
+    <div class="grid g2">
+      <div><div id="shrink-term"></div></div>
+      <div>
+        <p>The result reads like a unit test: fill a 32-slot queue, then resize it. It cannot get any smaller, because removing any
+          push leaves the queue not full. Other failing seeds shrink to the <em>same</em> sequence with the same trace, so the shrunk
+          form describes the bug, not the seed:</p>
+        <table class="data" id="shrink-table"></table>
+        <div class="callout ok" id="det-verdict"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Try it: roll your own swarm</h2>
+    <p><strong>A JavaScript re-implementation, for illustration only.</strong> It uses <code>DST.Rand</code> instead of Zig's PRNG,
+      so seed numbers do not match the real runs. It ports <code>gen_weights()</code> and tracks only the queue's depth over 1000
+      ops (initial capacity from the seed, resize changes it) for the swarm mix and for the uniform mix. A dot marks a resize that
+      would hit the bug: the queue is full and the resize is accepted.</p>
+    <div class="controls" id="play-ctl"></div>
+    <div class="viz" id="play"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>How TigerBeetle does this</h2>
+    <div class="grid g2">
+      <div class="card"><h4><a class="file">src/testing/fuzz.zig</a> · <code>random_enum_weights()</code></h4>
+<pre class="code"><span class="c">/// This is swarm testing: some variants are disabled completely,</span>
+<span class="c">/// and the rest have wildly different probabilities.</span>
+<span class="kw">var</span> combination = stdx.PRNG.Combination.init(.{
+    .total = fields.len,
+    .sample = prng.range_inclusive(u32, <span class="n">1</span>, fields.len),
+});
+...
+@field(weights, field) = <span class="kw">if</span> (combination.take(prng))
+    prng.range_inclusive(u64, <span class="n">1</span>, <span class="n">100</span>)
+<span class="kw">else</span>
+    <span class="n">0</span>;</pre>
+        <p class="src"><code>gen_weights()</code> here is a direct port. <code>PRNG.Combination</code> lives in <code>src/stdx/prng.zig</code> (line 540), next to <code>enum_weights</code> (line 516).</p></div>
+      <div class="card"><h4><a class="file">src/queue.zig</a> · the queue fuzzer</h4>
+<pre class="code"><span class="kw">const</span> Declarations = fuzz.DeclEnumExcludingType(
+    Queue,
+    &amp;.{ .Link, .Iterator, .init, .count, .empty },
+);
+<span class="kw">const</span> weights = fuzz.random_enum_weights(&amp;prng, Declarations);
+
+<span class="kw">for</span> (<span class="n">0</span>..N) |_| {
+    <span class="kw">switch</span> (prng.enum_weighted(Declarations, weights)) {
+        .push =&gt; { ... },</pre>
+        <p class="src">The same idea applied to a data structure: an enum built from the queue's public API, with swarm weights for each run.</p></div>
+      <div class="card"><h4><a class="file">src/vopr.zig</a> · <code>options_swarm()</code></h4>
+<pre class="code"><span class="kw">fn</span> <span class="fn">options_swarm</span>(prng: *stdx.PRNG) Simulator.Options {
+    <span class="kw">const</span> replica_count = prng.range_inclusive(u8, <span class="n">1</span>, constants.replicas_max);
+    ...
+    .packet_loss_probability = ratio(prng.int_inclusive(u8, <span class="n">30</span>), <span class="n">100</span>),</pre>
+        <p class="src">Every VOPR seed draws its own cluster size, fault rates and workload, which is swarm testing at the level of the whole simulator.</p></div>
+      <div class="card"><h4>Shrinking in TigerBeetle</h4>
+        <p>There is no automatic shrinker under <code>src/testing</code> or in <code>vopr.zig</code>. Small reproductions come from two
+          other places. One is VOPR CLI overrides (<code>--requests-max</code>, <code>--packet-loss-ratio</code>, <code>--lite</code>),
+          which let a developer shrink a seed by hand. The other is <code>src/testing/exhaustigen.zig</code>, which lists small inputs
+          in order, so the first failure it finds is already small.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/06-swarm-testing-and-shrinking</span>
+<span class="p">$ zig run -OReleaseSafe main.zig -- sweep 20000 --bug</span>              # swarm: fails at seed 21
+<span class="p">$ zig run -OReleaseSafe main.zig -- sweep 20000 --bug --no-swarm</span>   # uniform mix: passes (misses the bug)
+<span class="p">$ zig run -OReleaseSafe main.zig -- run 21 --bug --ops</span>             # every op with head/tail/count/cap
+<span class="p">$ zig run -OReleaseSafe main.zig -- shrink 21 --bug</span>                # 1000 ops -> 33 ops
+<span class="p">$ site/tools/capture.sh 06</span>                                         # re-capture everything on this page</pre>
+  </section>
+</main>
+<script type="text/plain" id="log-ops" data-src="data/06/run21-bug-ops.txt">
+seed=21 initial_cap=43 weights: push=85 pop=3 peek=0 clear=0 resize=1
+  ops 0: push 2137864855 -> 1 want=1 head=0 tail=1 count=1 cap=43
+  ops 1: push 1915677060 -> 1 want=1 head=0 tail=2 count=2 cap=43
+  ops 2: push 3225639641 -> 1 want=1 head=0 tail=3 count=3 cap=43
+  ops 3: push 3480250543 -> 1 want=1 head=0 tail=4 count=4 cap=43
+  ops 4: push 1604820573 -> 1 want=1 head=0 tail=5 count=5 cap=43
+  ops 5: push 2899734177 -> 1 want=1 head=0 tail=6 count=6 cap=43
+  ops 6: push 4285580487 -> 1 want=1 head=0 tail=7 count=7 cap=43
+  ops 7: push 3869389961 -> 1 want=1 head=0 tail=8 count=8 cap=43
+  ops 8: push 1944451736 -> 1 want=1 head=0 tail=9 count=9 cap=43
+  ops 9: push 3107869897 -> 1 want=1 head=0 tail=10 count=10 cap=43
+  ops 10: push 2981632149 -> 1 want=1 head=0 tail=11 count=11 cap=43
+  ops 11: push 2393910185 -> 1 want=1 head=0 tail=12 count=12 cap=43
+  ops 12: push 3923590688 -> 1 want=1 head=0 tail=13 count=13 cap=43
+  ops 13: push 1569046906 -> 1 want=1 head=0 tail=14 count=14 cap=43
+  ops 14: push 471312229 -> 1 want=1 head=0 tail=15 count=15 cap=43
+  ops 15: push 3174100782 -> 1 want=1 head=0 tail=16 count=16 cap=43
+  ops 16: push 2398939026 -> 1 want=1 head=0 tail=17 count=17 cap=43
+  ops 17: push 1844147931 -> 1 want=1 head=0 tail=18 count=18 cap=43
+  ops 18: push 1124264589 -> 1 want=1 head=0 tail=19 count=19 cap=43
+  ops 19: push 418352745 -> 1 want=1 head=0 tail=20 count=20 cap=43
+  ops 20: pop 0 -> 2137864855 want=2137864855 head=1 tail=20 count=19 cap=43
+  ops 21: push 2977326740 -> 1 want=1 head=1 tail=21 count=20 cap=43
+  ops 22: push 2436861651 -> 1 want=1 head=1 tail=22 count=21 cap=43
+  ops 23: push 4051283669 -> 1 want=1 head=1 tail=23 count=22 cap=43
+  ops 24: push 1308102675 -> 1 want=1 head=1 tail=24 count=23 cap=43
+  ops 25: push 163342207 -> 1 want=1 head=1 tail=25 count=24 cap=43
+  ops 26: push 1389071435 -> 1 want=1 head=1 tail=26 count=25 cap=43
+  ops 27: push 2804807759 -> 1 want=1 head=1 tail=27 count=26 cap=43
+  ops 28: push 967398716 -> 1 want=1 head=1 tail=28 count=27 cap=43
+  ops 29: push 1074827642 -> 1 want=1 head=1 tail=29 count=28 cap=43
+  ops 30: push 1791815318 -> 1 want=1 head=1 tail=30 count=29 cap=43
+  ops 31: push 2534191405 -> 1 want=1 head=1 tail=31 count=30 cap=43
+  ops 32: push 1671624119 -> 1 want=1 head=1 tail=32 count=31 cap=43
+  ops 33: push 703374184 -> 1 want=1 head=1 tail=33 count=32 cap=43
+  ops 34: push 3059820936 -> 1 want=1 head=1 tail=34 count=33 cap=43
+  ops 35: push 2071620011 -> 1 want=1 head=1 tail=35 count=34 cap=43
+  ops 36: push 433817953 -> 1 want=1 head=1 tail=36 count=35 cap=43
+  ops 37: push 3593204094 -> 1 want=1 head=1 tail=37 count=36 cap=43
+  ops 38: push 3668563447 -> 1 want=1 head=1 tail=38 count=37 cap=43
+  ops 39: push 3255267606 -> 1 want=1 head=1 tail=39 count=38 cap=43
+  ops 40: push 1529107725 -> 1 want=1 head=1 tail=40 count=39 cap=43
+  ops 41: push 2099933752 -> 1 want=1 head=1 tail=41 count=40 cap=43
+  ops 42: push 1317310637 -> 1 want=1 head=1 tail=42 count=41 cap=43
+  ops 43: push 330814183 -> 1 want=1 head=1 tail=0 count=42 cap=43
+  ops 44: pop 0 -> 1915677060 want=1915677060 head=2 tail=0 count=41 cap=43
+  ops 45: push 2256621317 -> 1 want=1 head=2 tail=1 count=42 cap=43
+  ops 46: push 2572016664 -> 1 want=1 head=2 tail=2 count=43 cap=43
+  op 46: queue became full (count=cap=43)
+  ops 47: push 4124680419 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 48: push 308844957 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 49: push 318228053 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 50: push 3688657056 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 51: push 3565396810 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 52: push 218924913 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 53: push 822348034 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 54: push 1471352845 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 55: push 3225300521 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 56: push 3712706942 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 57: push 1184852282 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 58: push 1091358635 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 59: push 1687777407 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 60: push 2025772346 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 61: push 960112442 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 62: push 114244062 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 63: push 2666333608 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 64: pop 0 -> 3225639641 want=3225639641 head=3 tail=2 count=42 cap=43
+  ops 65: push 2891364201 -> 1 want=1 head=3 tail=3 count=43 cap=43
+  op 65: queue became full (count=cap=43)
+  ops 66: push 1725885582 -> 0 want=0 head=3 tail=3 count=43 cap=43
+  ops 67: push 2242939861 -> 0 want=0 head=3 tail=3 count=43 cap=43
+  ops 68: push 547032620 -> 0 want=0 head=3 tail=3 count=43 cap=43
+  op 69: resize 43 -> 64 while FULL (count=43)
+  ops 69: resize 64 -> 1 want=1 head=0 tail=0 count=0 cap=64
+  op 69: count_mismatch: got=0 want=43
+seed=21 max_count=43 trace=b3e7bd86bc13f598 FAIL
+</script>
+<script type="text/plain" id="log-run-a" data-src="data/06/run21-bug-a.txt">
+seed=21 initial_cap=43 weights: push=85 pop=3 peek=0 clear=0 resize=1
+  op 46: queue became full (count=cap=43)
+  op 65: queue became full (count=cap=43)
+  op 69: resize 43 -> 64 while FULL (count=43)
+  op 69: count_mismatch: got=0 want=43
+seed=21 max_count=43 trace=b3e7bd86bc13f598 FAIL
+</script>
+<script type="text/plain" id="log-run-b" data-src="data/06/run21-bug-b.txt">
+seed=21 initial_cap=43 weights: push=85 pop=3 peek=0 clear=0 resize=1
+  op 46: queue became full (count=cap=43)
+  op 65: queue became full (count=cap=43)
+  op 69: resize 43 -> 64 while FULL (count=43)
+  op 69: count_mismatch: got=0 want=43
+seed=21 max_count=43 trace=b3e7bd86bc13f598 FAIL
+</script>
+<script type="text/plain" id="log-shrink-ops" data-src="data/06/shrink21-ops.txt">
+shrink: seed=21 recorded 1000 ops, initial_cap=43
+  op 69: count_mismatch: got=0 want=43
+  truncate after failing op -> 70 ops
+  deleted chunk=17 orig=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 -> 53 ops
+  deleted chunk=4 orig=17,18,19,20 -> 49 ops
+  deleted chunk=2 orig=43,44 -> 47 ops
+  deleted chunk=2 orig=63,64 -> 45 ops
+  deleted chunk=1 orig=21 -> 44 ops
+  round 1: delete -> 44 ops, simplified 45 args
+  deleted chunk=11 orig=22,23,24,25,26,27,28,29,30,31,32 -> 33 ops
+  round 2: delete -> 33 ops, simplified 0 args
+  round 3: delete -> 33 ops, simplified 0 args
+minimal reproduction (33 ops, 360 replays):
+  q = RingQueue.init(32)
+  push(0) x32
+  resize(32)   <- count_mismatch: got=0 want=32
+  kept orig=33,34,35,36,37,38,39,40,41,42,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,65,66,67,68,69
+seed=21 shrunk trace=98ce1d6defe82a39 FAIL
+</script>
+<script type="text/plain" id="log-shrink21" data-src="data/06/shrink21.txt">
+shrink: seed=21 recorded 1000 ops, initial_cap=43
+  op 69: count_mismatch: got=0 want=43
+  truncate after failing op -> 70 ops
+  round 1: delete -> 44 ops, simplified 45 args
+  round 2: delete -> 33 ops, simplified 0 args
+  round 3: delete -> 33 ops, simplified 0 args
+minimal reproduction (33 ops, 360 replays):
+  q = RingQueue.init(32)
+  push(0) x32
+  resize(32)   <- count_mismatch: got=0 want=32
+seed=21 shrunk trace=98ce1d6defe82a39 FAIL
+</script>
+<script type="text/plain" id="log-shrink31" data-src="data/06/shrink31.txt">
+shrink: seed=31 recorded 1000 ops, initial_cap=35
+  op 384: count_mismatch: got=0 want=33
+  truncate after failing op -> 385 ops
+  round 1: delete -> 35 ops, simplified 36 args
+  round 2: delete -> 33 ops, simplified 0 args
+  round 3: delete -> 33 ops, simplified 0 args
+minimal reproduction (33 ops, 455 replays):
+  q = RingQueue.init(32)
+  push(0) x32
+  resize(32)   <- count_mismatch: got=0 want=32
+seed=31 shrunk trace=98ce1d6defe82a39 FAIL
+</script>
+<script type="text/plain" id="log-shrink66" data-src="data/06/shrink66.txt">
+shrink: seed=66 recorded 1000 ops, initial_cap=34
+  op 342: count_mismatch: got=0 want=32
+  truncate after failing op -> 343 ops
+  round 1: delete -> 34 ops, simplified 34 args
+  round 2: delete -> 33 ops, simplified 0 args
+  round 3: delete -> 33 ops, simplified 0 args
+minimal reproduction (33 ops, 465 replays):
+  q = RingQueue.init(32)
+  push(0) x32
+  resize(32)   <- count_mismatch: got=0 want=32
+seed=66 shrunk trace=98ce1d6defe82a39 FAIL
+</script>
+<script type="text/plain" id="log-sweep" data-src="data/06/sweep.txt">
+PASS: 20000 seeds (3272 reached >= 32 queued items; deepest queue=64)
+
+real	0m0.934s
+user	0m0.933s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/06/sweep-bug.txt">
+FAIL at seed=21 after 22 seeds. Replay with:
+  zig run main.zig -- run 21 --bug
+  zig run main.zig -- shrink 21 --bug
+
+real	0m0.002s
+user	0m0.002s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-ns" data-src="data/06/sweep-bug-noswarm.txt">
+PASS: 20000 seeds (0 reached >= 32 queued items; deepest queue=14)
+
+real	0m0.818s
+user	0m0.818s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-ns200" data-src="data/06/sweep-bug-noswarm-200k.txt">
+PASS: 200000 seeds (0 reached >= 32 queued items; deepest queue=18)
+
+real	0m8.263s
+user	0m8.244s
+sys	0m0.016s
+</script>
+<script type="text/plain" id="tsv-seeds" data-src="data/06/per-seed.tsv">
+seed	initial_cap	push	pop	peek	clear	resize	max_count_swarm	max_count_uniform
+0	36	0	0	69	36	0	0	6
+1	62	35	53	0	2	0	10	7
+2	55	53	0	80	6	90	28	4
+3	50	41	0	8	82	3	5	6
+4	36	55	16	0	96	0	6	6
+5	52	46	51	19	74	18	4	7
+6	53	31	82	6	28	93	3	5
+7	60	0	0	0	0	39	0	5
+8	50	29	61	38	52	43	4	6
+9	50	0	44	0	0	0	0	6
+10	52	47	99	76	3	55	4	5
+11	42	0	0	55	26	36	0	7
+12	64	0	37	0	0	0	0	6
+13	62	59	80	94	0	81	7	7
+14	64	0	34	45	38	8	0	4
+15	61	54	0	66	0	0	61	8
+16	47	0	0	0	53	0	0	8
+17	48	60	19	53	35	89	9	7
+18	45	96	64	55	57	98	7	5
+19	37	67	19	4	77	0	8	7
+20	53	0	0	0	14	60	0	4
+21	43	85	3	0	0	1	64	6
+22	61	22	19	16	69	19	4	6
+23	63	0	0	0	0	60	0	8
+24	56	0	27	0	0	0	0	4
+25	44	9	52	0	0	72	4	5
+26	54	0	31	0	0	16	0	5
+27	51	0	0	0	0	25	0	11
+28	46	14	0	0	90	0	4	6
+29	38	56	0	0	0	0	38	6
+30	37	39	49	83	0	7	8	5
+31	35	68	67	53	0	42	43	5
+32	55	68	76	46	90	13	5	8
+33	40	41	0	60	0	0	40	6
+34	63	78	51	62	99	62	5	6
+35	53	56	0	0	13	96	30	6
+36	60	5	52	0	58	50	2	6
+37	42	85	0	77	92	46	7	8
+38	45	82	0	0	66	0	8	5
+39	40	5	31	28	2	0	2	6
+40	50	29	0	0	0	0	50	6
+41	38	78	86	90	0	0	26	5
+42	63	5	46	0	0	0	2	11
+43	45	0	97	87	0	26	0	6
+44	57	0	87	0	0	0	0	7
+45	39	0	0	22	73	40	0	7
+46	62	71	0	57	77	0	10	5
+47	59	0	0	0	38	0	0	4
+48	37	75	77	0	0	0	18	4
+49	46	23	93	49	25	10	4	6
+50	42	20	0	0	0	0	42	7
+51	64	0	0	0	76	0	0	7
+52	48	0	16	59	0	54	0	5
+53	58	26	8	91	93	0	4	5
+54	63	0	52	0	12	14	0	7
+55	57	0	1	0	76	63	0	6
+56	46	15	0	0	28	0	5	5
+57	44	62	93	0	0	0	8	6
+58	47	29	21	59	22	0	7	6
+59	37	41	64	76	62	79	5	6
+60	61	0	0	67	19	71	0	6
+61	57	33	0	0	5	0	42	7
+62	32	39	0	0	0	0	32	6
+63	47	89	76	45	0	6	55	6
+64	46	0	0	9	0	0	0	6
+65	62	0	0	91	56	96	0	7
+66	34	84	78	0	0	20	39	6
+67	53	0	0	0	54	31	0	4
+68	42	0	0	0	57	0	0	8
+69	38	78	49	86	52	66	6	5
+70	47	47	66	43	17	66	10	8
+71	43	0	79	0	0	90	0	7
+72	54	0	28	86	3	52	0	6
+73	47	91	0	21	0	22	64	6
+74	37	13	0	0	0	83	64	7
+75	58	0	82	98	0	0	0	5
+76	39	99	8	62	0	34	64	4
+77	37	99	2	58	0	66	64	7
+78	40	64	0	15	0	82	64	6
+79	40	33	0	8	0	0	40	6
+80	46	0	0	50	81	79	0	7
+81	38	75	0	0	12	0	38	8
+82	55	91	10	46	99	38	8	6
+83	42	92	43	5	8	0	42	6
+84	32	14	0	97	77	0	4	5
+85	61	0	99	0	8	0	0	7
+86	48	0	39	0	0	42	0	6
+87	37	0	93	0	0	0	0	5
+88	34	0	56	85	74	0	0	6
+89	43	83	0	38	8	51	32	5
+90	40	55	0	0	15	0	23	5
+91	58	0	50	70	81	26	0	5
+92	42	0	4	0	29	93	0	5
+93	59	0	0	0	50	43	0	9
+94	47	69	78	91	7	99	8	5
+95	64	0	0	0	0	89	0	7
+96	47	0	0	0	78	0	0	7
+97	56	72	0	33	0	0	56	5
+98	61	87	29	80	41	82	11	7
+99	61	15	94	43	38	0	3	5
+100	52	78	30	86	88	0	7	4
+101	56	0	0	20	0	55	0	4
+102	37	0	59	55	69	80	0	5
+103	47	0	0	5	0	0	0	6
+104	40	0	0	0	31	0	0	5
+105	35	3	0	97	78	71	1	7
+106	42	0	0	29	0	0	0	6
+107	42	17	0	75	0	26	64	5
+108	44	75	63	36	74	22	6	6
+109	48	13	73	2	22	74	3	6
+110	36	41	46	18	71	0	7	5
+111	49	14	69	22	0	0	3	4
+112	60	98	67	86	43	22	7	5
+113	41	56	0	0	0	72	64	4
+114	41	0	24	0	0	0	0	7
+115	44	86	0	66	79	0	7	6
+116	33	0	4	12	0	56	0	5
+117	54	82	0	0	0	0	54	5
+118	50	64	78	0	66	0	6	5
+119	55	53	0	0	85	29	7	6
+120	50	62	0	0	67	77	8	6
+121	38	2	35	98	0	67	1	4
+122	42	79	0	0	93	0	8	5
+123	34	72	53	98	91	59	7	7
+124	56	0	0	0	66	0	0	9
+125	64	37	29	0	0	0	64	8
+126	35	0	10	41	0	0	0	6
+127	35	57	0	0	56	98	8	6
+128	36	79	0	0	0	39	64	6
+129	53	1	0	96	10	87	1	8
+130	46	74	0	63	0	96	64	9
+131	34	0	0	53	0	0	0	7
+132	53	20	0	72	25	94	6	7
+133	59	0	0	0	77	12	0	6
+134	42	97	61	94	3	0	36	6
+135	40	57	0	0	43	11	12	4
+136	40	46	70	0	13	42	9	5
+137	57	48	79	0	87	0	4	7
+138	58	22	65	15	59	52	4	7
+139	46	0	35	34	0	81	0	8
+140	47	13	47	38	26	66	3	6
+141	43	0	0	96	2	0	0	4
+142	62	49	93	0	11	0	6	5
+143	57	14	18	0	84	0	3	4
+144	44	48	89	0	0	0	15	6
+145	36	0	90	42	79	57	0	5
+146	57	8	24	78	98	0	2	8
+147	51	0	5	0	0	0	0	5
+148	41	0	91	95	1	6	0	6
+149	63	0	30	39	0	0	0	8
+150	64	0	0	87	85	0	0	5
+151	62	42	39	9	79	99	4	4
+152	60	0	20	0	36	20	0	4
+153	44	80	13	10	98	35	7	4
+154	51	0	0	0	74	14	0	4
+155	63	0	0	0	2	60	0	4
+156	55	0	0	0	0	71	0	6
+157	55	0	0	99	0	0	0	6
+158	32	0	74	36	12	47	0	9
+159	35	80	0	11	45	10	16	6
+160	48	93	80	93	0	0	48	6
+161	38	15	88	11	73	33	2	6
+162	62	35	0	64	0	0	62	6
+163	59	51	6	0	0	0	59	6
+164	59	0	35	0	64	42	0	5
+165	36	66	64	86	32	64	7	4
+166	62	0	0	0	56	0	0	9
+167	62	0	0	71	87	91	0	6
+168	54	0	0	94	14	67	0	5
+169	59	0	0	0	0	53	0	5
+170	36	66	1	93	30	21	11	7
+171	37	41	42	21	71	79	6	6
+172	54	32	0	55	43	61	10	5
+173	53	23	0	0	0	0	53	5
+174	47	0	0	0	0	28	0	5
+175	44	0	0	82	0	48	0	6
+176	55	70	12	58	21	88	17	4
+177	38	0	52	0	2	0	0	5
+178	54	88	53	1	1	42	58	6
+179	52	23	0	0	0	51	64	5
+180	40	0	0	22	0	0	0	5
+181	58	60	0	16	0	23	64	6
+182	55	44	0	61	33	0	13	8
+183	42	73	94	0	78	31	4	6
+184	40	74	0	0	24	0	21	6
+185	35	33	0	0	0	0	35	6
+186	61	0	6	36	28	14	0	5
+187	53	0	0	40	0	0	0	6
+188	51	0	0	0	6	88	0	5
+189	54	0	0	0	24	0	0	6
+190	38	53	0	11	0	0	38	6
+191	41	0	1	22	0	62	0	6
+192	35	0	12	0	45	68	0	7
+193	44	16	0	0	0	33	64	8
+194	44	0	3	0	33	74	0	7
+195	35	0	24	0	0	3	0	5
+196	41	93	0	54	41	91	14	5
+197	38	23	32	0	48	35	3	5
+198	57	0	25	97	83	56	0	8
+199	61	71	86	6	63	44	6	5
+200	34	0	41	52	0	0	0	6
+201	56	33	0	0	0	0	56	8
+202	48	0	0	0	31	0	0	7
+203	33	20	46	0	0	0	6	8
+204	58	0	0	0	94	0	0	5
+205	40	0	0	0	15	0	0	5
+206	59	93	0	91	0	62	64	4
+207	46	0	0	70	47	0	0	4
+208	33	61	88	67	31	82	8	6
+209	50	0	87	18	5	0	0	6
+210	34	0	0	79	0	0	0	5
+211	37	0	86	52	72	80	0	5
+212	60	0	0	0	64	0	0	6
+213	45	1	81	57	24	41	1	7
+214	54	60	8	46	14	61	17	7
+215	36	0	0	22	0	0	0	5
+216	41	26	0	51	70	45	7	4
+217	50	62	7	79	8	38	26	5
+218	50	0	94	0	52	65	0	6
+219	56	26	75	37	3	89	4	6
+220	46	41	0	0	0	0	46	6
+221	45	0	14	11	59	90	0	7
+222	42	100	69	64	48	64	9	6
+223	43	67	0	39	45	0	10	7
+224	56	29	0	98	78	85	5	7
+225	32	25	0	0	0	0	32	5
+226	32	0	41	14	80	0	0	5
+227	43	11	80	97	0	60	2	5
+228	58	45	11	21	26	19	12	6
+229	52	84	0	25	24	0	22	5
+230	45	47	0	0	0	67	64	7
+231	59	0	1	69	97	16	0	6
+232	64	0	8	0	36	10	0	5
+233	37	15	21	37	0	0	8	6
+234	58	74	92	98	55	11	5	4
+235	60	18	72	76	0	96	6	5
+236	39	61	0	69	94	62	6	5
+237	33	80	0	93	79	0	10	8
+238	35	17	84	53	12	0	2	4
+239	45	0	71	3	0	33	0	5
+240	42	88	15	69	96	57	6	4
+241	48	44	28	99	2	75	21	5
+242	59	45	0	48	0	0	59	7
+243	39	38	0	0	0	0	39	8
+244	33	92	0	68	70	0	10	7
+245	57	7	0	0	0	0	57	6
+246	35	100	25	0	0	0	35	5
+247	48	9	0	0	16	0	7	7
+248	64	40	60	56	15	10	6	6
+249	38	83	0	54	37	41	14	7
+250	45	53	55	18	76	31	5	9
+251	59	96	68	0	0	0	59	5
+252	53	39	0	0	48	25	10	12
+253	33	0	0	0	28	0	0	5
+254	47	99	62	19	0	0	47	5
+255	47	77	43	82	27	5	9	10
+256	58	45	42	90	9	30	8	6
+257	37	24	0	0	0	5	64	5
+258	50	61	2	24	35	89	10	6
+259	37	0	0	5	73	66	0	7
+260	57	13	73	0	88	2	2	5
+261	35	15	50	95	35	0	2	5
+262	45	14	33	33	10	62	4	9
+263	41	23	0	0	0	0	41	5
+264	50	0	40	75	56	68	0	5
+265	61	49	63	87	8	69	6	7
+266	38	35	0	84	80	77	6	6
+267	46	45	26	58	54	77	7	5
+268	34	5	50	41	33	38	2	5
+269	57	49	0	0	63	0	8	8
+270	57	83	0	0	48	0	17	4
+271	33	66	17	0	48	0	10	6
+272	36	65	13	41	21	0	21	6
+273	54	0	0	0	95	0	0	10
+274	50	49	64	11	17	31	9	4
+275	54	0	0	0	65	0	0	8
+276	42	0	0	0	75	75	0	5
+277	35	0	7	6	0	0	0	5
+278	61	34	25	65	6	100	9	4
+279	36	0	0	0	21	0	0	7
+280	48	0	0	9	100	0	0	7
+281	39	80	5	23	98	11	8	11
+282	49	43	8	100	11	96	16	8
+283	44	0	89	75	73	24	0	3
+284	54	95	79	0	95	15	6	4
+285	42	0	73	15	11	0	0	6
+286	58	0	17	0	0	72	0	5
+287	62	88	26	48	0	59	64	9
+288	61	0	0	0	96	0	0	5
+289	46	0	0	0	0	80	0	5
+290	54	94	2	66	51	0	12	5
+291	54	68	0	58	67	0	8	5
+292	59	62	0	90	0	0	59	6
+293	34	78	25	0	43	31	11	6
+294	43	0	71	0	0	0	0	6
+295	61	1	12	92	0	3	2	4
+296	39	71	40	8	17	34	11	7
+297	58	96	0	6	56	89	16	4
+298	62	49	0	50	84	67	7	6
+299	43	0	38	0	100	2	0	4
+300	38	0	53	0	0	0	0	5
+301	52	64	34	0	62	41	7	6
+302	34	19	31	0	0	98	10	7
+303	41	61	50	61	0	97	43	9
+304	53	0	0	49	54	0	0	5
+305	47	70	27	46	4	17	54	7
+306	55	45	0	0	0	98	64	5
+307	42	44	52	87	10	11	11	5
+308	37	27	84	0	0	0	5	6
+309	61	60	0	13	0	57	64	8
+310	55	65	0	0	0	0	55	6
+311	56	0	3	72	0	40	0	6
+312	54	35	0	0	0	83	64	5
+313	52	68	0	59	8	0	36	6
+314	52	51	12	0	62	0	9	6
+315	59	20	40	82	0	96	4	5
+316	51	51	32	97	0	38	64	5
+317	63	8	43	2	11	0	4	5
+318	62	43	0	53	56	72	7	6
+319	39	71	59	0	27	0	10	4
+320	32	0	0	26	0	0	0	4
+321	35	92	84	66	0	64	51	6
+322	47	0	0	0	72	0	0	4
+323	59	91	58	0	0	0	59	8
+324	36	82	12	52	0	89	64	5
+325	50	95	92	27	32	29	7	7
+326	35	0	96	89	88	38	0	5
+327	35	33	92	90	11	28	4	6
+328	37	23	25	89	49	22	3	5
+329	50	0	2	0	0	0	0	6
+330	59	0	78	56	0	0	0	8
+331	49	0	0	79	0	0	0	5
+332	51	0	0	0	23	0	0	5
+333	39	0	0	0	43	58	0	4
+334	32	0	47	0	0	63	0	6
+335	61	49	0	0	27	0	13	7
+336	58	61	88	81	9	50	8	6
+337	36	33	0	22	0	36	64	6
+338	56	78	3	0	37	0	15	5
+339	38	59	80	5	1	27	15	6
+340	50	10	0	56	0	23	64	8
+341	61	0	0	0	6	19	0	5
+342	61	51	0	0	0	2	64	5
+343	40	67	0	0	0	0	40	7
+344	56	0	0	56	48	35	0	7
+345	49	0	0	0	0	55	0	4
+346	37	89	0	45	4	71	63	4
+347	61	50	0	0	0	34	64	7
+348	32	0	74	68	0	0	0	7
+349	34	39	61	0	93	2	4	4
+350	39	20	0	92	0	79	64	6
+351	34	0	0	45	0	0	0	5
+352	50	0	0	5	61	15	0	6
+353	54	0	0	70	0	0	0	7
+354	59	91	16	49	2	49	64	6
+355	36	0	72	78	44	72	0	5
+356	59	68	9	0	0	53	64	6
+357	33	52	0	96	0	0	33	7
+358	34	0	0	66	0	0	0	6
+359	59	41	0	0	0	0	59	7
+360	63	93	0	6	53	0	13	5
+361	47	0	79	77	0	63	0	8
+362	41	0	0	4	0	0	0	5
+363	41	51	35	56	34	0	6	5
+364	42	39	24	85	27	83	5	5
+365	60	0	0	0	63	41	0	5
+366	45	0	0	0	25	0	0	6
+367	62	0	62	0	0	61	0	7
+368	51	0	14	0	96	92	0	11
+369	47	0	0	0	0	23	0	5
+370	48	0	69	22	64	0	0	5
+371	41	0	0	87	0	0	0	5
+372	53	0	0	57	0	0	0	5
+373	53	38	0	0	0	29	64	6
+374	55	25	0	0	89	0	5	5
+375	58	48	3	44	20	32	17	6
+376	48	39	0	53	0	0	48	8
+377	47	61	0	20	0	0	47	4
+378	60	0	0	0	34	50	0	7
+379	55	54	44	0	0	0	55	7
+380	64	50	97	53	44	87	7	8
+381	44	0	15	0	0	0	0	6
+382	42	0	35	36	0	0	0	7
+383	43	0	0	49	49	0	0	4
+384	36	0	0	0	88	0	0	6
+385	42	79	26	65	0	47	64	7
+386	35	0	0	32	0	69	0	4
+387	39	56	0	9	0	0	39	5
+388	32	0	0	0	0	36	0	6
+389	60	94	40	17	44	88	11	5
+390	49	0	89	0	27	34	0	6
+391	47	6	98	58	34	63	2	8
+392	60	0	0	40	0	0	0	6
+393	39	0	71	0	0	0	0	6
+394	59	82	0	9	91	0	9	7
+395	61	0	0	0	0	67	0	7
+396	45	0	99	98	74	0	0	6
+397	40	0	0	0	77	78	0	4
+398	61	52	97	88	0	42	10	8
+399	47	0	94	64	45	65	0	7
+400	41	0	10	0	0	0	0	5
+401	63	63	0	17	46	0	12	6
+402	49	72	0	9	0	0	49	5
+403	51	0	35	29	0	4	0	6
+404	37	48	93	35	75	52	3	4
+405	64	59	1	0	29	60	11	8
+406	34	0	0	0	0	56	0	7
+407	37	32	0	0	0	57	64	4
+408	35	1	18	37	88	42	1	6
+409	34	9	43	0	81	13	2	7
+410	41	72	13	40	0	0	41	6
+411	39	6	69	77	68	0	2	5
+412	40	87	0	89	61	36	17	5
+413	33	0	16	0	0	0	0	7
+414	44	14	80	31	60	60	2	4
+415	57	9	84	0	89	77	3	7
+416	62	28	0	7	60	18	5	4
+417	56	39	10	0	0	45	64	4
+418	47	14	26	0	0	0	8	8
+419	34	0	0	0	65	0	0	6
+420	56	66	24	22	0	0	56	9
+421	51	0	10	0	78	25	0	5
+422	40	27	0	60	0	65	64	6
+423	51	0	34	41	1	37	0	5
+424	60	100	60	82	55	44	9	6
+425	52	29	52	94	12	53	4	6
+426	38	0	0	89	85	0	0	5
+427	48	0	0	38	0	0	0	5
+428	61	65	0	0	0	0	61	8
+429	53	28	72	15	1	12	3	6
+430	45	0	0	0	54	52	0	4
+431	46	57	62	0	3	34	10	6
+432	34	22	18	0	84	96	5	5
+433	57	26	63	0	70	15	3	5
+434	43	90	22	68	1	4	63	6
+435	39	0	0	0	58	0	0	4
+436	57	0	55	38	93	49	0	7
+437	46	50	43	0	69	36	7	7
+438	58	25	0	0	0	51	64	6
+439	41	48	16	0	0	0	41	7
+440	44	0	79	0	53	0	0	6
+441	62	0	35	0	60	0	0	6
+442	55	40	76	37	46	79	4	7
+443	62	98	16	73	40	90	15	6
+444	34	2	11	74	0	0	3	4
+445	33	51	10	32	85	0	13	7
+446	39	0	0	0	12	0	0	8
+447	47	70	93	64	0	78	14	7
+448	64	0	26	34	89	15	0	5
+449	47	7	68	8	31	21	3	9
+450	60	0	0	0	0	44	0	6
+451	33	0	0	0	18	0	0	5
+452	57	51	11	32	0	0	57	5
+453	35	94	19	6	89	94	8	7
+454	55	83	0	68	81	0	7	6
+455	44	0	98	0	0	0	0	6
+456	45	54	99	0	0	38	8	5
+457	59	70	67	12	75	50	5	5
+458	35	0	50	32	0	5	0	7
+459	46	0	45	0	0	0	0	8
+460	57	0	1	0	34	38	0	4
+461	50	48	0	0	99	31	5	5
+462	41	90	18	72	36	31	15	7
+463	52	99	86	0	99	0	6	5
+464	40	62	0	84	7	4	46	6
+465	47	0	55	0	0	38	0	6
+466	47	0	0	18	23	88	0	5
+467	39	85	75	5	46	76	7	6
+468	63	78	23	90	65	12	9	9
+469	55	55	0	28	99	50	7	7
+470	56	0	86	95	66	35	0	7
+471	50	62	94	17	0	43	11	7
+472	48	0	25	17	45	11	0	6
+473	54	63	90	0	0	3	13	8
+474	64	5	0	90	0	0	44	6
+475	59	9	65	0	0	0	3	4
+476	53	67	0	0	82	0	7	6
+477	53	0	75	67	8	69	0	5
+478	55	99	0	41	79	0	11	6
+479	43	79	54	0	0	73	64	5
+480	37	65	0	70	0	66	64	10
+481	47	81	7	26	58	0	10	6
+482	49	0	0	50	0	66	0	8
+483	49	0	89	0	53	0	0	4
+484	58	0	0	0	0	43	0	6
+485	52	56	0	0	0	0	52	7
+486	52	91	15	53	15	30	27	6
+487	57	0	91	0	0	0	0	6
+488	46	8	95	0	30	30	2	5
+489	54	16	65	0	0	0	4	6
+490	35	43	4	58	51	50	7	5
+491	51	49	73	0	0	44	10	6
+492	38	20	0	0	0	0	38	5
+493	54	46	16	26	0	96	64	7
+494	54	83	0	0	0	0	54	4
+495	44	87	91	92	0	11	21	6
+496	41	52	0	0	0	0	41	5
+497	50	0	37	0	0	0	0	5
+498	55	82	0	11	0	17	64	4
+499	34	76	0	0	0	75	64	4
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex06" });
+const { C, el, s, tip } = DST;
+const KINDS = ["push", "pop", "peek", "clear", "resize"];
+const KCOL = { push: C.accent, pop: C.warn, peek: C.violet, clear: C.bug, resize: C.accent2 };
+const tsv = (id) => { const [h, ...rows] = DST.text(id).trim().split("\n"); const k = h.split("\t"); return rows.map((r) => Object.fromEntries(r.split("\t").map((v, i) => [k[i], +v]))); };
+const SEEDS = tsv("tsv-seeds");
+
+// ---------------------------------------------------------------- parse run 21 --bug --ops
+const OPS_TEXT = DST.text("log-ops");
+const RUN = (() => {
+  const head = OPS_TEXT.match(/seed=(\d+) initial_cap=(\d+) weights: (.*)/);
+  const weights = Object.fromEntries(head[3].trim().split(" ").map((kv) => kv.split("=")).map(([k, v]) => [k, +v]));
+  const ops = [], notes = {};
+  for (const ln of OPS_TEXT.split("\n")) {
+    let m;
+    if ((m = ln.match(/^\s+ops (\d+): (\w+) (\d+) -> (-?\d+) want=(-?\d+) head=(\d+) tail=(\d+) count=(\d+) cap=(\d+)/)))
+      ops.push({ i: +m[1], kind: m[2], arg: +m[3], got: +m[4], want: +m[5], head: +m[6], tail: +m[7], count: +m[8], cap: +m[9] });
+    else if ((m = ln.match(/^\s+op (\d+): (.*)/))) (notes[+m[1]] ||= []).push(m[2]);
+  }
+  const fin = OPS_TEXT.match(/seed=\d+ max_count=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/);
+  const fail = OPS_TEXT.match(/op (\d+): (\w+): got=(\d+) want=(\d+)/);
+  return { seed: +head[1], cap0: +head[2], weights, ops, notes, max: +fin[1], trace: fin[2], verdict: fin[3], fail: { op: +fail[1], kind: fail[2], got: +fail[3], want: +fail[4] } };
+})();
+// Reconstruct buffer contents (which op pushed each slot) from the head/tail/count lines.
+const STATES = (() => {
+  let buf = Array(64).fill(null), prev = { head: 0, tail: 0, count: 0, cap: RUN.cap0 };
+  const out = [{ ...prev, buf: buf.slice(), op: null }];
+  for (const o of RUN.ops) {
+    if (o.kind === "push" && o.got === 1) buf[prev.tail] = o.i;
+    if (o.kind === "resize" && o.got === 1) { const nb = Array(64).fill(null); for (let j = 0; j < o.count; j++) nb[j] = buf[(prev.head + j) % prev.cap]; buf = nb; }
+    if (o.kind === "clear") buf = Array(64).fill(null);
+    prev = { head: o.head, tail: o.tail, count: o.count, cap: o.cap };
+    out.push({ ...prev, buf: buf.slice(), op: o });
+  }
+  return out;
+})();
+
+// hero stats
+{
+  const sb = DST.text("log-sweep-bug").match(/FAIL at seed=(\d+) after (\d+) seeds/);
+  const ns = DST.text("log-sweep-ns200").match(/PASS: (\d+) seeds \((\d+) reached >= 32 queued items; deepest queue=(\d+)\)/);
+  const sh = DST.text("log-shrink21").match(/minimal reproduction \((\d+) ops, (\d+) replays\)/);
+  for (const [n, l] of [[`seed ${sb[1]}`, `swarm finds the bug after ${sb[2]} seeds`], [Number(ns[1]).toLocaleString("en-US"), `uniform-mix seeds that all miss it (deepest queue ever: ${ns[3]})`],
+    [`1000 → ${sh[1]}`, "ops in the failing case, before and after shrinking"], [sh[2], "deterministic replays the shrinker needed"]])
+    DST.$("#hero-stats").append(el("div", { class: "stat" }, el("div", { class: "num" }, String(n)), el("div", { class: "lbl" }, l)));
+}
+
+// ---------------------------------------------------------------- 01 architecture + weights
+{
+  const W = 1100, H = 190, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(s("defs", {}, s("marker", { id: "ah", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: C.muted }))));
+  const box = (x, y, w, h, t, sub, col, dash) => { svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: "#121b2c", stroke: col, "stroke-width": 1.5, "stroke-dasharray": dash ? "5 4" : null }));
+    svg.append(s("text", { x: x + w / 2, y: y + 22, "text-anchor": "middle", fill: col, "font-size": 13, "font-weight": 700, "font-family": "monospace" }, t));
+    sub.forEach((u, i) => svg.append(s("text", { x: x + w / 2, y: y + 42 + i * 15, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, u))); };
+  const ar = (x1, y1, x2, y2) => svg.append(s("path", { d: `M${x1},${y1} L${x2},${y2}`, stroke: C.muted, "stroke-width": 1.6, class: "flow", "marker-end": "url(#ah)" }));
+  const w = RUN.weights;
+  box(10, 50, 120, 70, `SEED=${RUN.seed}`, ["DefaultPrng"], C.yellow);
+  box(170, 20, 230, 130, "gen_weights()", ["k = 1..5 kinds", "which: Combination", ...KINDS.map((k) => `${k}=${w[k]}`).reduce((a, x, i) => (i % 2 ? (a[a.length - 1] += "  " + x, a) : (a.push(x), a)), [])], C.yellow, true);
+  box(440, 20, 200, 130, "Case (editable)", [`initial_cap=${RUN.cap0}`, "ops[1000]: kind + arg", "independent of state", "→ shrinker can edit it"], C.violet, true);
+  box(690, 10, 190, 70, "RingQueue", ["real code under test", "head / tail / count"], C.accent);
+  box(690, 100, 190, 70, "Model", ["array that shifts", "no indices to get wrong"], C.ok, true);
+  box(920, 50, 170, 70, "check()", ["after EVERY op", "count, order, indices"], C.bug);
+  ar(130, 85, 168, 85); ar(400, 85, 438, 85); ar(640, 70, 688, 45); ar(640, 100, 688, 135); ar(880, 45, 918, 75); ar(880, 135, 918, 100);
+  DST.$("#arch").append(svg, el("div", { class: "cap" }, `Values are seed ${RUN.seed}'s, from the first line of run 21 --bug. Dashed boxes are generated or oracle. Solid boxes are the real code and its checker.`));
+
+  // stacked weight columns
+  const N = 80, rows = SEEDS.slice(0, N), cw = 12, gap = 2, m = { l: 40, t: 10, b: 34 }, Hh = 220;
+  const W2 = m.l + (N + 3) * (cw + gap) + 20, ch = Hh - m.t - m.b, svg2 = s("svg", { viewBox: `0 0 ${W2} ${Hh}` });
+  for (const p of [0, 50, 100]) { const y = m.t + ch * (1 - p / 100); svg2.append(s("line", { x1: m.l, x2: W2 - 10, y1: y, y2: y, stroke: C.line }), s("text", { x: m.l - 6, y: y + 4, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, p + "%")); }
+  const col = (x, ws, label, hl, tipText) => {
+    const tot = KINDS.reduce((a, k) => a + ws[k], 0); let y = m.t + ch;
+    const g = s("g");
+    for (const k of KINDS) { const h = (ws[k] / tot) * ch; if (!h) continue; y -= h; g.append(s("rect", { x, y, width: cw, height: h, fill: KCOL[k] })); }
+    if (hl) g.append(s("rect", { x: x - 2, y: m.t - 2, width: cw + 4, height: ch + 4, fill: "none", stroke: C.yellow, "stroke-width": 2, rx: 2 }));
+    g.append(s("rect", { x, y: m.t, width: cw, height: ch, fill: "transparent" }));
+    tip(g, tipText); svg2.append(g);
+    if (label != null) svg2.append(s("text", { x: x + cw / 2, y: Hh - m.b + 14, "text-anchor": "middle", fill: hl ? C.yellow : C.dim, "font-size": 9, "font-family": "monospace" }, label));
+  };
+  rows.forEach((r, i) => col(m.l + i * (cw + gap), r, r.seed % 10 === 0 || r.seed === RUN.seed ? r.seed : null, r.seed === RUN.seed,
+    `seed ${r.seed}: ` + KINDS.map((k) => `${k}=${r[k]}`).join(" ") + `\ninitial_cap=${r.initial_cap}  max depth=${r.max_count_swarm} (uniform: ${r.max_count_uniform})`));
+  const ux = m.l + (N + 1) * (cw + gap);
+  col(ux, { push: 1, pop: 1, peek: 1, clear: 1, resize: 1 }, null, false, "--no-swarm: every kind weight 1 (20% each)");
+  svg2.append(s("text", { x: ux + cw / 2, y: Hh - m.b + 14, "text-anchor": "middle", fill: C.text, "font-size": 9, "font-family": "monospace" }, "unif"));
+  svg2.append(s("text", { x: (m.l + ux) / 2, y: Hh - 4, "text-anchor": "middle", fill: C.muted, "font-size": 11 }, `seed (0–${N - 1})`));
+  const off = SEEDS.filter((r) => KINDS.some((k) => r[k] === 0)).length, noClrPop = SEEDS.filter((r) => r.clear === 0 && r.pop === 0 && r.push > 0).length;
+  DST.$("#weights").append(svg2, el("div", { class: "legend" }, KINDS.map((k) => el("span", {}, el("i", { class: "sw", style: { background: KCOL[k] } }), k))),
+    el("div", { class: "cap" }, `Over seeds 0–${SEEDS.length - 1}: ${off} seeds switch off at least one kind, and ${noClrPop} push but never pop and never clear.`));
+}
+
+// ---------------------------------------------------------------- 02 depth histogram
+{
+  const W = 1100, H = 280, m = { l: 50, r: 14, t: 16, b: 40 }, maxD = 64;
+  const hs = Array(maxD + 1).fill(0), hu = Array(maxD + 1).fill(0);
+  SEEDS.forEach((r) => { hs[r.max_count_swarm]++; hu[r.max_count_uniform]++; });
+  const ymax = Math.max(...hs, ...hu), bw = (W - m.l - m.r) / (maxD + 1);
+  const Y = (v) => H - m.b - (Math.sqrt(v) / Math.sqrt(ymax)) * (H - m.t - m.b), svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  for (const v of [1, 5, 10, 25, 50, 100].filter((v) => v <= ymax)) { svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: C.line }), s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, v)); }
+  const x32 = m.l + 32 * bw;
+  svg.append(s("rect", { x: x32, y: m.t, width: W - m.r - x32, height: H - m.t - m.b, fill: C.bug, opacity: 0.06 }));
+  svg.append(s("text", { x: x32 + 6, y: m.t + 12, fill: C.bug, "font-size": 11, "font-family": "monospace" }, "≥ 32 = cap_min: the queue can be full here"));
+  for (let d = 0; d <= maxD; d++) {
+    for (const [arr, col, dx, nm] of [[hu, C.warn, 0, "uniform"], [hs, C.accent2, bw / 2, "swarm"]]) {
+      if (!arr[d]) continue;
+      const r = s("rect", { x: m.l + d * bw + dx, y: Y(arr[d]), width: bw / 2 - 1, height: H - m.b - Y(arr[d]), fill: col, rx: 1 });
+      tip(r, `${nm}: ${arr[d]} seeds reached max depth ${d}`); svg.append(r);
+    }
+    if (d % 4 === 0) svg.append(s("text", { x: m.l + d * bw + bw / 2, y: H - m.b + 14, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, d));
+  }
+  svg.append(s("text", { x: (W + m.l) / 2, y: H - 6, "text-anchor": "middle", fill: C.muted, "font-size": 12 }, "deepest queue reached in the seed (1000 ops) · y: number of seeds (√ scale)"));
+  const deepS = SEEDS.filter((r) => r.max_count_swarm >= 32).length, deepU = SEEDS.filter((r) => r.max_count_uniform >= 32).length;
+  const maxU = Math.max(...SEEDS.map((r) => r.max_count_uniform)), maxS = Math.max(...SEEDS.map((r) => r.max_count_swarm));
+  DST.$("#depth").append(svg, el("div", { class: "legend" }, el("span", {}, el("i", { class: "sw", style: { background: C.accent2 } }), `swarm: ${deepS}/${SEEDS.length} seeds reach ≥ 32, deepest ${maxS}`),
+    el("span", {}, el("i", { class: "sw", style: { background: C.warn } }), `uniform: ${deepU}/${SEEDS.length} seeds reach ≥ 32, deepest ${maxU}`)));
+  DST.term("#sw0", "$ main sweep 20000\n" + DST.text("log-sweep").trim());
+  DST.term("#sw1", "$ main sweep 20000 --bug\n" + DST.text("log-sweep-bug").trim());
+  DST.term("#sw2", "$ main sweep 20000 --bug --no-swarm\n" + DST.text("log-sweep-ns").trim());
+  DST.term("#sw3", "$ main sweep 200000 --bug --no-swarm      # 10x more seeds, still nothing\n" + DST.text("log-sweep-ns200").trim());
+}
+
+// ---------------------------------------------------------------- 03 ring buffer replay
+{
+  DST.$("#hash-check").textContent = (() => { const a = DST.text("log-run-a").match(/trace=([0-9a-f]+)/)[1]; return a === RUN.trace ? `trace=${a}, same as without --ops` : `MISMATCH ${a} vs ${RUN.trace}`; })();
+  const W = 520, H = 520, cx = W / 2, cy = H / 2, R = 190;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` }), gSlots = s("g"), gPtr = s("g"), center = s("g");
+  svg.append(gSlots, gPtr, center); DST.$("#ring").append(svg);
+  const hue = (i) => `hsl(${(i * 47) % 360} 65% 62%)`;
+  const ang = (k, cap) => -Math.PI / 2 + (2 * Math.PI * k) / cap;
+  const arc = (k, cap, r0, r1) => { const a0 = ang(k, cap) + 0.012, a1 = ang(k + 1, cap) - 0.012, p = (r, a) => `${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`;
+    return `M${p(r1, a0)} A${r1},${r1} 0 0 1 ${p(r1, a1)} L${p(r0, a1)} A${r0},${r0} 0 0 0 ${p(r0, a0)} Z`; };
+  // H points at its slot from outside the ring, T from inside, so they never collide when tail == head.
+  const ptr = (k, cap, col, label, inside) => { const a = ang(k + 0.5, cap), r0 = inside ? R - 52 : R + 6, r1 = inside ? R - 76 : R + 30, rl = inside ? R - 88 : R + 42;
+    gPtr.append(s("line", { x1: cx + r1 * Math.cos(a), y1: cy + r1 * Math.sin(a), x2: cx + r0 * Math.cos(a), y2: cy + r0 * Math.sin(a), stroke: col, "stroke-width": 3 }));
+    gPtr.append(s("text", { x: cx + rl * Math.cos(a), y: cy + rl * Math.sin(a) + 5, "text-anchor": "middle", fill: col, "font-size": 15, "font-weight": 700, "font-family": "monospace" }, label)); };
+  const depthBox = DST.$("#ring-depth");
+  const depth = DST.line(depthBox, [{ name: "count", color: C.accent2, points: STATES.slice(1).map((st) => [st.op.i, st.count]) }, { name: "cap", color: C.dim, dash: "4 3", points: STATES.slice(1).map((st) => [st.op.i, st.cap]) }],
+    { width: 560, height: 190, ymin: 0, xlabel: "op", noLegend: true });
+  const cur = s("line", { stroke: C.yellow, "stroke-width": 1.5 }); depth.svg.append(cur);
+  function step(i) {
+    const st = STATES[i], o = st.op, cap = st.cap;
+    gSlots.innerHTML = ""; gPtr.innerHTML = ""; center.innerHTML = "";
+    for (let k = 0; k < cap; k++) {
+      const live = ((k - st.head + cap) % cap) < st.count, who = st.buf[k];
+      const p = s("path", { d: arc(k, cap, R - 46, R), fill: live && who != null ? hue(who) : "#162036", stroke: "#0d1422", opacity: live ? 0.95 : 1 });
+      tip(p, `slot ${k}` + (live ? `: pushed by op ${who}` : ": free") + (k === st.head ? "\n← head" : "") + (k === st.tail ? "\n← tail" : "")); gSlots.append(p);
+      if (k % (cap > 50 ? 8 : 5) === 0) { const a = ang(k + 0.5, cap); gSlots.append(s("text", { x: cx + (R + 14) * Math.cos(a), y: cy + (R + 14) * Math.sin(a) + 3, "text-anchor": "middle", fill: C.dim, "font-size": 9, "font-family": "monospace" }, k)); }
+    }
+    ptr(st.head, cap, C.accent2, "H", false); ptr(st.tail, cap, C.warn, "T", true);
+    const full = st.count === cap, lost = o && o.i === RUN.fail.op;
+    center.append(s("text", { x: cx, y: cy - 22, "text-anchor": "middle", fill: C.muted, "font-size": 13, "font-family": "monospace" }, o ? `op ${o.i}: ${o.kind}${o.kind === "push" || o.kind === "resize" ? "(" + (o.kind === "push" ? "…" : o.arg) + ")" : "()"}` : "initial"));
+    center.append(s("text", { x: cx, y: cy + 14, "text-anchor": "middle", fill: lost ? C.bug : full ? C.warn : C.text, "font-size": 30, "font-weight": 700, "font-family": "monospace" }, `${st.count}/${cap}`));
+    center.append(s("text", { x: cx, y: cy + 40, "text-anchor": "middle", fill: lost ? C.bug : full ? C.warn : C.dim, "font-size": 12, "font-family": "monospace" }, lost ? `${RUN.fail.want} elements lost` : full ? "FULL: tail == head" : o && o.kind === "push" && o.got === 0 ? "push rejected (full)" : "count / cap"));
+    // state panel
+    const notes = o ? (RUN.notes[o.i] || []) : [];
+    DST.$("#ring-state").innerHTML = "";
+    DST.$("#ring-state").append(el("div", {}, "head=", el("b", {}, st.head), "  tail=", el("b", {}, st.tail), "  count=", el("b", {}, st.count), "  cap=", el("b", {}, st.cap)),
+      el("div", { style: { color: "var(--muted)" } }, o ? `returned ${o.got} · model wants ${o.want}` : `weights: ${KINDS.map((k) => k + "=" + RUN.weights[k]).join(" ")}`),
+      ...notes.map((n) => el("div", { style: { color: /mismatch/.test(n) ? "var(--bug)" : "var(--warn)" } }, `op ${o.i}: ${n}`)));
+    // math: what resize would compute right now (state BEFORE the op for the failing resize)
+    const pre = lost ? STATES[i - 1] : st, n = (pre.tail + pre.cap - pre.head) % pre.cap, ok = n === pre.count;
+    DST.$("#ring-math").innerHTML = "";
+    DST.$("#ring-math").append(el("div", {}, `(tail + cap − head) % cap = (${pre.tail} + ${pre.cap} − ${pre.head}) % ${pre.cap} = `, el("span", { class: ok ? "good" : "bad" }, n)),
+      el("div", {}, "q.count = ", el("span", { class: "good" }, pre.count), ok ? "   ✓ agree" : el("span", { class: "bad" }, `   ✕ resize would keep ${n} of ${pre.count}`)),
+      ...(lost ? [el("div", { style: { color: "var(--bug)" } }, `op ${o.i} is that resize. Afterwards head=${st.head} tail=${st.tail} count=${st.count}, while the model still holds ${RUN.fail.want}.`)] : []));
+    const xi = o ? depth.X(o.i) : depth.X(0); cur.setAttribute("x1", xi); cur.setAttribute("x2", xi); cur.setAttribute("y1", 14); cur.setAttribute("y2", 154);
+  }
+  new DST.Player("#ring-player", { count: STATES.length, onStep: step, speed: 6, label: (i) => (i ? `op ${STATES[i].op.i} / ${RUN.ops.length - 1}` : "initial") });
+  const fl = OPS_TEXT.trim().split("\n");
+  DST.term("#fail-term", fl.filter((l) => !/^\s+ops /.test(l)).join("\n"), [[/mismatch|FAIL/, "f"], [/FULL|became full/, "hl"]]);
+}
+
+// ---------------------------------------------------------------- 05 shrinker animation
+{
+  const T = DST.text("log-shrink-ops"), kindOf = Object.fromEntries(RUN.ops.map((o) => [o.i, o]));
+  const rec = +T.match(/recorded (\d+) ops/)[1], trunc = +T.match(/truncate after failing op -> (\d+) ops/)[1];
+  const steps = [{ n: rec, label: `recorded ops (seed ${RUN.seed})`, del: [], phase: "record" }, { n: trunc, label: "truncate after the failing op", del: [], phase: "truncate" }];
+  for (const ln of T.split("\n")) {
+    let m;
+    if ((m = ln.match(/deleted chunk=(\d+) orig=([\d,]+) -> (\d+) ops/))) steps.push({ n: +m[3], label: `delete chunk of ${m[1]}`, del: m[2].split(",").map(Number), phase: "delete" });
+    else if ((m = ln.match(/round (\d+): delete -> (\d+) ops, simplified (\d+) args/))) steps.push({ n: +m[2], label: `round ${m[1]} done · simplified ${m[3]} args`, del: [], phase: "round", simplified: +m[3], round: +m[1] });
+  }
+  const kept = T.match(/kept orig=([\d,]+)/)[1].split(",").map(Number);
+  const minCap = +T.match(/RingQueue.init\((\d+)\)/)[1];
+  steps.push({ n: kept.length, label: "minimal reproduction", del: [], phase: "final" });
+  const cells = {};
+  for (let i = 0; i < trunc; i++) {
+    const o = kindOf[i], c = el("div", { class: "cell " + o.kind }, el("span", { class: "i" }, i), el("span", { class: "a" }, o.kind[0] + (o.kind === "resize" ? o.arg : "")));
+    tip(c, `original op ${i}: ${o.kind}${o.kind === "push" ? "(" + o.arg + ")" : o.kind === "resize" ? "(" + o.arg + ")" : "()"}`);
+    cells[i] = c; DST.$("#cells").append(c);
+  }
+  // step chart: op count after each step
+  const sc = DST.$("#sh-steps");
+  const chart = DST.line(sc, [{ name: "ops", color: C.accent2, points: steps.slice(1).map((st, i) => [i + 1, st.n]), dots: true }], { width: 760, height: 170, ymin: 0, xlabel: `shrink step (step 0, the ${rec} recorded ops, is off the chart)`, noLegend: true, step: true, yfmt: (v) => v });
+  chart.svg.querySelectorAll("circle").forEach((c, i) => tip(c, `${steps[i + 1].label}: ${steps[i + 1].n} ops`));
+  const cur = s("circle", { r: 7, fill: "none", stroke: C.yellow, "stroke-width": 2 }); chart.svg.append(cur);
+  function step(k) {
+    const gone = new Set(), simplified = steps.slice(0, k + 1).some((st) => st.phase === "round" && st.simplified > 0);
+    for (let j = 0; j <= k; j++) steps[j].del.forEach((x) => gone.add(x));
+    for (let i = 0; i < trunc; i++) {
+      const c = cells[i]; c.className = "cell " + kindOf[i].kind;
+      if (gone.has(i)) c.classList.add(steps[k].del.includes(i) ? "now" : "gone");
+      const a = c.querySelector(".a"), o = kindOf[i];
+      a.textContent = o.kind === "push" ? (simplified ? "0" : "p") : o.kind === "resize" ? (simplified ? String(minCap) : String(o.arg)) : o.kind[0];
+    }
+    const st = steps[k];
+    DST.$("#sh-n").textContent = st.n; DST.$("#sh-n").style.color = st.phase === "final" ? "var(--ok)" : "";
+    DST.$("#sh-lbl").textContent = `ops · ${st.label}`;
+    cur.setAttribute("opacity", k ? 1 : 0); if (k) { cur.setAttribute("cx", chart.X(k)); cur.setAttribute("cy", chart.Y(st.n)); }
+    DST.$("#sh-cap").textContent = k === 0 ? `Seed ${RUN.seed} generated ${rec} ops and fails at op ${RUN.fail.op}. Only ops 0..${trunc - 1} are drawn: everything after the failure is cut for free in the next step.`
+      : st.phase === "delete" ? `Deleted original ops ${st.del[0]}${st.del.length > 1 ? "…" + st.del[st.del.length - 1] : ""} (${st.del.length}); the shorter list still fails with ${RUN.fail.kind}. ${st.n} ops left.`
+      : st.phase === "round" ? (st.simplified ? `Argument pass: ${st.simplified} arguments simplified — initial capacity ${RUN.cap0} → ${minCap}, every push value → 0, resize → ${minCap}. With capacity ${minCap}, fewer pushes fill the queue, so round ${st.round + 1} can delete more.` : `Round ${st.round}: no argument changed${st.n === steps[k - 1].n ? " and nothing was deleted: done" : ""}.`)
+      : st.phase === "final" ? `Kept ${kept.length} ops: ${kept.filter((i) => kindOf[i].kind === "push").length} pushes and ${kept.filter((i) => kindOf[i].kind === "resize").length} resize (original op ${kept[kept.length - 1]}). The ${RUN.ops.filter((o) => o.kind === "pop").length} pops were all deleted.`
+      : `Truncated to ops 0..${trunc - 1}.`;
+  }
+  new DST.Player("#sh-player", { count: steps.length, onStep: step, speed: 1, label: (k) => `step ${k + 1}/${steps.length}` });
+}
+
+// ---------------------------------------------------------------- 06 final repro + determinism
+{
+  DST.term("#shrink-term", "$ main shrink 21 --bug\n" + DST.text("log-shrink21").trim(), [[/FAIL|mismatch/, "f"], [/^\s+(q =|push|resize)/, "k"]]);
+  const t = DST.$("#shrink-table");
+  t.innerHTML = "<tr><th class=num>seed</th><th class=num>recorded → shrunk</th><th class=num>replays</th><th>shrunk trace</th></tr>";
+  const traces = [];
+  for (const sd of [21, 31, 66]) {
+    const x = DST.text("log-shrink" + sd), tr = x.match(/shrunk trace=([0-9a-f]+)/)[1]; traces.push(tr);
+    const mm = x.match(/minimal reproduction \((\d+) ops, (\d+) replays\)/), fo = x.match(/op (\d+): count_mismatch/)[1];
+    t.append(el("tr", {}, el("td", { class: "num" }, sd), el("td", { class: "num" }, `fails at op ${fo} → ${mm[1]} ops`), el("td", { class: "num" }, mm[2]), el("td", {}, el("code", {}, tr))));
+  }
+  const a = DST.text("log-run-a"), b = DST.text("log-run-b"), same = a === b, ta = a.match(/trace=([0-9a-f]+)/)[1], tb = b.match(/trace=([0-9a-f]+)/)[1];
+  const v = DST.$("#det-verdict"); v.className = "callout " + (same && new Set(traces).size === 1 ? "ok" : "bug");
+  v.append(el("strong", {}, same ? "run 21 --bug, twice: byte-for-byte identical" : "run 21 --bug: captures DIFFER"),
+    `Both captures end with trace=${ta} / ${tb}. ${new Set(traces).size === 1 ? `All three shrinks give trace=${traces[0]}.` : "The shrunk traces differ."} The shrinker only replays, so the same seed always shrinks to the same output.`);
+}
+
+// ---------------------------------------------------------------- 07 JS playground (illustration only)
+{
+  const ctl = DST.$("#play-ctl");
+  const iSeed = el("input", { type: "number", value: 7, style: { width: "100px" } });
+  ctl.append(el("label", {}, "seed "), iSeed, el("button", { class: "primary", onclick: draw }, "roll"), el("button", { onclick: () => { iSeed.value = +iSeed.value + 1; draw(); } }, "next seed →"));
+  iSeed.addEventListener("input", draw);
+  function genWeights(R, swarm) {
+    if (!swarm) return [1, 1, 1, 1, 1];
+    const sample = R.range(1, 5); let taken = 0;
+    return KINDS.map((_, seen) => { const take = R.int(5 - seen) < sample - taken; if (take) taken++; return take ? R.range(1, 100) : 0; });
+  }
+  function sim(seed, swarm) {
+    const R = DST.Rand(seed), w = genWeights(R, swarm), tot = w.reduce((a, b) => a + b, 0);
+    let cap = R.range(32, 64), n = 0; const pts = [], hits = [];
+    for (let i = 0; i < 1000; i++) {
+      let p = R.int(tot), k = 0; while (p >= w[k]) { p -= w[k]; k++; }
+      const kind = KINDS[k];
+      if (kind === "push") { if (n < cap) n++; } else if (kind === "pop") { if (n) n--; } else if (kind === "clear") n = 0;
+      else if (kind === "resize") { const nc = R.range(32, 64); if (nc >= n) { if (n === cap) hits.push([i, n]); cap = nc; } }
+      pts.push([i, n]);
+    }
+    return { w, pts, hits };
+  }
+  function draw() {
+    const seed = +iSeed.value || 0, A = sim(seed, true), B = sim(seed, false), box = DST.$("#play"); box.innerHTML = "";
+    const ch = DST.line(box, [{ name: "swarm", color: C.accent2, points: A.pts, width: 1.6 }, { name: "uniform", color: C.warn, points: B.pts, width: 1.6 }], { width: 1060, height: 260, ymin: 0, ymax: 64, xlabel: "op", ylabel: "queue depth" });
+    ch.svg.append(s("line", { x1: ch.X(0), x2: ch.X(999), y1: ch.Y(32), y2: ch.Y(32), stroke: C.bug, "stroke-dasharray": "4 4", opacity: 0.6 }));
+    for (const [i, n] of A.hits) ch.svg.append(s("circle", { cx: ch.X(i), cy: ch.Y(n), r: 6, fill: C.bug }));
+    box.append(el("div", { class: "cap" }, `JS illustration, seed ${seed}: swarm weights ${KINDS.map((k, i) => k + "=" + A.w[i]).join(" ")} → max depth ${Math.max(...A.pts.map((p) => p[1]))}, ` +
+      `${A.hits.length} resize-while-full; uniform → max depth ${Math.max(...B.pts.map((p) => p[1]))}, ${B.hits.length} resize-while-full.`));
+  }
+  // Start on the first seed (in this JS PRNG) whose swarm run would hit the bug.
+  for (let sd = 1; sd < 500; sd++) if (sim(sd, true).hits.length) { iSeed.value = sd; break; }
+  draw();
+}
+</script>
+</body></html>

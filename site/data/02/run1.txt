@@ -1,0 +1,6 @@
+  step 25 t=15612ms: clock +1638ms (on_deadline)
+  step 49 t=20836ms: clock +1503877ms (on_deadline)
+  step 58 t=1531462ms: clock +1944016ms (on_deadline)
+  step 64 t=3478116ms: clock +19171267ms (jump)
+  step 129 t=22677827ms: clock +36033632ms (jump)
+seed=1 steps=136 simulated=58711466ms trace=d10281fe943c1bd9 PASS

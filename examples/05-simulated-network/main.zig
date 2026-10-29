@@ -33,7 +33,7 @@
 //!               every request gets its reply within a tick budget.
 //!
 //! Usage:
-//!   zig run main.zig -- run   <seed>  [--bug-no-dedup] [--bug-reply-stale]
+//!   zig run main.zig -- run   <seed>  [--bug-no-dedup] [--bug-reply-stale] [--packets]
 //!   zig run main.zig -- sweep <count> [--bug-no-dedup] [--bug-reply-stale]
 const std = @import("std");
 const assert = std.debug.assert;
@@ -44,6 +44,9 @@ var bug_no_dedup = false;
 /// state (the current balance) instead of the reply it cached when the request was applied.
 var bug_reply_stale = false;
 var verbose = false;
+/// `run <seed> --packets`: also log every packet-level event (send, loss, replay, delivery).
+/// Logging only: the trace hash and all results are unchanged.
+var verbose_packets = false;
 
 /// Every observable event is folded into this hash. Reset at the start of each seed.
 var trace: std.hash.Wyhash = undefined;
@@ -54,6 +57,12 @@ fn trace_event(tag: u64, a: u64, b: u64, c: u64) void {
 
 fn log(tick: u64, comptime fmt: []const u8, args: anytype) void {
     if (verbose) std.debug.print("  [{d:>5}] " ++ fmt ++ "\n", .{tick} ++ args);
+}
+
+fn log_packet(tick: u64, comptime what: []const u8, path: Path, p: LinkPacket, comptime fmt: []const u8, args: anytype) void {
+    if (verbose_packets) log(tick, "pkt: " ++ what ++ " seq={d} {d}->{d} {s} c{d} r{d}" ++ fmt, .{
+        p.sequence, path.source, path.target, @tagName(p.message.command), p.message.client, p.message.request,
+    } ++ args);
 }
 
 const clients_max = 4;
@@ -183,17 +192,20 @@ const Network = struct {
             const dropped = link.queue.popIndex(index);
             network.stats.capacity_dropped += 1;
             dropped.message.fold(2);
+            log_packet(network.ticks, "capacity_drop", path, dropped, "", .{});
             log(network.ticks, "net: path {d}->{d} full, dropped {s} c{d} r{d}", .{
                 path.source, path.target, @tagName(dropped.message.command), dropped.message.client, dropped.message.request,
             });
         }
         const delay = @max(network.options.one_way_delay_min, network.exponential(network.options.one_way_delay_mean));
         network.sequence += 1;
-        link.queue.push(network.gpa, .{
+        const packet: LinkPacket = .{
             .ready_at = network.ticks + delay,
             .sequence = network.sequence,
             .message = message,
-        }) catch unreachable; // capacity was reserved in init()
+        };
+        link.queue.push(network.gpa, packet) catch unreachable; // capacity was reserved in init()
+        log_packet(network.ticks, "send", path, packet, " delay={d} ready_at={d} queued={d}", .{ delay, packet.ready_at, link.queue.count() });
         network.stats.sent += 1;
         message.fold(1);
     }
@@ -210,14 +222,17 @@ const Network = struct {
             if (network.chance_percent(network.options.packet_loss_percent)) {
                 network.stats.lost += 1;
                 top.message.fold(3);
+                log_packet(network.ticks, "lost", path, top, "", .{});
                 continue;
             }
             if (network.chance_percent(network.options.packet_replay_percent)) {
                 network.stats.replayed += 1;
                 top.message.fold(4);
+                log_packet(network.ticks, "replay", path, top, "", .{});
                 network.submit(path, top.message); // the copy arrives again, later
             }
             top.message.fold(5);
+            log_packet(network.ticks, "deliver", path, top, "", .{});
             return top.message;
         }
     }
@@ -553,6 +568,8 @@ pub fn main(init: std.process.Init) !void {
             bug_no_dedup = true;
         } else if (std.mem.eql(u8, arg, "--bug-reply-stale")) {
             bug_reply_stale = true;
+        } else if (std.mem.eql(u8, arg, "--packets")) {
+            verbose_packets = true;
         } else {
             std.debug.print("unknown flag: {s}\n", .{arg});
             std.process.exit(2);

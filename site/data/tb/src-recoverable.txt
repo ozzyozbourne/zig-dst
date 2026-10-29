@@ -1,0 +1,19 @@
+    pub fn cluster_recoverable(simulator: *Simulator, gpa: std.mem.Allocator) !bool {
+        if (simulator.core_missing_primary()) {
+            unimplemented("repair requires reachable primary");
+        } else if (simulator.core_missing_quorum()) {
+            log.warn("no liveness, core replicas cannot view-change", .{});
+        } else if (try simulator.core_missing_prepare(gpa)) |op| {
+            log.warn("no liveness, op={} is not available in core", .{op});
+        } else if (try simulator.core_missing_blocks(gpa)) |blocks| {
+            log.warn("no liveness, {} blocks are not available in core", .{blocks});
+        } else if (simulator.core_missing_reply()) |header| {
+            log.warn("no liveness, reply op={} is not available in core", .{header.op});
+        } else if (simulator.core_reformat_evicted()) {
+            log.warn("no liveness, one or more reformat clients was evicted", .{});
+        } else {
+            return true;
+        }
+
+        return false;
+    }

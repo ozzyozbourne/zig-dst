@@ -1,0 +1,3 @@
+FAIL at seed=21 after 22 seeds. Replay with:
+  zig run main.zig -- run 21 --bug
+  zig run main.zig -- shrink 21 --bug

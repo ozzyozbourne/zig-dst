@@ -1,0 +1,18 @@
+accounts=3 (balance 100 each) tasks=5
+  T0: [0->2 $32] [0->2 $47] [1->0 $35]
+  T1: [0->1 $33] [0->1 $14] [2->1 $30]
+  T2: [0->2 $8] [1->0 $10] [2->0 $4]
+  T3: [2->1 $59]
+  T4: [1->2 $8]
+  t=  0 T3 lock    acct2
+  t=  1 T4 lock    acct1
+  t=  2 T2 lock    acct0
+schedule (3 ticks, task picked per tick): 3 4 2
+balances: 100 100 100  total=300 expected=300
+FAILURE: deadlock at tick 3
+  T0 waits for acct0, held by T2
+  T1 waits for acct0, held by T2
+  T2 waits for acct2, held by T3
+  T3 waits for acct1, held by T4
+  T4 waits for acct2, held by T3
+seed=1 ticks=3 trace=026ddce53296649e FAIL

@@ -1,0 +1,1160 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>04 · Simulated disk & crashes — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .kv { font-family: var(--mono); font-size: .82rem; color: var(--muted); }
+  .kv b { color: var(--text); }
+  .kv .bad { color: var(--bug); font-weight: 700; }
+  .kv .ok { color: var(--ok); font-weight: 700; }
+  table.data.fields td { font-family: var(--mono); font-size: .8rem; padding: 5px 8px; }
+  .mini input[type=number] { width: 110px; }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag medium">Medium</span><span class="tag">Example 04</span><span class="tag">storage faults</span></div>
+    <h1>Simulated disk &amp; crashes</h1>
+    <p class="lede">The disk becomes a byte array with a volatile write cache in front of it. A write becomes durable only on <code>fsync</code>, or whenever
+      the disk decides to write a sector back on its own. A crash keeps or drops each cached sector independently, so a three-sector WAL record can come
+      back whole, vanish, or come back <strong>torn</strong>. Every sector, byte and count below is parsed from captured runs of
+      <code>examples/04-simulated-disk-crashes/main.zig</code>.</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>Real store, simulated disk</h2>
+    <p>The WAL encoding, checksum, hash chain and recovery loop (<code>Store.recover</code>) are the code under test. The disk, time, fsync latency
+      (1–6 ticks), background writeback (15 % per tick) and power loss (one in 80 per tick) are simulated. One <code>DefaultPrng(seed)</code> draws the
+      workload and crash times, fills the disk with noise, and seeds the disk's own PRNG.</p>
+    <div class="viz" id="arch"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>A WAL record, byte by byte</h2>
+    <p>From <code>encode()</code>: a 32-byte header followed by the value, zero-padded to a 64-byte sector boundary, so a record spans 1–3 sectors
+      (value up to 160 bytes). The checksum is <code>Wyhash(0x5eed, bytes[8 .. 32+len])</code>. It covers the parent, seq, key, len and value, but not
+      itself. The bytes below are the real header the recovery scan read at the first torn record of <code>run 0</code>. Hover a byte to see it.</p>
+    <div class="viz"><div id="layout"></div><div class="cap" id="layoutcap"></div></div>
+<pre class="code"><span class="c">/// On-disk layout (little endian):</span>
+<span class="c">///   [0..8)   checksum of bytes [8 .. 32+len)</span>
+<span class="c">///   [8..16)  parent: checksum of the previous record (hash chain; 0 for the first)</span>
+<span class="c">///   [16..24) seq</span>
+<span class="c">///   [24]     key   [25] len   [26..32) zero padding</span>
+<span class="c">///   [32..32+len) value, then zero padding to the sector boundary</span></pre>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Underneath: every crash, sector by sector</h2>
+    <p>These runs used the opt-in <code>--sectors</code> flag, which prints what was in the write cache at the moment of power loss, what happened to each
+      cached sector, and where the recovery scan stopped. Top row: the volatile cache. Bottom row: durable sectors around the log tail. Pick a run and
+      step through its crashes.</p>
+    <div class="controls" id="runpick"></div>
+    <div class="viz">
+      <div id="strip"></div>
+      <div class="legend" id="striplegend"></div>
+      <div id="player"></div>
+    </div>
+    <div class="grid g2">
+      <div class="viz"><h4 style="margin:0 0 8px">Recovery scan</h4><div id="scan"></div></div>
+      <div class="viz"><h4 style="margin:0 0 8px">The record the scan stopped at</h4><div id="stopfields"></div></div>
+    </div>
+    <pre class="term" id="crashlog" style="max-height:200px"></pre>
+    <div class="viz"><h4>Log length after each recovery, seed 0 (correct code)</h4><div id="loglen"></div>
+      <div class="cap">Each dot is one crash plus recovery (hover for details). The log keeps growing, because unacked records that reach the disk
+        legitimately stay ("maybe committed").</div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>The two planted bugs</h2>
+    <div class="grid g2">
+      <div><h3>--bug-ack-before-fsync</h3>
+<pre class="code">try disk.write(gpa, store.log_end, buffer[<span class="n">0</span>..size]);
+...
+<span class="bad"><span class="kw">if</span> (bug_ack_before_fsync) {</span>
+<span class="bad">    <span class="c">// BUG: "write() returned, so it's on disk."</span></span>
+<span class="bad">    store.table[r.key] = r;</span>
+<span class="bad">    <span class="kw">return true</span>;  <span class="c">// acked while only in the cache</span></span>
+<span class="bad">}</span>
+<span class="good"><span class="kw">return false</span>;  <span class="c">// correct: ack in on_fsync()</span></span></pre>
+        <div class="callout bug" id="bugack"></div>
+      </div>
+      <div><h3>--bug-no-checksum</h3>
+<pre class="code">disk.read(store.log_end, buffer[<span class="n">0</span>..size]);
+<span class="bad"><span class="kw">if</span> (!bug_no_checksum) {</span>
+<span class="good">    <span class="kw">if</span> (record_checksum(buffer[<span class="n">8</span> .. header_size + len]) != checksum) {</span>
+<span class="good">        store.stop = <span class="s">"checksum mismatch (TORN record)"</span>; <span class="kw">break</span>;</span>
+<span class="good">    }</span>
+<span class="good">    <span class="kw">if</span> (parent != store.last_checksum) {</span>
+<span class="good">        store.stop = <span class="s">"parent mismatch (stale record ...)"</span>; <span class="kw">break</span>;</span>
+<span class="good">    }</span>
+}
+<span class="c">// seq, key, len look fine: payload sectors replayed as the value</span></pre>
+        <div class="callout bug" id="bugcrc"></div>
+      </div>
+    </div>
+    <h3>Same seed, same crash, two recoveries</h3>
+    <div class="viz"><div id="cmp"></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Over 200 seeds of the correct code</h2>
+    <p><code>per-seed.tsv</code> runs <code>run &lt;seed&gt;</code> for seeds 0–199 and counts every crash line and stop reason. The full invariant check
+      runs after every one of these recoveries.</p>
+    <div class="grid g2">
+      <div class="viz"><h4>Crashes per seed</h4><div id="crashhist"></div></div>
+      <div class="viz"><h4>Why recovery stopped (all crashes)</h4><div id="stops"></div>
+        <div class="cap">Unexpected seq: the next header was never written, or it was dropped. Checksum: a torn record. Parent: an intact but stale
+          record from an earlier life of the log.</div></div>
+    </div>
+    <div class="grid g2">
+      <div class="viz"><h4>Cached sectors at power loss</h4><div id="keptdrop"></div></div>
+      <div class="viz"><h4>Keep rate per crash, seed 0</h4><div id="keeppct"></div>
+        <div class="cap"><code>keep_percent = uintAtMost(100)</code> is drawn per crash, so some crashes keep everything and some drop everything.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Why <code>kill -9</code> tests don't find these bugs</h2>
+    <p><code>kill -9</code> kills the process, not the machine. Bytes that <code>write()</code> accepted are already in the kernel page cache, and the kernel
+      flushes them later whether or not the process is still alive. Only power loss, a kernel panic or a hypervisor kill throws the caches away, and only
+      the <em>device</em> losing power partway through a multi-sector writeback can tear a record.</p>
+    <div class="controls" id="killpick"></div>
+    <div class="viz"><div id="kill"></div><div class="cap" id="killcap"></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Try it in the browser: a JS torn-write lab</h2>
+    <div class="callout warn"><strong>JavaScript re-implementation, for illustration</strong>A small port of one batch: append 1–4 records, let writeback
+      and the crash keep or drop each sector, then recover with or without the checksum. It uses <code>DST.Rand</code>, not Zig's PRNG, so seed N here is
+      not seed N of the Zig program. Same seed in, same picture out.</div>
+    <div class="viz mini">
+      <div class="controls">seed <input type="number" id="jsseed" value="3" min="0">
+        <select id="jsmode"><option value="crc">recover with checksum</option><option value="nocrc">--bug-no-checksum</option></select>
+        <button class="primary" id="jsrun">crash</button><button id="jsnext">seed+1</button><span class="out" id="jsres"></span></div>
+      <div id="jsstrip"></div>
+      <div class="grid g4" id="jsstats"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>Determinism, TigerBeetle, and the commands</h2>
+    <div class="grid g2" id="det"></div>
+    <div class="callout info" id="flagproof"></div>
+    <h3>How TigerBeetle does this</h3>
+    <div class="grid g2">
+      <div class="card"><div class="src"><a class="file">src/testing/storage.zig</a> · <code>Storage.reset()</code> (line 274), the crash</div>
+<pre class="code"><span class="kw">pub fn</span> <span class="fn">reset</span>(storage: *Storage) <span class="kw">void</span> {
+    ...
+    <span class="kw">while</span> (storage.writes.pop()) |write| {
+        <span class="kw">if</span> (storage.prng.chance(storage.options.crash_fault_probability)) {
+            <span class="c">// Randomly corrupt one of the faulty sectors the operation targeted.</span>
+            <span class="kw">const</span> sectors = SectorRange.from_zone(write.zone, write.offset, write.buffer.len);
+            storage.fault_sector(write.zone, sectors.random(&amp;storage.prng));
+        }
+    }</pre>
+        <p>Pending writes are thrown away, and the target may be corrupted, like a torn write. <code>read_sectors_finish()</code> fills never-written sectors
+          with <code>storage.prng.fill(sector_bytes)</code>, the same idea as our noisy disk.</p></div>
+      <div class="card"><div class="src"><a class="file">src/vopr.zig</a> · <code>tick_crash_up()</code> (line 1520)</div>
+<pre class="code"><span class="kw">var</span> crash_probability = simulator.options.replica_crash_probability;
+<span class="kw">if</span> (replica_writes &gt; <span class="n">0</span>) crash_probability.numerator *= <span class="n">10</span>;</pre>
+        <p>Crashes are aimed at the moments that matter: ten times likelier while writes are in flight. <code>crash_fault_probability</code> is drawn
+          per seed as 80–100 % (line 473).</p>
+        <div class="src"><a class="file">src/vsr/journal.zig</a> (line 118) · <a class="file">src/vsr/message_header.zig</a> <code>Prepare.parent</code></div>
+<pre class="code"><span class="c">// It's important that the replica doesn't write all redundant headers simultaneously.</span>
+<span class="c">// Otherwise, a crash could lead to a series of torn writes making the entire journal faulty.</span>
+...
+<span class="c">/// A backpointer to the previous prepare checksum for hash chain verification.</span>
+parent: <span class="kw">u128</span>,</pre>
+        <p><code>torn_prepares()</code> (line 1359) recognizes a prepare torn by a crash and truncates it (<code>case_cut_torn</code>), like our scan
+          stopping at the checksum mismatch.</p></div>
+    </div>
+    <h3>Try it</h3>
+<pre class="term"><span class="p">$ cd examples/04-simulated-disk-crashes</span>
+<span class="p">$ zig build-exe main.zig -O ReleaseSafe -femit-bin=/tmp/dst04</span>
+<span class="p">$ /tmp/dst04 sweep 2000                          </span><span class="d"># correct code</span>
+<span class="p">$ /tmp/dst04 sweep 2000 --bug-ack-before-fsync   </span><span class="d"># fails at seed 0</span>
+<span class="p">$ /tmp/dst04 run 0 --bug-no-checksum             </span><span class="d"># replay: garbage at crash #4</span>
+<span class="p">$ /tmp/dst04 run 0 --sectors                     </span><span class="d"># sector-level dump after each crash</span></pre>
+    <div id="rawlogs"></div>
+  </section>
+</main>
+<script type="text/plain" id="log-sweep" data-src="data/04/sweep.txt">
+PASS: 2000 seeds
+
+real	0m2.948s
+user	0m2.472s
+sys	0m0.471s
+</script>
+<script type="text/plain" id="log-sweep-ack" data-src="data/04/sweep-ack.txt">
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug-ack-before-fsync
+</script>
+<script type="text/plain" id="log-sweep-nocrc" data-src="data/04/sweep-nocrc.txt">
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug-no-checksum
+</script>
+<script type="text/plain" id="log-ack" data-src="data/04/run0-ack.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 18, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  INVARIANT VIOLATED: durability: acked put seq=17 key=1 was lost (18 acked, 16 recovered)
+seed=0 crashes=3 acked=18 trace=05849ac5c0fa49b0 FAIL
+</script>
+<script type="text/plain" id="log-ack2" data-src="data/04/run0-ack-again.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 18, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  INVARIANT VIOLATED: durability: acked put seq=17 key=1 was lost (18 acked, 16 recovered)
+seed=0 crashes=3 acked=18 trace=05849ac5c0fa49b0 FAIL
+</script>
+<script type="text/plain" id="log-nocrc" data-src="data/04/run0-nocrc.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 46 records (acked 45, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  INVARIANT VIOLATED: garbage: recovered seq=46 key=1 len=102 was never written by the client
+seed=0 crashes=4 acked=45 trace=826972d8c8dd33cc FAIL
+</script>
+<script type="text/plain" id="log-nocrc2" data-src="data/04/run0-nocrc-again.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 46 records (acked 45, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  INVARIANT VIOLATED: garbage: recovered seq=46 key=1 len=102 was never written by the client
+seed=0 crashes=4 acked=45 trace=826972d8c8dd33cc FAIL
+</script>
+<script type="text/plain" id="log-ok" data-src="data/04/run0.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 45 records (acked 45, in-flight 2); stop: checksum mismatch (TORN record)
+tick  167: crash #5: cache sectors applied=0 dropped=2; recovered 51 records (acked 51, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick  224: crash #6: cache sectors applied=0 dropped=4; recovered 67 records (acked 67, in-flight 2); stop: checksum mismatch (TORN record)
+tick  254: crash #7: cache sectors applied=1 dropped=3; recovered 77 records (acked 77, in-flight 3); stop: checksum mismatch (TORN record)
+tick  452: crash #8: cache sectors applied=1 dropped=0; recovered 143 records (acked 142, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick  506: crash #9: cache sectors applied=5 dropped=3; recovered 158 records (acked 158, in-flight 4); stop: checksum mismatch (TORN record)
+tick  519: crash #10: cache sectors applied=6 dropped=1; recovered 161 records (acked 159, in-flight 3); stop: checksum mismatch (TORN record)
+tick  895: crash #11: cache sectors applied=0 dropped=0; recovered 252 records (acked 251, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick 1000: crash #12: cache sectors applied=6 dropped=2; recovered 284 records (acked 283, in-flight 4); stop: checksum mismatch (TORN record)
+tick 1002: crash #13: cache sectors applied=2 dropped=0; recovered 285 records (acked 284, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick 1020: crash #14: cache sectors applied=5 dropped=0; recovered 291 records (acked 289, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick 1071: crash #15: cache sectors applied=4 dropped=0; recovered 302 records (acked 300, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick 1084: crash #16: cache sectors applied=3 dropped=0; recovered 306 records (acked 304, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick 1234: crash #17: cache sectors applied=1 dropped=2; recovered 349 records (acked 349, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick 1268: crash #18: cache sectors applied=0 dropped=0; recovered 360 records (acked 360, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick 1291: crash #19: cache sectors applied=0 dropped=4; recovered 362 records (acked 362, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick 1334: crash #20: cache sectors applied=3 dropped=0; recovered 378 records (acked 376, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick 1447: crash #21: cache sectors applied=0 dropped=0; recovered 410 records (acked 410, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick 1654: crash #22: cache sectors applied=2 dropped=2; recovered 472 records (acked 471, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick 1755: crash #23: cache sectors applied=1 dropped=5; recovered 499 records (acked 499, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+tick 1818: crash #24: cache sectors applied=2 dropped=1; recovered 509 records (acked 509, in-flight 1); stop: checksum mismatch (TORN record)
+tick 1868: crash #25: cache sectors applied=6 dropped=4; recovered 522 records (acked 522, in-flight 4); stop: checksum mismatch (TORN record)
+tick 1971: crash #26: cache sectors applied=0 dropped=6; recovered 555 records (acked 555, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+tick 1983: crash #27: cache sectors applied=0 dropped=0; recovered 559 records (acked 559, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick 1991: crash #28: cache sectors applied=0 dropped=0; recovered 561 records (acked 561, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick 1992: crash #29: cache sectors applied=0 dropped=0; recovered 561 records (acked 561, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick 2000: crash #30: cache sectors applied=4 dropped=1; recovered 562 records (acked 561, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+tick 2050: crash #31: cache sectors applied=2 dropped=2; recovered 572 records (acked 571, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+tick 2091: crash #32: cache sectors applied=0 dropped=2; recovered 584 records (acked 584, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick 2261: crash #33: cache sectors applied=2 dropped=1; recovered 629 records (acked 629, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+tick 2431: crash #34: cache sectors applied=4 dropped=1; recovered 678 records (acked 676, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+tick 2623: crash #35: cache sectors applied=1 dropped=2; recovered 726 records (acked 726, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+seed=0 crashes=35 acked=843 trace=3985da6fcf7f0c84 PASS
+</script>
+<script type="text/plain" id="sec-ok" data-src="data/04/run0-sectors.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 96%): seq=12@27+2 seq=13@29+3 seq=14@32+2 seq=15@34+3
+  | cache: 27=kept 28=kept 29=kept 30=kept 31=kept 32=kept 33=kept 34=kept 35=kept 36=kept
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 93%):
+  | cache:
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 67%): seq=17@38+2 seq=18@40+2
+  | cache: 38=dropped 39=kept 40=dropped 41=dropped
+  | scan: 16 records in sectors [0,38); last: seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok seq=16@37+1:crc_ok
+  | stop @38: seq=3032735385440829629 want=17 key=5 len=50 checksum=9ff4d83ebeaa44ac computed=f02cff221a3558f8 parent=9040f2ae99028dcf want=bc307679f33f64f3
+  | bytes: ac 44 aa be 3e d8 f4 9f cf 8d 02 99 ae f2 40 90 bd 40 f5 d2 c3 70 16 2a 05 32 69 33 dc bc d4 b7
+  | high water: sector 42
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 45 records (acked 45, in-flight 2); stop: checksum mismatch (TORN record)
+  | unsynced (keep 53%): seq=46@98+3 seq=47@101+2
+  | cache: 98=kept 99=dropped 100=dropped 101=dropped 102=dropped
+  | scan: 45 records in sectors [0,98); last: seq=42@91+3:crc_ok seq=43@94+1:crc_ok seq=44@95+1:crc_ok seq=45@96+2:crc_ok
+  | stop @98: seq=46 want=46 key=1 len=102 checksum=407531cb3af29df3 computed=e620e345b7a158d0 parent=5f55747d42307ba0 want=5f55747d42307ba0
+  | bytes: f3 9d f2 3a cb 31 75 40 a0 7b 30 42 7d 74 55 5f 2e 00 00 00 00 00 00 00 01 66 00 00 00 00 00 00
+  | high water: sector 103
+tick  167: crash #5: cache sectors applied=0 dropped=2; recovered 51 records (acked 51, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 46%): seq=52@109+2
+  | cache: 109=dropped 110=dropped
+  | scan: 51 records in sectors [0,109); last: seq=48@102+2:crc_ok seq=49@104+3:crc_ok seq=50@107+1:crc_ok seq=51@108+1:crc_ok
+  | stop @109: seq=8152799956720362223 want=52 key=71 len=205
+  | bytes: 5f 0c b5 f0 cc e8 92 13 45 88 bc bc 85 d7 32 0d ef 22 23 81 5d 90 24 71 47 cd b6 4a 6a 4d 1d aa
+  | high water: sector 111
+tick  224: crash #6: cache sectors applied=0 dropped=4; recovered 67 records (acked 67, in-flight 2); stop: checksum mismatch (TORN record)
+  | unsynced (keep 15%): seq=68@148+2 seq=69@150+3
+  | cache: 149=dropped 150=dropped 151=dropped 152=dropped
+  | scan: 67 records in sectors [0,148); last: seq=64@136+3:crc_ok seq=65@139+3:crc_ok seq=66@142+3:crc_ok seq=67@145+3:crc_ok
+  | stop @148: seq=68 want=68 key=3 len=46 checksum=5c12ecf7833aa19b computed=66c8437222201a2e parent=25631b5225a1d416 want=25631b5225a1d416
+  | bytes: 9b a1 3a 83 f7 ec 12 5c 16 d4 a1 25 52 1b 63 25 44 00 00 00 00 00 00 00 03 2e 00 00 00 00 00 00
+  | high water: sector 153
+tick  254: crash #7: cache sectors applied=1 dropped=3; recovered 77 records (acked 77, in-flight 3); stop: checksum mismatch (TORN record)
+  | unsynced (keep 9%): seq=78@172+2 seq=79@174+1 seq=80@175+3
+  | cache: 173=dropped 175=dropped 176=dropped 177=kept
+  | scan: 77 records in sectors [0,172); last: seq=74@163+3:crc_ok seq=75@166+3:crc_ok seq=76@169+1:crc_ok seq=77@170+2:crc_ok
+  | stop @172: seq=78 want=78 key=3 len=46 checksum=21ec02c86c4efe43 computed=32e20c6283c7c2ec parent=e877258f17d35cfe want=e877258f17d35cfe
+  | bytes: 43 fe 4e 6c c8 02 ec 21 fe 5c d3 17 8f 25 77 e8 4e 00 00 00 00 00 00 00 03 2e 00 00 00 00 00 00
+  | high water: sector 178
+tick  452: crash #8: cache sectors applied=1 dropped=0; recovered 143 records (acked 142, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 71%): seq=143@313+2
+  | cache: 313=kept
+  | scan: 143 records in sectors [0,315); last: seq=140@307+3:crc_ok seq=141@310+1:crc_ok seq=142@311+2:crc_ok seq=143@313+2:crc_ok
+  | stop @315: seq=3060321979602437991 want=144 key=202 len=82 checksum=0902472c75254c25 computed=142a1868008fdade parent=48c272acbcede0c1 want=6b5a6da12700fcfb
+  | bytes: 25 4c 25 75 2c 47 02 09 c1 e0 ed bc ac 72 c2 48 67 07 86 4c a0 72 78 2a ca 52 18 92 bb 9c af a9
+  | high water: sector 315
+tick  506: crash #9: cache sectors applied=5 dropped=3; recovered 158 records (acked 158, in-flight 4); stop: checksum mismatch (TORN record)
+  | unsynced (keep 42%): seq=159@344+3 seq=160@347+3 seq=161@350+1 seq=162@351+2
+  | cache: 344=kept 345=dropped 347=kept 348=dropped 349=kept 350=kept 351=kept 352=dropped
+  | scan: 158 records in sectors [0,344); last: seq=155@335+1:crc_ok seq=156@336+2:crc_ok seq=157@338+3:crc_ok seq=158@341+3:crc_ok
+  | stop @344: seq=159 want=159 key=1 len=158 checksum=7a59e50b3ff07d92 computed=f696b76e1399dcf8 parent=6b696634e0dbd60b want=6b696634e0dbd60b
+  | bytes: 92 7d f0 3f 0b e5 59 7a 0b d6 db e0 34 66 69 6b 9f 00 00 00 00 00 00 00 01 9e 00 00 00 00 00 00
+  | high water: sector 353
+tick  519: crash #10: cache sectors applied=6 dropped=1; recovered 161 records (acked 159, in-flight 3); stop: checksum mismatch (TORN record)
+  | unsynced (keep 45%): seq=160@347+2 seq=161@349+3 seq=162@352+2
+  | cache: 347=kept 348=kept 349=kept 350=kept 351=kept 352=kept 353=dropped
+  | scan: 161 records in sectors [0,352); last: seq=158@341+3:crc_ok seq=159@344+3:crc_ok seq=160@347+2:crc_ok seq=161@349+3:crc_ok
+  | stop @352: seq=162 want=162 key=0 len=96 checksum=eafee640a5b92709 computed=ba916a64882b0b37 parent=80585b1b6bae306d want=80585b1b6bae306d
+  | bytes: 09 27 b9 a5 40 e6 fe ea 6d 30 ae 6b 1b 5b 58 80 a2 00 00 00 00 00 00 00 00 60 00 00 00 00 00 00
+  | high water: sector 354
+tick  895: crash #11: cache sectors applied=0 dropped=0; recovered 252 records (acked 251, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 29%): seq=252@553+1
+  | cache:
+  | scan: 252 records in sectors [0,554); last: seq=249@546+2:crc_ok seq=250@548+3:crc_ok seq=251@551+2:crc_ok seq=252@553+1:crc_ok
+  | stop @554: seq=1086143707175743972 want=253 key=152 len=238
+  | bytes: 34 76 ef ea 5b 9e e7 fb ef b3 3c 2b e1 0c ab 08 e4 71 3c 71 f2 c1 12 0f 98 ee 48 c0 d9 ab 3b 2e
+  | high water: sector 554
+tick 1000: crash #12: cache sectors applied=6 dropped=2; recovered 284 records (acked 283, in-flight 4); stop: checksum mismatch (TORN record)
+  | unsynced (keep 78%): seq=284@624+3 seq=285@627+3 seq=286@630+2 seq=287@632+3
+  | cache: 624=kept 625=kept 626=kept 627=kept 628=dropped 629=kept 633=dropped 634=kept
+  | scan: 284 records in sectors [0,627); last: seq=281@618+2:crc_ok seq=282@620+1:crc_ok seq=283@621+3:crc_ok seq=284@624+3:crc_ok
+  | stop @627: seq=285 want=285 key=0 len=132 checksum=d4e633117db23895 computed=d1d46e8859659abe parent=c21f217d88b8f159 want=c21f217d88b8f159
+  | bytes: 95 38 b2 7d 11 33 e6 d4 59 f1 b8 88 7d 21 1f c2 1d 01 00 00 00 00 00 00 00 84 00 00 00 00 00 00
+  | high water: sector 635
+tick 1002: crash #13: cache sectors applied=2 dropped=0; recovered 285 records (acked 284, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 62%): seq=285@627+2
+  | cache: 627=kept 628=kept
+  | scan: 285 records in sectors [0,629); last: seq=282@620+1:crc_ok seq=283@621+3:crc_ok seq=284@624+3:crc_ok seq=285@627+2:crc_ok
+  | stop @629: seq=15353201466530046771 want=286 key=218 len=49 checksum=01e8760b00504600 computed=160b5ef04364c038 parent=14a8494c3be8743b want=fe756c27995a9696
+  | bytes: 00 46 50 00 0b 76 e8 01 3b 74 e8 3b 4c 49 a8 14 33 a3 87 99 63 87 11 d5 da 31 40 3d 15 68 4e db
+  | high water: sector 635
+tick 1020: crash #14: cache sectors applied=5 dropped=0; recovered 291 records (acked 289, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 88%): seq=290@638+3 seq=291@641+3
+  | cache: 638=kept 639=kept 640=kept 641=kept 643=kept
+  | scan: 291 records in sectors [0,644); last: seq=288@633+2:crc_ok seq=289@635+3:crc_ok seq=290@638+3:crc_ok seq=291@641+3:crc_ok
+  | stop @644: seq=10733915142204542248 want=292 key=113 len=118 checksum=2c67d1005e332b7a computed=b9862b0673b493d2 parent=858b3f15c988b2ca want=40bfc2a560280fc9
+  | bytes: 7a 2b 33 5e 00 d1 67 2c ca b2 88 c9 15 3f 8b 85 28 cd 49 7c f3 86 f6 94 71 76 36 85 a1 22 e2 7e
+  | high water: sector 644
+tick 1071: crash #15: cache sectors applied=4 dropped=0; recovered 302 records (acked 300, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 91%): seq=301@666+3 seq=302@669+1
+  | cache: 666=kept 667=kept 668=kept 669=kept
+  | scan: 302 records in sectors [0,670); last: seq=299@661+3:crc_ok seq=300@664+2:crc_ok seq=301@666+3:crc_ok seq=302@669+1:crc_ok
+  | stop @670: seq=12937085538156367315 want=303 key=31 len=226
+  | bytes: e5 db 66 1c f4 e6 7a 32 58 c6 51 13 ed 34 28 cd d3 4d a7 da c0 c2 89 b3 1f e2 45 d0 03 3b 3c 7a
+  | high water: sector 670
+tick 1084: crash #16: cache sectors applied=3 dropped=0; recovered 306 records (acked 304, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 94%): seq=305@674+1 seq=306@675+2
+  | cache: 674=kept 675=kept 676=kept
+  | scan: 306 records in sectors [0,677); last: seq=303@670+3:crc_ok seq=304@673+1:crc_ok seq=305@674+1:crc_ok seq=306@675+2:crc_ok
+  | stop @677: seq=4939470656510614930 want=307 key=193 len=171
+  | bytes: 5f af d4 49 d7 7a ca 93 37 3c 55 f8 e0 a9 bd 5a 92 dd c7 43 64 86 8c 44 c1 ab 32 a4 e4 48 08 d4
+  | high water: sector 677
+tick 1234: crash #17: cache sectors applied=1 dropped=2; recovered 349 records (acked 349, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 34%): seq=350@777+3
+  | cache: 777=dropped 778=kept 779=dropped
+  | scan: 349 records in sectors [0,777); last: seq=346@769+2:crc_ok seq=347@771+1:crc_ok seq=348@772+3:crc_ok seq=349@775+2:crc_ok
+  | stop @777: seq=9235452305347781959 want=350 key=82 len=133 checksum=9a44557fb594e526 computed=9a1e6515528da96b parent=59787e3e79e73f97 want=b2e9af4192ad16e3
+  | bytes: 26 e5 94 b5 7f 55 44 9a 97 3f e7 79 3e 7e 78 59 47 25 51 b0 f0 ea 2a 80 52 85 ef 1e 89 1c ef b6
+  | high water: sector 780
+tick 1268: crash #18: cache sectors applied=0 dropped=0; recovered 360 records (acked 360, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 39%):
+  | cache:
+  | scan: 360 records in sectors [0,805); last: seq=357@795+3:crc_ok seq=358@798+3:crc_ok seq=359@801+2:crc_ok seq=360@803+2:crc_ok
+  | stop @805: seq=2618208300873449937 want=361 key=45 len=121 checksum=924222a36fe40ded computed=3bb648109bc29191 parent=b27febd9ecdc7a83 want=6afc768296714ff5
+  | bytes: ed 0d e4 6f a3 22 42 92 83 7a dc ec d9 eb 7f b2 d1 81 8a e9 93 be 55 24 2d 79 42 9c e1 b1 c9 21
+  | high water: sector 805
+tick 1291: crash #19: cache sectors applied=0 dropped=4; recovered 362 records (acked 362, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 22%): seq=363@811+1 seq=364@812+3
+  | cache: 811=dropped 812=dropped 813=dropped 814=dropped
+  | scan: 362 records in sectors [0,811); last: seq=359@801+2:crc_ok seq=360@803+2:crc_ok seq=361@805+3:crc_ok seq=362@808+3:crc_ok
+  | stop @811: seq=12220479833675723366 want=363 key=35 len=73 checksum=68b43f4ac48b5eb8 computed=1094131b0c714c82 parent=956c696a3e41370b want=1624cfe52f2747b6
+  | bytes: b8 5e 8b c4 4a 3f b4 68 0b 37 41 3e 6a 69 6c 95 66 f2 10 6f a9 dd 97 a9 23 49 85 d0 57 dc 29 3a
+  | high water: sector 815
+tick 1334: crash #20: cache sectors applied=3 dropped=0; recovered 378 records (acked 376, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 87%): seq=377@841+2 seq=378@843+2
+  | cache: 841=kept 842=kept 844=kept
+  | scan: 378 records in sectors [0,845); last: seq=375@836+3:crc_ok seq=376@839+2:crc_ok seq=377@841+2:crc_ok seq=378@843+2:crc_ok
+  | stop @845: seq=12409199092564814818 want=379 key=26 len=165
+  | bytes: d3 36 3a 77 0f 2f 83 25 da 04 fe 61 47 9d db b1 e2 eb 6c f3 d3 54 36 ac 1a a5 f3 cd cc 98 ad 19
+  | high water: sector 845
+tick 1447: crash #21: cache sectors applied=0 dropped=0; recovered 410 records (acked 410, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 100%):
+  | cache:
+  | scan: 410 records in sectors [0,918); last: seq=407@910+2:crc_ok seq=408@912+1:crc_ok seq=409@913+2:crc_ok seq=410@915+3:crc_ok
+  | stop @918: seq=15395209407693651890 want=411 key=64 len=127 checksum=df464613e418cfbf computed=6dcd0883ca781207 parent=aca32c8f31c0dee1 want=686aadd369265564
+  | bytes: bf cf 18 e4 13 46 46 df e1 de c0 31 8f 2c a3 ac b2 ff 54 94 63 c5 a6 d5 40 7f 5c d3 ab 5a db 00
+  | high water: sector 918
+tick 1654: crash #22: cache sectors applied=2 dropped=2; recovered 472 records (acked 471, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 16%): seq=472@1046+1 seq=473@1047+3
+  | cache: 1046=kept 1047=dropped 1048=dropped 1049=kept
+  | scan: 472 records in sectors [0,1047); last: seq=469@1040+2:crc_ok seq=470@1042+3:crc_ok seq=471@1045+1:crc_ok seq=472@1046+1:crc_ok
+  | stop @1047: seq=11841703238007283948 want=473 key=85 len=220
+  | bytes: 27 d7 2d a9 ca 71 75 fc cf 8c 03 48 54 97 23 93 ec 60 04 dd 5a 2e 56 a4 55 dc 57 3a 8d 6a 82 49
+  | high water: sector 1050
+tick 1755: crash #23: cache sectors applied=1 dropped=5; recovered 499 records (acked 499, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 31%): seq=500@1111+3 seq=501@1114+1 seq=502@1115+2
+  | cache: 1111=dropped 1112=dropped 1113=dropped 1114=dropped 1115=dropped 1116=kept
+  | scan: 499 records in sectors [0,1111); last: seq=496@1101+3:crc_ok seq=497@1104+1:crc_ok seq=498@1105+3:crc_ok seq=499@1108+3:crc_ok
+  | stop @1111: seq=1235864092256647787 want=500 key=166 len=213
+  | bytes: 08 2f 46 d6 64 52 5b ae 31 68 30 1d 34 90 ae c8 6b 3a 9e 11 d8 ab 26 11 a6 d5 cc 5f bc e7 a6 be
+  | high water: sector 1117
+tick 1818: crash #24: cache sectors applied=2 dropped=1; recovered 509 records (acked 509, in-flight 1); stop: checksum mismatch (TORN record)
+  | unsynced (keep 84%): seq=510@1133+3
+  | cache: 1133=kept 1134=dropped 1135=kept
+  | scan: 509 records in sectors [0,1133); last: seq=506@1123+3:crc_ok seq=507@1126+3:crc_ok seq=508@1129+1:crc_ok seq=509@1130+3:crc_ok
+  | stop @1133: seq=510 want=510 key=4 len=115 checksum=9adebe72e5aeec4f computed=af6ed2db6d9632cf parent=b45346dca90d2552 want=b45346dca90d2552
+  | bytes: 4f ec ae e5 72 be de 9a 52 25 0d a9 dc 46 53 b4 fe 01 00 00 00 00 00 00 04 73 00 00 00 00 00 00
+  | high water: sector 1136
+tick 1868: crash #25: cache sectors applied=6 dropped=4; recovered 522 records (acked 522, in-flight 4); stop: checksum mismatch (TORN record)
+  | unsynced (keep 41%): seq=523@1167+3 seq=524@1170+3 seq=525@1173+2 seq=526@1175+2
+  | cache: 1167=kept 1168=dropped 1169=dropped 1170=kept 1171=dropped 1172=kept 1173=dropped 1174=kept 1175=kept 1176=kept
+  | scan: 522 records in sectors [0,1167); last: seq=519@1156+2:crc_ok seq=520@1158+3:crc_ok seq=521@1161+3:crc_ok seq=522@1164+3:crc_ok
+  | stop @1167: seq=523 want=523 key=2 len=125 checksum=768896d40d5b7296 computed=a3eadb45c267f554 parent=7a881a79e22a19b8 want=7a881a79e22a19b8
+  | bytes: 96 72 5b 0d d4 96 88 76 b8 19 2a e2 79 1a 88 7a 0b 02 00 00 00 00 00 00 02 7d 00 00 00 00 00 00
+  | high water: sector 1177
+tick 1971: crash #26: cache sectors applied=0 dropped=6; recovered 555 records (acked 555, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 10%): seq=556@1240+3 seq=557@1243+2 seq=558@1245+1
+  | cache: 1240=dropped 1241=dropped 1242=dropped 1243=dropped 1244=dropped 1245=dropped
+  | scan: 555 records in sectors [0,1240); last: seq=552@1231+3:crc_ok seq=553@1234+2:crc_ok seq=554@1236+1:crc_ok seq=555@1237+3:crc_ok
+  | stop @1240: seq=1236234682349433212 want=556 key=39 len=9 checksum=2794ebbffaecbb2b computed=14867382342ed6aa parent=4fd13fb51c78679b want=1f441e4a9dfb220e
+  | bytes: 2b bb ec fa bf eb 94 27 9b 67 78 1c b5 3f d1 4f 7c b1 74 cc e4 fc 27 11 27 09 5b 06 bb 6f cd c0
+  | high water: sector 1246
+tick 1983: crash #27: cache sectors applied=0 dropped=0; recovered 559 records (acked 559, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 84%):
+  | cache:
+  | scan: 559 records in sectors [0,1250); last: seq=556@1240+2:crc_ok seq=557@1242+3:crc_ok seq=558@1245+2:crc_ok seq=559@1247+3:crc_ok
+  | stop @1250: seq=12149634867083153099 want=560 key=134 len=190
+  | bytes: 91 86 ae c0 6c b5 0c f3 70 7d 84 4d 52 02 72 4a cb 0e 31 43 8a 2c 9c a8 86 be c6 77 9c 5e 9a 24
+  | high water: sector 1250
+tick 1991: crash #28: cache sectors applied=0 dropped=0; recovered 561 records (acked 561, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 41%):
+  | cache:
+  | scan: 561 records in sectors [0,1255); last: seq=558@1245+2:crc_ok seq=559@1247+3:crc_ok seq=560@1250+2:crc_ok seq=561@1252+3:crc_ok
+  | stop @1255: seq=12521572712227668476 want=562 key=76 len=177
+  | bytes: cb 5a f8 58 de 76 6e 97 35 87 4d f4 22 fe 44 c1 fc 01 8e 25 0a 90 c5 ad 4c b1 c9 14 dd 2c ef 65
+  | high water: sector 1255
+tick 1992: crash #29: cache sectors applied=0 dropped=0; recovered 561 records (acked 561, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 60%):
+  | cache:
+  | scan: 561 records in sectors [0,1255); last: seq=558@1245+2:crc_ok seq=559@1247+3:crc_ok seq=560@1250+2:crc_ok seq=561@1252+3:crc_ok
+  | stop @1255: seq=12521572712227668476 want=562 key=76 len=177
+  | bytes: cb 5a f8 58 de 76 6e 97 35 87 4d f4 22 fe 44 c1 fc 01 8e 25 0a 90 c5 ad 4c b1 c9 14 dd 2c ef 65
+  | high water: sector 1255
+tick 2000: crash #30: cache sectors applied=4 dropped=1; recovered 562 records (acked 561, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 37%): seq=562@1255+3 seq=563@1258+2 seq=564@1260+1 seq=565@1261+2
+  | cache: 1256=kept 1258=dropped 1259=kept 1261=kept 1262=kept
+  | scan: 562 records in sectors [0,1258); last: seq=559@1247+3:crc_ok seq=560@1250+2:crc_ok seq=561@1252+3:crc_ok seq=562@1255+3:crc_ok
+  | stop @1258: seq=1040265603019402174 want=563 key=157 len=66 checksum=3426fa8248710d28 computed=567b598720a0481a parent=9921f5f99da3fcf1 want=0ac66b401b850706
+  | bytes: 28 0d 71 48 82 fa 26 34 f1 fc a3 9d f9 f5 21 99 be 6b 07 ec 0d c4 6f 0e 9d 42 97 58 22 1f bc af
+  | high water: sector 1263
+tick 2050: crash #31: cache sectors applied=2 dropped=2; recovered 572 records (acked 571, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 63%): seq=572@1279+2 seq=573@1281+2 seq=574@1283+2 seq=575@1285+1
+  | cache: 1279=kept 1281=dropped 1284=kept 1285=dropped
+  | scan: 572 records in sectors [0,1281); last: seq=569@1270+3:crc_ok seq=570@1273+3:crc_ok seq=571@1276+3:crc_ok seq=572@1279+2:crc_ok
+  | stop @1281: seq=10452013232426902002 want=573 key=107 len=91 checksum=e4587c47dc37c845 computed=aa9641a3fa46cf17 parent=6c12f20006b69bca want=b349f79b43d692fb
+  | bytes: 45 c8 37 dc 47 7c 58 e4 ca 9b b6 06 00 f2 12 6c f2 e1 7c 62 a8 02 0d 91 6b 5b 14 8d 4d ce 79 1b
+  | high water: sector 1286
+tick 2091: crash #32: cache sectors applied=0 dropped=2; recovered 584 records (acked 584, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 16%): seq=585@1311+2
+  | cache: 1311=dropped 1312=dropped
+  | scan: 584 records in sectors [0,1311); last: seq=581@1300+2:crc_ok seq=582@1302+3:crc_ok seq=583@1305+3:crc_ok seq=584@1308+3:crc_ok
+  | stop @1311: seq=14631158495426793710 want=585 key=195 len=73 checksum=22a7232d1c2a7bf9 computed=a5caf9a2f88ad535 parent=f296aca9452a7b95 want=eabe0d4996950b0f
+  | bytes: f9 7b 2a 1c 2d 23 a7 22 95 7b 2a 45 a9 ac 96 f2 ee 50 5a e4 21 51 0c cb c3 49 f2 db 75 c2 19 1e
+  | high water: sector 1313
+tick 2261: crash #33: cache sectors applied=2 dropped=1; recovered 629 records (acked 629, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 21%): seq=630@1411+3
+  | cache: 1411=dropped 1412=kept 1413=kept
+  | scan: 629 records in sectors [0,1411); last: seq=626@1401+2:crc_ok seq=627@1403+2:crc_ok seq=628@1405+3:crc_ok seq=629@1408+3:crc_ok
+  | stop @1411: seq=9136190247324536853 want=630 key=30 len=36 checksum=da07e79a3d59de6c computed=37fe5a2eb2218286 parent=2dd43f1e90154519 want=a1dd38167b46c0a7
+  | bytes: 6c de 59 3d 9a e7 07 da 19 45 15 90 1e 3f d4 2d 15 d0 2a d4 9f 44 ca 7e 1e 24 f3 ed 9e 49 3c c2
+  | high water: sector 1414
+tick 2431: crash #34: cache sectors applied=4 dropped=1; recovered 678 records (acked 676, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 48%): seq=677@1516+3 seq=678@1519+3 seq=679@1522+2
+  | cache: 1517=kept 1520=kept 1521=kept 1522=dropped 1523=kept
+  | scan: 678 records in sectors [0,1522); last: seq=675@1512+3:crc_ok seq=676@1515+1:crc_ok seq=677@1516+3:crc_ok seq=678@1519+3:crc_ok
+  | stop @1522: seq=5051752753676540912 want=679 key=231 len=75 checksum=9dd05f3af9c213bf computed=500b6734c476ff6a parent=528fefe643e2a7af want=fcaddba95a084f42
+  | bytes: bf 13 c2 f9 3a 5f d0 9d af a7 e2 43 e6 ef 8f 52 f0 db fd 37 5d 6e 1b 46 e7 4b 97 28 9b a6 d1 c1
+  | high water: sector 1524
+tick 2623: crash #35: cache sectors applied=1 dropped=2; recovered 726 records (acked 726, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 49%): seq=727@1621+3
+  | cache: 1621=dropped 1622=dropped 1623=kept
+  | scan: 726 records in sectors [0,1621); last: seq=723@1615+2:crc_ok seq=724@1617+1:crc_ok seq=725@1618+1:crc_ok seq=726@1619+2:crc_ok
+  | stop @1621: seq=2404661297435092270 want=727 key=62 len=152 checksum=83cc33af7df6283d computed=edc1e53d280c699a parent=80033ad9099b5c97 want=64daa5b18655ef12
+  | bytes: 3d 28 f6 7d af 33 cc 83 97 5c 9b 09 d9 3a 03 80 2e a5 bf a6 b5 12 5f 21 3e 98 5c e0 93 1b 42 b4
+  | high water: sector 1624
+seed=0 crashes=35 acked=843 trace=3985da6fcf7f0c84 PASS
+</script>
+<script type="text/plain" id="sec-ack" data-src="data/04/run0-ack-sectors.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 96%): seq=12@27+2 seq=13@29+3 seq=14@32+2 seq=15@34+3
+  | cache: 27=kept 28=kept 29=kept 30=kept 31=kept 32=kept 33=kept 34=kept 35=kept 36=kept
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 93%):
+  | cache:
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 18, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 67%): seq=17@38+2 seq=18@40+2
+  | cache: 38=dropped 39=kept 40=dropped 41=dropped
+  | scan: 16 records in sectors [0,38); last: seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok seq=16@37+1:crc_ok
+  | stop @38: seq=3032735385440829629 want=17 key=5 len=50 checksum=9ff4d83ebeaa44ac computed=f02cff221a3558f8 parent=9040f2ae99028dcf want=bc307679f33f64f3
+  | bytes: ac 44 aa be 3e d8 f4 9f cf 8d 02 99 ae f2 40 90 bd 40 f5 d2 c3 70 16 2a 05 32 69 33 dc bc d4 b7
+  | high water: sector 42
+  INVARIANT VIOLATED: durability: acked put seq=17 key=1 was lost (18 acked, 16 recovered)
+seed=0 crashes=3 acked=18 trace=05849ac5c0fa49b0 FAIL
+</script>
+<script type="text/plain" id="sec-nocrc" data-src="data/04/run0-nocrc-sectors.txt">
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 96%): seq=12@27+2 seq=13@29+3 seq=14@32+2 seq=15@34+3
+  | cache: 27=kept 28=kept 29=kept 30=kept 31=kept 32=kept 33=kept 34=kept 35=kept 36=kept
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 93%):
+  | cache:
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 67%): seq=17@38+2 seq=18@40+2
+  | cache: 38=dropped 39=kept 40=dropped 41=dropped
+  | scan: 16 records in sectors [0,38); last: seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok seq=16@37+1:crc_ok
+  | stop @38: seq=3032735385440829629 want=17 key=5 len=50 checksum=9ff4d83ebeaa44ac computed=f02cff221a3558f8 parent=9040f2ae99028dcf want=bc307679f33f64f3
+  | bytes: ac 44 aa be 3e d8 f4 9f cf 8d 02 99 ae f2 40 90 bd 40 f5 d2 c3 70 16 2a 05 32 69 33 dc bc d4 b7
+  | high water: sector 42
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 46 records (acked 45, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 53%): seq=46@98+3 seq=47@101+2
+  | cache: 98=kept 99=dropped 100=dropped 101=dropped 102=dropped
+  | scan: 46 records in sectors [0,101); last: seq=43@94+1:crc_ok seq=44@95+1:crc_ok seq=45@96+2:crc_ok seq=46@98+3:crc_BAD
+  | stop @101: seq=1553445886033940346 want=47 key=228 len=126 checksum=0c7ceebcf7aa3428 computed=68711fb49dece8dc parent=550a47792b7975be want=407531cb3af29df3
+  | bytes: 28 34 aa f7 bc ee 7c 0c be 75 79 2b 79 47 0a 55 7a 4f d8 86 cd f2 8e 15 e4 7e 1b bf 3f 8c 40 4b
+  | high water: sector 103
+  INVARIANT VIOLATED: garbage: recovered seq=46 key=1 len=102 was never written by the client
+seed=0 crashes=4 acked=45 trace=826972d8c8dd33cc FAIL
+</script>
+<script type="text/plain" id="tsv-seeds" data-src="data/04/per-seed.tsv">
+0	35	843	PASS	27	8	0	0	73	55
+1	38	857	PASS	31	7	0	0	52	44
+2	34	892	PASS	28	6	0	0	80	50
+3	35	863	PASS	33	2	0	0	73	41
+4	39	861	PASS	29	9	1	0	79	49
+5	48	881	PASS	39	9	0	0	73	66
+6	48	843	PASS	41	7	0	0	68	92
+7	26	901	PASS	22	4	0	0	41	47
+8	38	856	PASS	33	4	1	0	67	72
+9	28	824	PASS	23	5	0	0	34	71
+10	41	858	PASS	37	4	0	0	59	44
+11	34	827	PASS	32	2	0	0	47	63
+12	32	836	PASS	29	3	0	0	38	56
+13	43	831	PASS	38	5	0	0	50	73
+14	37	881	PASS	30	7	0	0	49	55
+15	36	849	PASS	29	7	0	0	83	54
+16	40	864	PASS	35	5	0	0	74	84
+17	39	856	PASS	34	5	0	0	64	39
+18	46	841	PASS	36	10	0	0	79	88
+19	42	866	PASS	36	6	0	0	53	68
+20	29	884	PASS	23	6	0	0	54	29
+21	32	822	PASS	26	6	0	0	41	55
+22	32	853	PASS	25	7	0	0	38	39
+23	42	835	PASS	34	8	0	0	71	77
+24	45	817	PASS	37	8	0	0	47	87
+25	34	838	PASS	29	5	0	0	78	39
+26	42	838	PASS	38	4	0	0	44	67
+27	39	849	PASS	31	8	0	0	66	64
+28	41	861	PASS	31	10	0	0	56	66
+29	47	865	PASS	38	9	0	0	70	50
+30	46	843	PASS	37	9	0	0	49	68
+31	42	848	PASS	33	9	0	0	51	72
+32	41	838	PASS	31	10	0	0	43	61
+33	38	820	PASS	31	7	0	0	55	62
+34	29	878	PASS	25	4	0	0	29	48
+35	37	857	PASS	30	7	0	0	53	54
+36	34	904	PASS	26	8	0	0	74	49
+37	44	839	PASS	32	12	0	0	70	59
+38	47	870	PASS	38	9	0	0	68	67
+39	38	880	PASS	32	6	0	0	18	57
+40	26	913	PASS	20	6	0	0	57	55
+41	41	843	PASS	30	11	0	0	85	71
+42	36	819	PASS	28	8	0	0	50	31
+43	33	878	PASS	28	5	0	0	42	47
+44	36	858	PASS	31	5	0	0	84	63
+45	34	855	PASS	27	7	0	0	44	62
+46	43	848	PASS	33	10	0	0	75	66
+47	30	876	PASS	25	5	0	0	33	29
+48	31	855	PASS	28	3	0	0	47	62
+49	38	862	PASS	32	6	0	0	57	42
+50	40	849	PASS	30	10	0	0	56	60
+51	31	892	PASS	27	4	0	0	39	57
+52	30	852	PASS	25	4	1	0	51	68
+53	38	843	PASS	33	5	0	0	54	65
+54	43	840	PASS	34	9	0	0	70	64
+55	35	885	PASS	29	6	0	0	57	41
+56	41	865	PASS	39	2	0	0	40	78
+57	39	850	PASS	35	4	0	0	69	60
+58	47	835	PASS	37	10	0	0	73	48
+59	33	846	PASS	26	7	0	0	56	71
+60	39	839	PASS	34	5	0	0	73	75
+61	37	908	PASS	30	7	0	0	68	48
+62	30	882	PASS	26	4	0	0	32	45
+63	45	875	PASS	35	10	0	0	75	44
+64	34	867	PASS	28	6	0	0	44	61
+65	35	908	PASS	30	5	0	0	66	45
+66	40	851	PASS	34	4	2	0	56	54
+67	35	864	PASS	32	3	0	0	41	51
+68	40	869	PASS	30	10	0	0	71	87
+69	32	857	PASS	29	3	0	0	57	38
+70	32	887	PASS	25	7	0	0	39	54
+71	32	847	PASS	29	3	0	0	63	40
+72	32	856	PASS	26	6	0	0	39	58
+73	43	821	PASS	37	6	0	0	67	66
+74	35	901	PASS	27	8	0	0	70	46
+75	34	859	PASS	27	7	0	0	63	50
+76	29	832	PASS	21	8	0	0	54	58
+77	43	882	PASS	33	9	1	0	45	54
+78	30	874	PASS	18	12	0	0	53	46
+79	37	866	PASS	31	6	0	0	50	43
+80	37	860	PASS	27	10	0	0	43	54
+81	44	845	PASS	40	4	0	0	57	55
+82	36	825	PASS	30	6	0	0	53	52
+83	47	884	PASS	34	12	1	0	71	98
+84	43	862	PASS	40	3	0	0	65	60
+85	37	832	PASS	31	6	0	0	55	47
+86	34	881	PASS	29	5	0	0	48	52
+87	32	816	PASS	26	6	0	0	35	39
+88	33	832	PASS	32	1	0	0	28	47
+89	38	876	PASS	33	5	0	0	70	54
+90	44	845	PASS	37	7	0	0	68	65
+91	38	850	PASS	33	5	0	0	65	76
+92	45	849	PASS	38	7	0	0	77	71
+93	36	856	PASS	29	7	0	0	63	53
+94	40	854	PASS	32	8	0	0	88	58
+95	38	863	PASS	34	4	0	0	44	69
+96	40	869	PASS	30	10	0	0	78	61
+97	49	830	PASS	40	8	1	0	78	45
+98	36	880	PASS	31	5	0	0	84	45
+99	34	817	PASS	28	6	0	0	61	59
+100	35	867	PASS	27	8	0	0	69	39
+101	43	830	PASS	32	11	0	0	86	61
+102	43	875	PASS	31	12	0	0	56	89
+103	34	872	PASS	32	2	0	0	61	67
+104	38	845	PASS	32	6	0	0	66	54
+105	35	857	PASS	30	5	0	0	47	77
+106	31	870	PASS	26	5	0	0	69	39
+107	28	885	PASS	22	6	0	0	36	35
+108	48	838	PASS	38	10	0	0	82	90
+109	44	858	PASS	37	7	0	0	68	85
+110	22	866	PASS	18	4	0	0	27	60
+111	38	881	PASS	35	3	0	0	34	64
+112	37	852	PASS	32	5	0	0	62	37
+113	42	853	PASS	36	6	0	0	111	75
+114	36	825	PASS	30	6	0	0	62	55
+115	39	844	PASS	33	6	0	0	75	57
+116	42	861	PASS	34	8	0	0	88	60
+117	39	882	PASS	33	6	0	0	53	52
+118	29	868	PASS	25	4	0	0	36	59
+119	28	859	PASS	23	5	0	0	44	21
+120	31	870	PASS	29	2	0	0	53	44
+121	44	862	PASS	36	8	0	0	92	63
+122	39	841	PASS	31	8	0	0	58	53
+123	39	812	PASS	29	10	0	0	49	54
+124	32	908	PASS	29	3	0	0	28	35
+125	33	882	PASS	26	7	0	0	28	38
+126	30	818	PASS	22	8	0	0	37	53
+127	41	833	PASS	36	5	0	0	59	77
+128	36	875	PASS	31	5	0	0	56	55
+129	42	859	PASS	32	10	0	0	71	107
+130	33	848	PASS	26	7	0	0	47	59
+131	31	903	PASS	26	5	0	0	45	38
+132	32	887	PASS	25	7	0	0	50	43
+133	29	885	PASS	28	1	0	0	28	38
+134	38	844	PASS	27	11	0	0	49	56
+135	37	849	PASS	31	6	0	0	60	69
+136	50	896	PASS	43	7	0	0	92	84
+137	34	872	PASS	28	6	0	0	47	53
+138	27	855	PASS	21	6	0	0	37	39
+139	25	891	PASS	22	3	0	0	35	22
+140	42	852	PASS	37	5	0	0	79	68
+141	35	851	PASS	28	7	0	0	68	58
+142	31	916	PASS	25	6	0	0	53	41
+143	29	841	PASS	25	4	0	0	74	30
+144	35	887	PASS	24	11	0	0	57	82
+145	30	890	PASS	25	5	0	0	42	32
+146	29	864	PASS	23	6	0	0	40	45
+147	39	842	PASS	33	6	0	0	52	89
+148	37	896	PASS	31	6	0	0	47	55
+149	44	844	PASS	36	8	0	0	57	48
+150	36	870	PASS	26	10	0	0	68	76
+151	38	855	PASS	29	9	0	0	58	52
+152	42	829	PASS	37	5	0	0	62	81
+153	29	862	PASS	23	6	0	0	32	32
+154	52	837	PASS	40	12	0	0	69	64
+155	43	803	PASS	35	8	0	0	59	48
+156	39	846	PASS	32	7	0	0	66	45
+157	42	838	PASS	37	5	0	0	68	69
+158	40	834	PASS	33	7	0	0	43	38
+159	36	863	PASS	30	6	0	0	45	37
+160	35	829	PASS	24	11	0	0	57	75
+161	28	861	PASS	16	12	0	0	28	45
+162	36	879	PASS	32	4	0	0	46	59
+163	40	859	PASS	37	3	0	0	41	44
+164	32	886	PASS	29	3	0	0	30	49
+165	35	865	PASS	30	5	0	0	58	54
+166	41	877	PASS	36	5	0	0	44	60
+167	37	870	PASS	31	6	0	0	49	47
+168	30	883	PASS	26	4	0	0	53	50
+169	36	876	PASS	32	4	0	0	45	67
+170	40	842	PASS	34	6	0	0	57	63
+171	52	852	PASS	38	14	0	0	94	99
+172	34	846	PASS	29	5	0	0	52	42
+173	35	852	PASS	31	4	0	0	45	37
+174	33	874	PASS	29	4	0	0	54	35
+175	30	860	PASS	25	5	0	0	35	59
+176	36	876	PASS	29	7	0	0	53	68
+177	42	877	PASS	35	6	1	0	74	50
+178	38	859	PASS	35	3	0	0	56	57
+179	35	873	PASS	33	2	0	0	39	43
+180	40	827	PASS	34	6	0	0	52	57
+181	52	853	PASS	42	10	0	0	73	89
+182	26	848	PASS	18	8	0	0	36	44
+183	45	829	PASS	39	6	0	0	64	63
+184	52	833	PASS	42	10	0	0	102	79
+185	37	865	PASS	35	2	0	0	60	45
+186	43	844	PASS	39	4	0	0	59	73
+187	32	859	PASS	23	9	0	0	59	56
+188	37	872	PASS	31	6	0	0	64	42
+189	35	883	PASS	25	10	0	0	59	79
+190	26	868	PASS	24	2	0	0	32	47
+191	21	833	PASS	18	3	0	0	42	23
+192	33	861	PASS	25	8	0	0	64	38
+193	41	865	PASS	31	10	0	0	62	50
+194	41	878	PASS	29	12	0	0	46	63
+195	40	851	PASS	30	10	0	0	61	63
+196	31	846	PASS	29	2	0	0	58	37
+197	30	893	PASS	24	6	0	0	38	44
+198	41	871	PASS	37	4	0	0	59	67
+199	43	842	PASS	33	10	0	0	90	81
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex04" });
+const { el, s, C } = DST;
+const MONO = "monospace";
+
+// ---------- parse a `run --sectors` output ----------
+function parseRun(txt) {
+  const L = txt.split("\n"), crashes = [];
+  let c = null;
+  const recs = (str) => [...str.matchAll(/seq=(\d+)@(\d+)\+(\d+)(?::(crc_ok|crc_BAD))?/g)].map((m) => ({ seq: +m[1], at: +m[2], n: +m[3], crc: m[4] || null }));
+  for (const ln of L) {
+    let m;
+    if ((m = ln.match(/^tick\s+(\d+): crash #(\d+): cache sectors applied=(\d+) dropped=(\d+); recovered (\d+) records \(acked (\d+), in-flight (\d+)\); stop: (.*)$/))) {
+      c = { tick: +m[1], n: +m[2], applied: +m[3], dropped: +m[4], recovered: +m[5], acked: +m[6], inflight: +m[7], stop: m[8], lines: [ln] };
+      crashes.push(c);
+    } else if (c && ln.startsWith("  |")) {
+      c.lines.push(ln);
+      if ((m = ln.match(/unsynced \(keep (\d+)%\):(.*)/))) { c.keep = +m[1]; c.unsynced = recs(m[2]); }
+      else if ((m = ln.match(/\| cache:(.*)/))) c.cache = [...m[1].matchAll(/(\d+)=(kept|dropped)/g)].map((x) => ({ sector: +x[1], kept: x[2] === "kept" }));
+      else if ((m = ln.match(/scan: (\d+) records in sectors \[0,(\d+)\); last:(.*)/))) { c.scanEnd = +m[2]; c.last = recs(m[3]); }
+      else if ((m = ln.match(/stop @(\d+): seq=(\d+) want=(\d+) key=(\d+) len=(\d+)(?: checksum=(\w+) computed=(\w+) parent=(\w+) want=(\w+))?/)))
+        c.stopRec = { at: +m[1], seq: m[2], wantSeq: m[3], key: +m[4], len: +m[5], checksum: m[6], computed: m[7], parent: m[8], wantParent: m[9] };
+      else if ((m = ln.match(/bytes: (.*)/))) c.bytes = m[1].trim().split(" ").map((h) => parseInt(h, 16));
+      else if ((m = ln.match(/high water: sector (\d+)/))) c.high = +m[1];
+    } else if (c && ln.startsWith("  INVARIANT VIOLATED")) { c.violation = ln.trim(); c.lines.push(ln); }
+  }
+  const fin = L.find((l) => l.startsWith("seed="));
+  return { text: txt, crashes, final: fin, trace: fin.match(/trace=(\w+)/)[1], result: fin.match(/(PASS|FAIL)$/)[1] };
+}
+const R = { ok: parseRun(DST.text("sec-ok")), ack: parseRun(DST.text("sec-ack")), nocrc: parseRun(DST.text("sec-nocrc")) };
+const TSV = DST.text("tsv-seeds").trim().split("\n").map((l) => { const c = l.split("\t").map((v, i) => (i === 3 ? v : +v)); return { seed: c[0], crashes: c[1], acked: c[2], result: c[3], sq: c[4], ck: c[5], pa: c[6], ot: c[7], kept: c[8], dropped: c[9] }; });
+const sum = (k) => TSV.reduce((a, r) => a + r[k], 0);
+const u64 = (b, o) => { let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(b[o + i]); return v.toString(16).padStart(16, "0"); };
+const reasonShort = (st) => (st.startsWith("checksum") ? "checksum" : st.startsWith("parent") ? "parent" : st.startsWith("unexpected seq") ? "seq" : "other");
+
+// ---------- hero ----------
+{
+  const sw = DST.text("log-sweep"), n = +sw.match(/PASS: (\d+) seeds/)[1], t = sw.match(/real\s+(\S+)/)[1];
+  const fa = DST.text("log-sweep-ack").match(/FAIL at seed=(\d+)/)[1], fc = DST.text("log-sweep-nocrc").match(/FAIL at seed=(\d+)/)[1];
+  const stat = (num, lbl) => el("div", { class: "stat" }, el("div", { class: "num" }, num), el("div", { class: "lbl" }, lbl));
+  const cr = TSV.map((r) => r.crashes);
+  DST.$("#stats").append(stat(n.toLocaleString(), `seeds pass, correct code (sweep, real ${t})`),
+    stat(sum("crashes").toLocaleString(), `crashes + recoveries over seeds 0–${TSV.length - 1} (${Math.min(...cr)}–${Math.max(...cr)} per seed)`),
+    stat(sum("ck").toLocaleString(), "torn records caught by the checksum in those recoveries"),
+    stat(`seed ${fa} / ${fc}`, "first failure of --bug-ack-before-fsync / --bug-no-checksum"));
+}
+
+// ---------- 01 architecture ----------
+{
+  const W = 1000, H = 320, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(s("defs", {}, s("marker", { id: "ar", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0L10,5L0,10z", fill: C.accent }))));
+  const box = (x, y, w, h, title, sub, col, dash) => {
+    svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: C.panel2, stroke: col, "stroke-width": 1.5, "stroke-dasharray": dash || null }));
+    svg.append(s("text", { x: x + w / 2, y: y + 22, "text-anchor": "middle", fill: C.text, "font-size": 13, "font-weight": 700 }, title));
+    sub.forEach((t, i) => svg.append(s("text", { x: x + w / 2, y: y + 40 + i * 15, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": MONO }, t)));
+  };
+  const arrow = (x1, y1, x2, y2, label, lx, ly) => {
+    svg.append(s("path", { d: `M${x1},${y1}L${x2},${y2}`, stroke: C.accent, "stroke-width": 1.6, "marker-end": "url(#ar)", class: "flow" }));
+    if (label) svg.append(s("text", { x: lx, y: ly, fill: C.dim, "font-size": 10, "font-family": MONO }, label));
+  };
+  box(20, 20, 150, 56, "seed", ["DefaultPrng(seed)"], C.yellow);
+  box(20, 120, 150, 90, "workload + crashes", ["put key/len/bytes", "fsync latency 1..6", "crash 1 in 80 / tick"], C.violet, "5 3");
+  box(20, 230, 150, 56, "disk_prng", ["writeback, keep %"], C.violet, "5 3");
+  svg.append(s("rect", { x: 220, y: 12, width: 330, height: 278, rx: 12, fill: "none", stroke: C.ok, "stroke-dasharray": "2 4" }));
+  svg.append(s("text", { x: 385, y: 32, "text-anchor": "middle", fill: C.ok, "font-size": 12, "font-weight": 700 }, "REAL CODE (system under test)"));
+  box(240, 44, 290, 70, "Store.put / on_fsync", ["encode(): checksum|parent|seq|key|len|value", "ack only after fsync"], C.ok);
+  box(240, 130, 290, 70, "Store.recover", ["scan from offset 0, stop at", "first bad seq / len / crc / parent"], C.ok);
+  box(240, 216, 290, 62, "check_recovery (oracle)", ["durability · no garbage · exact state"], C.ok);
+  box(620, 20, 360, 110, "volatile write cache", ["cache: ArrayList(CachedSector)", "read() sees it first (read-your-writes)", "writeback: 15%/tick, any sector", "crash: each sector kept w.p. keep%"], C.warn, "5 3");
+  box(620, 170, 360, 110, "durable: [4096 × 64 B]u8", ["survives crashes", "starts as PRNG noise (random.bytes)", "fsync() applies the whole cache"], C.accent2, "5 3");
+  arrow(95, 76, 95, 120);
+  svg.append(s("path", { d: "M95,286V308H992V75H984", stroke: C.violet, "stroke-width": 1.4, fill: "none", "marker-end": "url(#ar)", class: "flow" }));
+  arrow(170, 165, 240, 79, "", 0, 0);
+  arrow(530, 79, 620, 70, "write", 562, 64);
+  arrow(800, 130, 800, 170, "fsync / writeback / crash", 810, 155);
+  arrow(620, 225, 530, 165, "read", 572, 214);
+  svg.append(s("text", { x: 600, y: 302, fill: C.violet, "font-size": 10, "font-family": MONO }, "sub-seed: writeback picks, keep %, per-sector keep/drop"));
+  DST.$("#arch").append(svg);
+}
+
+// ---------- 02 byte layout ----------
+const firstTorn = R.ok.crashes.find((c) => c.stop.startsWith("checksum") && c.bytes);
+function layout(container, b, c) {
+  const W = 1000, cw = (W - 20) / 32, svg = s("svg", { viewBox: `0 0 ${W} 190` });
+  const F = [
+    { name: "checksum", lo: 0, hi: 8, col: C.accent, val: "0x" + u64(b, 0) },
+    { name: "parent", lo: 8, hi: 16, col: C.violet, val: "0x" + u64(b, 8) },
+    { name: "seq", lo: 16, hi: 24, col: C.accent2, val: BigInt("0x" + u64(b, 16)).toString() },
+    { name: "key", lo: 24, hi: 25, col: C.warn, val: b[24] },
+    { name: "len", lo: 25, hi: 26, col: C.pink, val: b[25] },
+    { name: "pad", lo: 26, hi: 32, col: C.dim, val: "0" },
+  ];
+  for (const f of F) {
+    const x = 10 + f.lo * cw, w = (f.hi - f.lo) * cw;
+    svg.append(s("rect", { x: x + 1, y: 10, width: w - 2, height: 30, rx: 6, fill: f.col, opacity: 0.22, stroke: f.col }));
+    svg.append(s("text", { x: x + w / 2, y: 30, "text-anchor": "middle", fill: f.col, "font-size": w < 40 ? 10 : 13, "font-weight": 700, "font-family": MONO }, f.name));
+    svg.append(s("text", { x: x + w / 2, y: 128, "text-anchor": "middle", fill: C.text, "font-size": w < 40 ? 10 : 12, "font-family": MONO }, f.val));
+    if (w > 40) svg.append(s("text", { x: x + w / 2, y: 145, "text-anchor": "middle", fill: C.dim, "font-size": 9.5, "font-family": MONO }, `[${f.lo}..${f.hi})`));
+  }
+  b.forEach((v, i) => {
+    const f = F.find((f) => i >= f.lo && i < f.hi);
+    const r = s("rect", { x: 10 + i * cw + 1, y: 50, width: cw - 2, height: 44, rx: 3, fill: C.panel2, stroke: f.col, "stroke-opacity": 0.6 });
+    DST.tip(r, `byte ${i} = 0x${v.toString(16).padStart(2, "0")} (${f.name})`);
+    svg.append(r, s("text", { x: 10 + i * cw + cw / 2, y: 70, "text-anchor": "middle", fill: C.text, "font-size": 11, "font-family": MONO, "pointer-events": "none" }, v.toString(16).padStart(2, "0")),
+      s("text", { x: 10 + i * cw + cw / 2, y: 88, "text-anchor": "middle", fill: C.dim, "font-size": 8, "font-family": MONO, "pointer-events": "none" }, i));
+  });
+  const vb = c.stopRec.len, n = Math.ceil((32 + vb) / 64);
+  svg.append(s("text", { x: 10, y: 175, fill: C.muted, "font-size": 12, "font-family": MONO },
+    `then value [32..${32 + vb}) + zero padding → ${n} sector${n > 1 ? "s" : ""} (${n * 64} B). Checksum covers bytes [8..${32 + vb}). Little endian: the u64s read right to left.`));
+  DST.$(container).append(svg);
+}
+layout("#layout", firstTorn.bytes, firstTorn);
+DST.$("#layoutcap").textContent = `Header at sector ${firstTorn.stopRec.at}, crash #${firstTorn.n} of run 0 (tick ${firstTorn.tick}). Its seq (${firstTorn.stopRec.seq}) and parent are right, but the stored checksum ${firstTorn.stopRec.checksum} ≠ computed ${firstTorn.stopRec.computed}: the payload sectors still hold old bytes.`;
+
+// ---------- 03 sector strip ----------
+const ST = { rec: "#1f6f68", kept: C.ok, dropped: C.bug, wb: C.violet, stale: "#3a4258", noise: "#232b3d" };
+function classify(c) {
+  const lastStart = c.last.length ? c.last[0].at : c.scanEnd;
+  const lo = Math.max(0, lastStart - 1), cells = 30;
+  const cacheMap = new Map((c.cache || []).map((x) => [x.sector, x.kept]));
+  const unsyncEnd = c.unsynced.length ? c.unsynced.at(-1).at + c.unsynced.at(-1).n : 0;
+  const out = [];
+  for (let sct = lo; sct < lo + cells; sct++) {
+    const ur = c.unsynced.find((r) => sct >= r.at && sct < r.at + r.n);
+    let kind, rec = null;
+    if (ur) { rec = ur; kind = cacheMap.has(sct) ? (cacheMap.get(sct) ? "kept" : "dropped") : "wb"; }
+    else if (sct < (c.unsynced.length ? c.unsynced[0].at : c.scanEnd)) kind = "rec";
+    else if (sct < c.high) kind = "stale";
+    else kind = "noise";
+    out.push({ sector: sct, kind, rec, inCache: cacheMap.has(sct) });
+  }
+  // torn = unsynced record whose sectors did not all reach the disk, but some did
+  for (const r of c.unsynced) {
+    const ks = out.filter((o) => o.rec === r).map((o) => o.kind);
+    r.state = ks.every((k) => k === "dropped") ? "lost" : ks.some((k) => k === "dropped") ? "torn" : "whole";
+  }
+  return { lo, cells, out };
+}
+const LEG = [["rec", "durable, synced record"], ["kept", "cached → kept at crash"], ["dropped", "cached → dropped at crash"], ["wb", "unsynced, written back before crash"], ["stale", "stale bytes (earlier life of the log)"], ["noise", "never written (PRNG noise)"]];
+DST.$("#striplegend").append(...LEG.map(([k, l]) => el("span", {}, el("i", { class: "sw", style: { background: ST[k] } }), l)));
+let player;
+function drawStrip(container, c, opts = {}) {
+  const { lo, cells, out } = classify(c);
+  const W = 1000, cw = (W - 20) / cells, yC = 34, yD = 128, svg = s("svg", { viewBox: `0 0 ${W} 250` });
+  svg.append(s("text", { x: 10, y: 22, fill: C.warn, "font-size": 11, "font-family": MONO }, `write cache at power loss (keep ${c.keep}%)`));
+  svg.append(s("text", { x: 10, y: yD - 8, fill: C.accent2, "font-size": 11, "font-family": MONO }, "durable sectors after the crash"));
+  const rnd = DST.Rand(c.tick);
+  out.forEach((o, i) => {
+    const x = 10 + i * cw;
+    // durable row
+    const g = s("g");
+    const fill = o.kind === "dropped" ? (o.sector < c.high ? ST.stale : ST.noise) : ST[o.kind];
+    const r = s("rect", { x: x + 1, y: yD, width: cw - 2, height: 40, rx: 3, fill, stroke: o.kind === "dropped" ? C.bug : "none", "stroke-width": 1.5, "stroke-dasharray": o.kind === "dropped" ? "3 2" : null });
+    g.append(r);
+    if (fill === ST.noise || fill === ST.stale) for (let k = 0; k < 6; k++) g.append(s("rect", { x: x + 3 + rnd.int(cw - 8), y: yD + 3 + rnd.int(34), width: 2, height: 2, fill: C.dim, opacity: 0.6 }));
+    if (o.kind === "dropped") g.append(s("text", { x: x + cw / 2, y: yD + 25, "text-anchor": "middle", fill: C.bug, "font-size": 14, "font-weight": 700 }, "✕"));
+    if (o.kind === "wb") g.append(s("text", { x: x + cw / 2, y: yD + 25, "text-anchor": "middle", fill: "#0b0f17", "font-size": 10, "font-family": MONO }, "wb"));
+    DST.tip(r, `sector ${o.sector} (bytes ${o.sector * 64}..${o.sector * 64 + 63})\n${LEG.find((l) => l[0] === o.kind)[1]}` + (o.rec ? `\nrecord seq=${o.rec.seq} (${o.rec.state})` : "") + (o.kind === "dropped" ? `\ndisk still holds its old bytes` : ""));
+    svg.append(g);
+    svg.append(s("text", { x: x + cw / 2, y: yD + 54, "text-anchor": "middle", fill: C.dim, "font-size": 9, "font-family": MONO }, o.sector));
+    // cache row
+    if (o.inCache) {
+      const cc = s("rect", { x: x + 1, y: yC, width: cw - 2, height: 36, rx: 3, fill: C.warn, opacity: 0.9 });
+      svg.append(cc, s("text", { x: x + cw / 2, y: yC + 22, "text-anchor": "middle", fill: "#0b0f17", "font-size": 9, "font-family": MONO }, o.sector));
+      const kept = o.kind === "kept";
+      const fall = s("rect", { x: x + 4, y: yC + 38, width: cw - 8, height: 8, rx: 2, fill: kept ? C.ok : C.bug });
+      fall.append(s("animate", { attributeName: "y", from: yC + 38, to: kept ? yD + 16 : yC + 70, dur: "0.7s", fill: "freeze" }));
+      if (!kept) fall.append(s("animate", { attributeName: "opacity", from: 1, to: 0, dur: "0.7s", fill: "freeze" }));
+      svg.append(fall);
+    }
+  });
+  // record brackets above the durable row
+  let bi = 0;
+  const bracket = (r, col, label) => {
+    const i0 = r.at - lo, i1 = r.at + r.n - lo;
+    if (i1 <= 0 || i0 >= cells) return;
+    const x0 = 10 + Math.max(0, i0) * cw + 2, x1 = 10 + Math.min(cells, i1) * cw - 2;
+    svg.append(s("path", { d: `M${x0},${yD + 66}V${yD + 72}H${x1}V${yD + 66}`, stroke: col, fill: "none", "stroke-width": 1.5 }));
+    const dy = (bi++ % 2) * 13;
+    svg.append(s("text", { x: (x0 + x1) / 2, y: yD + 86 + dy, "text-anchor": "middle", fill: col, "font-size": 10, "font-family": MONO }, label));
+  };
+  c.last.forEach((r) => bracket(r, r.crc === "crc_BAD" ? C.bug : C.accent2, `#${r.seq} ${r.crc === "crc_BAD" ? "✕crc REPLAYED" : "✓"}`));
+  c.unsynced.filter((r) => !c.last.some((l) => l.seq === r.seq)).forEach((r) => bracket(r, r.state === "torn" ? C.bug : r.state === "lost" ? C.dim : C.ok, `#${r.seq} ${r.state.toUpperCase()}`));
+  // scan stop marker
+  const sx = 10 + (c.scanEnd - lo) * cw;
+  if (c.scanEnd - lo < cells) {
+    svg.append(s("line", { x1: sx, x2: sx, y1: yD - 4, y2: yD + 100, stroke: C.yellow, "stroke-width": 2 }));
+    svg.append(s("text", { x: Math.min(sx + 4, W - 260), y: yD + 120, fill: C.yellow, "font-size": 11, "font-family": MONO }, `scan stops @${c.scanEnd}: ${reasonShort(c.stop)}`));
+  }
+  svg.append(s("text", { x: W - 10, y: 22, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": MONO }, `high water: sector ${c.high}`));
+  DST.$(container).append(svg);
+}
+function fieldTable(c) {
+  const box = el("div");
+  const sr = c.stopRec;
+  if (!sr) return box;
+  const rows = [["seq", sr.seq, sr.wantSeq, sr.seq === sr.wantSeq]];
+  if (sr.checksum) rows.push(["checksum", sr.checksum, sr.computed + " (computed)", sr.checksum === sr.computed], ["parent", sr.parent, sr.wantParent + " (last_checksum)", sr.parent === sr.wantParent]);
+  const lenOk = sr.len > 0 && sr.len <= 160 && sr.key < 8;
+  rows.splice(1, 0, ["key / len", `${sr.key} / ${sr.len}`, "key<8, 1≤len≤160", lenOk]);
+  const t = el("table", { class: "data fields" }, el("tr", {}, el("th", {}, "field"), el("th", {}, "on disk"), el("th", {}, "expected"), el("th", {}, "")),
+    rows.map(([f, a, b, ok]) => el("tr", {}, el("td", {}, f), el("td", {}, a), el("td", {}, b), el("td", { style: { color: ok ? C.ok : C.bug, fontWeight: 700 } }, ok ? "✓" : "✕"))));
+  box.append(el("div", { class: "kv" }, `header at sector ${sr.at}:`), t, el("div", { class: "kv" }, "→ stop: ", el("b", { class: "bad" }, c.stop)));
+  if (!sr.checksum) box.append(el("div", { class: "kv", style: { marginTop: "6px" } }, "seq is checked first, so a noise header is rejected before its checksum is even computed."));
+  return box;
+}
+function scanList(c) {
+  const box = el("div", { class: "kv" });
+  box.append(el("div", {}, "replay from offset 0: ", el("b", {}, `${c.recovered} records`), ` in sectors [0, ${c.scanEnd})`));
+  if (c.recovered > c.last.length) box.append(el("div", {}, `  … ${c.recovered - c.last.length} earlier records ✓`));
+  for (const r of c.last) box.append(el("div", {}, `  seq ${r.seq} @${r.at}+${r.n}  `, r.crc === "crc_BAD" ? el("span", { class: "bad" }, "checksum WRONG, replayed anyway (bug)") : el("span", { class: "ok" }, "checksum ✓ parent ✓")));
+  box.append(el("div", {}, `  @${c.scanEnd}: `, el("span", { class: "bad" }, c.stop)));
+  box.append(el("div", { style: { marginTop: "8px" } }, `oracle before the crash: acked ${c.acked}, in flight ${c.inflight}`));
+  box.append(el("div", {}, c.violation ? el("span", { class: "bad" }, c.violation) : el("span", { class: "ok" }, `check_recovery ✓ (${c.recovered - c.acked} unacked record(s) survived → now history)`)));
+  return box;
+}
+const RUNS = [["ok", "run 0 --sectors (correct)"], ["ack", "run 0 --bug-ack-before-fsync"], ["nocrc", "run 0 --bug-no-checksum"]];
+function showRun(key) {
+  const run = R[key];
+  DST.$("#runpick").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === key));
+  DST.$("#player").innerHTML = "";
+  if (player) player.stop();
+  const startAt = key === "ok" ? run.crashes.indexOf(firstTorn) : run.crashes.length - 1;
+  player = new DST.Player("#player", {
+    count: run.crashes.length, speed: 1,
+    label: (i) => `crash #${run.crashes[i].n} / ${run.crashes.length} · tick ${run.crashes[i].tick}`,
+    onStep(i) {
+      const c = run.crashes[i];
+      for (const id of ["#strip", "#scan", "#stopfields"]) DST.$(id).innerHTML = "";
+      drawStrip("#strip", c);
+      DST.$("#scan").append(scanList(c));
+      DST.$("#stopfields").append(fieldTable(c));
+      DST.$("#crashlog").innerHTML = "";
+      c.lines.forEach((l) => DST.$("#crashlog").append(el("span", { class: /VIOLATED/.test(l) ? "f" : /TORN/.test(l) ? "k" : null }, l), "\n"));
+    },
+  });
+  player.go(startAt);
+}
+RUNS.forEach(([k, l]) => DST.$("#runpick").append(el("button", { "data-k": k, onclick: () => showRun(k) }, l)));
+showRun("ok");
+{
+  const col = { seq: C.accent, checksum: C.bug, parent: C.violet, other: C.warn };
+  const pts = R.ok.crashes.map((c) => [c.tick, c.recovered, `crash #${c.n} at tick ${c.tick}: ${c.recovered} records, stop: ${c.stop}`]);
+  const { svg, X, Y } = DST.line("#loglen", [{ name: "records recovered", color: C.accent2, points: pts }], { xlabel: "tick", ylabel: "records", height: 240 });
+  R.ok.crashes.forEach((c) => { const d = s("circle", { cx: X(c.tick), cy: Y(c.recovered), r: 4.5, fill: col[reasonShort(c.stop)] }); DST.tip(d, `crash #${c.n} at tick ${c.tick}: ${c.recovered} records (keep ${c.keep}%)\nstop: ${c.stop}`); svg.append(d); });
+  DST.$("#loglen").append(el("div", { class: "legend" }, ...Object.entries({ seq: "stop: unexpected seq", checksum: "stop: checksum (torn)", parent: "stop: parent" }).map(([k, l]) => el("span", {}, el("i", { class: "sw", style: { background: col[k] } }), l))));
+}
+
+// ---------- 04 bugs ----------
+{
+  const a = R.ack.crashes.at(-1), ra = a.unsynced.find((r) => a.violation.includes(`seq=${r.seq} `));
+  const sa = a.cache.filter((x) => x.sector >= ra.at && x.sector < ra.at + ra.n);
+  DST.$("#bugack").append(el("strong", {}, `Seed 0, crash #${a.n} (tick ${a.tick})`),
+    `seq ${ra.seq} sat in sectors ${ra.at}..${ra.at + ra.n - 1}, acked but not yet fsynced. The crash (keep ${a.keep}%) did: ${sa.map((x) => `${x.sector}=${x.kept ? "kept" : "dropped"}`).join(", ")}. Its header never reached the disk, so recovery stops at sector ${a.scanEnd} with ${a.recovered} records while the client holds ${a.acked} acks. ${a.violation.replace("INVARIANT VIOLATED: ", "Checker: ")}.`);
+  const b = R.nocrc.crashes.at(-1), rb = b.last.find((r) => r.crc === "crc_BAD");
+  const sb = b.cache.filter((x) => x.sector >= rb.at && x.sector < rb.at + rb.n);
+  DST.$("#bugcrc").append(el("strong", {}, `Seed 0, crash #${b.n} (tick ${b.tick})`),
+    `seq ${rb.seq} spans sectors ${rb.at}..${rb.at + rb.n - 1}: ${sb.map((x) => `${x.sector}=${x.kept ? "kept" : "dropped"}`).join(", ")}. The new header landed on stale payload. Without the checksum its seq/key/len look fine, so the stale bytes are replayed. ${b.violation.replace("INVARIANT VIOLATED: ", "Checker: ")}.`);
+  // side by side: same crash in correct run vs nocrc run
+  const ok = R.ok.crashes.find((c) => c.n === b.n);
+  const g = el("div", { class: "grid", style: { gap: "4px" } });
+  const col1 = el("div", {}, el("h4", { style: { margin: "0 0 4px", color: C.ok } }, `correct · crash #${ok.n}: ${ok.recovered} records, stop: ${ok.stop}`)), col2 = el("div", {}, el("h4", { style: { margin: "0 0 4px", color: C.bug } }, `--bug-no-checksum · crash #${b.n}: ${b.recovered} records, then FAIL`));
+  g.append(col1, col2); DST.$("#cmp").append(g);
+  drawStrip(col1, ok); drawStrip(col2, b);
+  DST.$("#cmp").append(el("div", { class: "cap" }, "Identical disk state (same seed, same crash), different recovery code. The left scan stops before the torn record. The right one replays it, then stops one record later on noise."));
+}
+
+// ---------- 05 charts ----------
+{
+  const h = {}; TSV.forEach((r) => (h[r.crashes] = (h[r.crashes] || 0) + 1));
+  const lo = Math.min(...TSV.map((r) => r.crashes)), hi = Math.max(...TSV.map((r) => r.crashes));
+  DST.line("#crashhist", [{ name: "seeds", color: C.accent, points: Array.from({ length: hi - lo + 3 }, (_, i) => [lo - 1 + i, h[lo - 1 + i] || 0]) }], { step: true, xlabel: "crashes in one seed (3000 ticks)", ylabel: "seeds", width: 520, height: 300 });
+  const tot = sum("sq") + sum("ck") + sum("pa") + sum("ot");
+  DST.bar("#stops", [
+    { label: "unexpected seq", value: sum("sq"), color: C.accent },
+    { label: "checksum (TORN)", value: sum("ck"), color: C.bug },
+    { label: "parent (stale)", value: sum("pa"), color: C.violet },
+    { label: "len/key/end", value: sum("ot"), color: C.warn },
+  ], { log: true, labelW: 150, width: 560, rowH: 34, fmt: (v) => `${v.toLocaleString()} (${((100 * v) / tot).toFixed(1)}%)` });
+  DST.$("#stops").append(el("div", { class: "cap" }, `log scale · ${tot.toLocaleString()} recoveries over ${TSV.length} seeds; ${TSV.filter((r) => r.result === "PASS").length} seeds PASS`));
+  DST.bar("#keptdrop", [{ label: "kept (applied)", value: sum("kept"), color: C.ok }, { label: "dropped", value: sum("dropped"), color: C.bug }], { labelW: 130, width: 560, rowH: 36 });
+  DST.$("#keptdrop").append(el("div", { class: "cap" }, `sum of applied= / dropped= over every crash line of seeds 0–${TSV.length - 1}`));
+  DST.line("#keeppct", [{ name: "keep %", color: C.warn, dots: true, points: R.ok.crashes.map((c) => [c.n, c.keep, `crash #${c.n}: keep ${c.keep}%, applied ${c.applied}, dropped ${c.dropped}`]) }], { xlabel: "crash #", ylabel: "keep %", ymax: 100, width: 520, height: 280 });
+}
+
+// ---------- 06 kill -9 vs power loss ----------
+{
+  const MODES = { kill: "kill -9 (process dies)", power: "power loss (machine dies)" };
+  function draw(mode) {
+    DST.$("#killpick").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === mode));
+    const W = 1000, H = 260, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+    const layer = (y, name, sub, col, dies) => {
+      const g = s("g");
+      g.append(s("rect", { x: 40, y, width: 520, height: 46, rx: 8, fill: C.panel2, stroke: dies ? C.bug : col, "stroke-width": 1.6, "stroke-dasharray": dies ? "5 3" : null }));
+      g.append(s("text", { x: 56, y: y + 20, fill: dies ? C.bug : C.text, "font-size": 13, "font-weight": 700 }, name));
+      g.append(s("text", { x: 56, y: y + 37, fill: C.muted, "font-size": 11, "font-family": MONO }, sub));
+      [0, 1, 2].forEach((k) => g.append(s("rect", { x: 420 + k * 42, y: y + 10, width: 36, height: 26, rx: 4, fill: dies ? "none" : col, stroke: col, opacity: dies ? 0.5 : 0.85 })));
+      if (dies) { g.append(s("text", { x: 590, y: y + 30, fill: C.bug, "font-size": 13, "font-weight": 700 }, "✕ lost")); g.classList.add("pulse"); }
+      else g.append(s("text", { x: 590, y: y + 30, fill: C.ok, "font-size": 13 }, "✓ survives"));
+      svg.append(g);
+    };
+    layer(10, "process (store)", "buffer → write() syscall", C.accent, true);
+    layer(70, "kernel page cache", "flushed later by the kernel", C.warn, mode === "power");
+    layer(130, "drive write cache", "firmware writes back in any order", C.warn, mode === "power");
+    layer(190, "platter / NAND (durable)", "what recovery reads after power-up", C.accent2, false);
+    svg.append(s("path", { d: "M500,56 V70 M500,116 V130 M500,176 V190", stroke: C.dim, "stroke-width": 2, class: "flow" }));
+    const msg = mode === "kill"
+      ? ["after restart, read() is served from the same", "page cache: every written record is whole.", "ack-before-fsync passes. No torn writes:", "write() is one step from a reader's view."]
+      : ["caches vanish. Sectors that the drive had", "not yet written back are gone, each on its", "own: a 3-sector record can be torn.", "This is what Disk.crash() simulates."];
+    msg.forEach((t, i) => svg.append(s("text", { x: 680, y: 60 + i * 22, fill: mode === "kill" ? C.ok : C.bug, "font-size": 13 }, t)));
+    DST.$("#kill").innerHTML = ""; DST.$("#kill").append(svg);
+    DST.$("#killcap").textContent = mode === "kill" ? "Pull the plug instead, and the two middle layers are lost too." : `The simulator does this ${sum("crashes").toLocaleString()} times across seeds 0–${TSV.length - 1}, at every point: mid-batch, mid-fsync, right after an ack.`;
+  }
+  Object.entries(MODES).forEach(([k, l]) => DST.$("#killpick").append(el("button", { "data-k": k, onclick: () => draw(k) }, l)));
+  draw("kill");
+}
+
+// ---------- 07 JS torn-write lab (re-implementation) ----------
+function jsLab(seed, mode) {
+  const r = DST.Rand(seed), base = 10;
+  const recs = [], nrec = 1 + r.int(4);
+  let at = base;
+  for (let i = 0; i < nrec; i++) { const len = 1 + r.int(160), n = Math.ceil((32 + len) / 64); recs.push({ seq: 6 + i, at, n, len }); at += n; }
+  const cache = []; recs.forEach((x) => { for (let k = 0; k < x.n; k++) cache.push({ sector: x.at + k, rec: x }); });
+  // background writeback for a few ticks before the crash
+  const wb = new Set(); const ticks = r.int(6);
+  for (let t = 0; t < ticks; t++) if (r.int(100) < 15 && cache.length) { const i = r.int(cache.length); wb.add(cache.splice(i, 1)[0].sector); }
+  const keep = r.int(101);
+  cache.forEach((c) => (c.kept = r.int(100) < keep));
+  const state = (sct) => (wb.has(sct) ? "wb" : cache.find((c) => c.sector === sct).kept ? "kept" : "dropped");
+  // recovery: header sector must be on disk for seq to match; full record must be on disk for the checksum
+  let replayed = 0, garbage = 0, stop = "";
+  for (const x of recs) {
+    const sts = Array.from({ length: x.n }, (_, k) => state(x.at + k));
+    if (sts[0] === "dropped") { stop = "unexpected seq (header sector lost)"; break; }
+    if (sts.includes("dropped")) { if (mode === "crc") { stop = "checksum mismatch (TORN record)"; break; } garbage++; }
+    replayed++;
+  }
+  if (!stop) stop = "unexpected seq (never written)";
+  const c = { tick: seed, keep, high: at, scanEnd: base + recs.slice(0, replayed).reduce((a, x) => a + x.n, 0), stop,
+    unsynced: recs.map((x) => ({ seq: x.seq, at: x.at, n: x.n })), cache: cache.map((x) => ({ sector: x.sector, kept: x.kept })),
+    last: recs.slice(0, replayed).map((x) => ({ seq: x.seq, at: x.at, n: x.n, crc: Array.from({ length: x.n }, (_, k) => state(x.at + k)).includes("dropped") ? "crc_BAD" : "crc_ok" })) };
+  return { c, recs, replayed, garbage, keep, wb: wb.size };
+}
+function jsShow() {
+  const seed = Math.max(0, Math.floor(+DST.$("#jsseed").value || 0)), mode = DST.$("#jsmode").value, x = jsLab(seed, mode);
+  DST.$("#jsstrip").innerHTML = "";
+  drawStrip("#jsstrip", x.c); // same renderer as the captured runs; sectors before 10 stand for the synced log
+  DST.$("#jsres").innerHTML = "";
+  DST.$("#jsres").append(el("b", { style: { color: x.garbage ? C.bug : C.ok } }, `JS seed=${seed}: replayed ${x.replayed}/${x.recs.length}, stop: ${x.c.stop}${x.garbage ? ` · ${x.garbage} GARBAGE record(s) replayed` : ""}`));
+  let torn = 0, lost = 0, whole = 0, gar = 0;
+  for (let sd = 0; sd < 1000; sd++) { const y = jsLab(sd, mode); gar += y.garbage ? 1 : 0; const d = drawFreeClass(y); torn += d.torn; lost += d.lost; whole += d.whole; }
+  DST.$("#jsstats").innerHTML = "";
+  const st = (n, l, col) => el("div", { class: "stat" }, el("div", { class: "num", style: { color: col } }, n), el("div", { class: "lbl" }, l));
+  DST.$("#jsstats").append(st(whole, "records kept whole (JS, 1000 seeds)", C.ok), st(lost, "records fully lost", C.dim), st(torn, "records torn", C.bug), st(gar, `seeds that replay garbage (${mode === "crc" ? "checksum on" : "no checksum"})`, gar ? C.bug : C.ok));
+}
+function drawFreeClass(y) {
+  let torn = 0, lost = 0, whole = 0;
+  const st = (sct) => { const c = y.c.cache.find((q) => q.sector === sct); return !c ? "wb" : c.kept ? "kept" : "dropped"; };
+  for (const x of y.recs) { const sts = Array.from({ length: x.n }, (_, k) => st(x.at + k)); if (sts.every((v) => v === "dropped")) lost++; else if (sts.includes("dropped")) torn++; else whole++; }
+  return { torn, lost, whole };
+}
+DST.$("#jsrun").addEventListener("click", jsShow);
+DST.$("#jsnext").addEventListener("click", () => { DST.$("#jsseed").value = +DST.$("#jsseed").value + 1; jsShow(); });
+DST.$("#jsmode").addEventListener("change", jsShow);
+DST.$("#jsseed").addEventListener("change", jsShow);
+{ let sd = 0; while (sd < 1000) { const y = jsLab(sd, "crc"); if (y.recs.length > 1 && drawFreeClass(y).torn) break; sd++; } DST.$("#jsseed").value = sd; }
+jsShow();
+
+// ---------- 08 determinism ----------
+{
+  const pair = (a, b, title) => {
+    const A = DST.text(a), B = DST.text(b), la = A.trim().split("\n").at(-1), lb = B.trim().split("\n").at(-1);
+    const card = el("div", { class: "card" }, el("h4", {}, title));
+    DST.term(card, `$ /tmp/dst04 ${title}\n${la}\n$ /tmp/dst04 ${title}   # again\n${lb}`, [[/^\$ /, "p"], [/FAIL$/, "f"], [/PASS$/, "k"]]);
+    card.append(el("div", { class: "callout " + (A === B ? "ok" : "bug") }, el("strong", {}, A === B ? "byte-identical" : "DIFFERENT"), `${A.length} bytes, ${A.trim().split("\n").length} lines in each capture.`));
+    return card;
+  };
+  DST.$("#det").append(pair("log-ack", "log-ack2", "run 0 --bug-ack-before-fsync"), pair("log-nocrc", "log-nocrc2", "run 0 --bug-no-checksum"));
+  const strip = (id) => DST.text(id).split("\n").filter((l) => !l.startsWith("  |")).join("\n");
+  const same = [["sec-ok", "log-ok"], ["sec-ack", "log-ack"], ["sec-nocrc", "log-nocrc"]].map(([a, b]) => strip(a) === DST.text(b));
+  DST.$("#flagproof").append(el("strong", {}, "--sectors only adds output"),
+    `With the "  |" lines removed, the three --sectors captures are ${same.every(Boolean) ? "byte-identical" : "NOT identical (" + same + ")"} to the plain runs, trace hashes included (${R.ok.trace}, ${R.ack.trace}, ${R.nocrc.trace}). The flag draws nothing from the PRNG and adds nothing to the trace.`);
+  const det = el("details", {}, el("summary", {}, "Raw captured output (all files embedded in this page)"));
+  for (const [id, t] of [["log-ok", "run 0"], ["log-ack", "run 0 --bug-ack-before-fsync"], ["log-nocrc", "run 0 --bug-no-checksum"], ["sec-nocrc", "run 0 --bug-no-checksum --sectors"], ["log-sweep", "time sweep 2000"], ["log-sweep-ack", "sweep 2000 --bug-ack-before-fsync"], ["log-sweep-nocrc", "sweep 2000 --bug-no-checksum"]]) {
+    det.append(el("h4", {}, "$ /tmp/dst04 " + t));
+    DST.term(det, DST.text(id), [[/VIOLATED|FAIL/, "f"], [/PASS/, "k"], [/TORN/, "hl"], [/^  \|/, "d"]]);
+  }
+  DST.$("#rawlogs").append(det);
+}
+</script>
+</body></html>

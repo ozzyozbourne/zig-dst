@@ -53,7 +53,11 @@ A typical wall-clock test looks like this:
 cache.put("k", v, ttl = 100ms); sleep(100ms); assert(cache.get("k") == null);
 ```
 
-That test almost never runs `get` at exactly `deadline`:
+Whether that test catches the off-by-one depends on the clock's resolution, and you can't rely on it
+either way. Measured on the orb (300 real runs: put with a 5 ms TTL, `time.sleep(5 ms)`, get;
+data in `site/data/02/sleep-test.tsv`): with a nanosecond clock, 0 of 300 gets landed exactly on the
+deadline; with the same timestamps truncated to milliseconds, 178 of 300 did. So the test either never
+sees the bug or sees it about 60% of the time, at random:
 
 - `sleep(d)` only promises to wait *at least* `d`. It overshoots by scheduler latency and timer
   slack (Linux's default timer slack alone is 50 µs; on a loaded CI box it can be milliseconds).
@@ -169,6 +173,13 @@ $ ./dst02 run 43 --bug
   step 99 t=54553218ms: get(8) = 856363089, want null (deadline 54553218ms)
 seed=43 steps=100 simulated=54553218ms trace=3895ccdfbbf7c6f1 FAIL
 ```
+
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--dump`: print each step's op, key, time and value, plus the cache's entries after the step.
+- `--no-target`: turn off the on_deadline / before_deadline clock advances.
 
 ## Exercises
 

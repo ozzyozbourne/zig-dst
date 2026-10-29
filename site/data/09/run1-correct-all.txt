@@ -1,0 +1,964 @@
+  faults: read=11% write=2% misdirect=13% rot=7%
+  atlas replica 0: .xx..xx.xx..xxxxxx.xxxxx.xxxxx..
+  atlas replica 1: x..xx.xx..xx...xxxx...x.xxxxxxxx
+  atlas replica 2: xxxxxx.xxxxxxxx...xxxx.xx.....xx
+  t=  1 append           replica=0 block= 0 2ab27bc9a0b66e5e
+  t=  2 append           replica=0 block= 1 fdd9bbe123f5b0c4
+  t=  3 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=  4 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=  5 fault_read_flip  replica=2 block= 0 8d
+  t=  5 repair           replica=2 block= 0 0
+  t=  5 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=  6 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=  7 fault_misdirect  replica=2 block= 2 1
+  t=  7 append           replica=0 block= 2 da65b7349b232257
+  t=  8 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t=  9 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 10 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 11 fault_read_flip  replica=1 block= 0 58
+  t= 11 repair           replica=1 block= 0 2
+  t= 11 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 12 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 13 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 14 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 15 repair           replica=2 block= 1 0
+  t= 15 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t= 16 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 17 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t= 18 fault_read_flip  replica=0 block= 2 12f
+  t= 18 repair           replica=0 block= 2 1
+  t= 18 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t= 19 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t= 20 repair           replica=2 block= 2 0
+  t= 20 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t= 21 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t= 22 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 23 fault_misdirect  replica=1 block= 3 0
+  t= 23 append           replica=0 block= 3 934cc6c6b822f8f9
+  t= 24 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t= 25 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t= 26 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t= 27 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t= 28 client_read      replica=2 block= 3 1dc5015b8efce634
+  t= 29 append           replica=0 block= 4 805df06be718d69a
+  t= 30 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 31 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t= 32 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 33 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t= 33 scrub_repair     replica=1 block= 3 0
+  t= 33 repair           replica=1 block= 3 2
+  t= 34 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t= 35 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t= 35 fault_rot        replica=2 block= 3 6d
+  t= 36 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 36 scrub_repair     replica=2 block= 3 0
+  t= 36 repair           replica=2 block= 3 0
+  t= 37 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 38 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 39 append           replica=0 block= 5 1c2288e9ae286fc7
+  t= 40 fault_read_flip  replica=2 block= 0 8a
+  t= 40 repair           replica=2 block= 0 0
+  t= 40 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 41 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t= 42 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t= 43 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 44 client_read      replica=0 block= 3 1dc5015b8efce634
+  t= 45 repair           replica=1 block= 0 2
+  t= 45 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 46 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 46 fault_rot        replica=2 block= 3 146
+  t= 47 append           replica=0 block= 6 ef031dd0dfa6e009
+  t= 48 client_read      replica=2 block= 6 7266dce1b00472db
+  t= 49 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t= 50 fault_misdirect  replica=2 block= 7 4
+  t= 50 append           replica=0 block= 7 d1f7f4800be84264
+  t= 51 append           replica=0 block= 8 8b8338eb4af12c2
+  t= 52 client_read      replica=2 block= 6 7266dce1b00472db
+  t= 53 client_read      replica=0 block= 6 7266dce1b00472db
+  t= 54 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t= 55 client_read      replica=2 block= 6 7266dce1b00472db
+  t= 56 client_read      replica=0 block= 4 e504166027953ce7
+  t= 57 client_read      replica=1 block= 4 e504166027953ce7
+  t= 58 repair           replica=2 block= 3 0
+  t= 58 client_read      replica=2 block= 3 1dc5015b8efce634
+  t= 59 client_read      replica=0 block= 5 1a5baf6791a30fc0
+  t= 60 client_read      replica=0 block= 6 7266dce1b00472db
+  t= 61 repair           replica=2 block= 7 0
+  t= 61 client_read      replica=2 block= 7 7d2604d04a4cfc34
+  t= 62 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t= 62 fault_rot        replica=2 block= 5 1bd
+  t= 63 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t= 64 repair           replica=2 block= 4 0
+  t= 64 client_read      replica=2 block= 4 e504166027953ce7
+  t= 65 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t= 66 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t= 67 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t= 68 fault_read_flip  replica=1 block= 3 123
+  t= 68 repair           replica=1 block= 3 2
+  t= 68 client_read      replica=1 block= 3 1dc5015b8efce634
+  t= 69 repair           replica=2 block= 5 0
+  t= 69 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t= 69 fault_read_flip  replica=1 block= 7 de
+  t= 69 scrub_repair     replica=1 block= 7 0
+  t= 69 repair           replica=1 block= 7 2
+  t= 70 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t= 71 fault_read_flip  replica=1 block= 7 13f
+  t= 71 repair           replica=1 block= 7 2
+  t= 71 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t= 72 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t= 73 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t= 74 client_read      replica=1 block= 4 e504166027953ce7
+  t= 75 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 76 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t= 77 client_read      replica=0 block= 6 7266dce1b00472db
+  t= 78 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t= 79 fault_read_flip  replica=1 block= 4 10c
+  t= 79 fault_read_flip  replica=2 block= 4 3
+  t= 79 repair           replica=1 block= 4 0
+  t= 79 client_read      replica=1 block= 4 e504166027953ce7
+  t= 80 fault_read_flip  replica=2 block= 5 e2
+  t= 80 repair           replica=2 block= 5 0
+  t= 80 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t= 81 fault_misdirect  replica=0 block= 9 6
+  t= 81 append           replica=0 block= 9 8a5e2f50a4a2547b
+  t= 82 fault_read_flip  replica=2 block= 2 123
+  t= 82 fault_read_flip  replica=0 block= 2 1d0
+  t= 82 repair           replica=2 block= 2 1
+  t= 82 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t= 83 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t= 84 client_read      replica=2 block= 4 e504166027953ce7
+  t= 84 scrub_repair     replica=0 block= 9 0
+  t= 84 repair           replica=0 block= 9 1
+  t= 85 client_read      replica=2 block= 4 e504166027953ce7
+  t= 86 append           replica=0 block=10 6e9a6ade24540bb4
+  t= 87 client_read      replica=0 block= 4 e504166027953ce7
+  t= 88 fault_read_flip  replica=0 block= 8 43
+  t= 88 repair           replica=0 block= 8 1
+  t= 88 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t= 89 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t= 90 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t= 90 fault_read_flip  replica=2 block= 9 1da
+  t= 90 scrub_repair     replica=2 block= 9 0
+  t= 90 repair           replica=2 block= 9 0
+  t= 91 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t= 92 append           replica=0 block=11 532dfe8aa857bfcc
+  t= 93 append           replica=0 block=12 bc7b887fa8db5d56
+  t= 94 client_read      replica=2 block= 3 1dc5015b8efce634
+  t= 95 client_read      replica=1 block= 3 1dc5015b8efce634
+  t= 96 repair           replica=0 block= 6 1
+  t= 96 client_read      replica=0 block= 6 7266dce1b00472db
+  t= 97 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t= 98 client_read      replica=2 block=10 339571450b87b768
+  t= 99 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t= 99 checkpoint       replica=0 block=13 409afbf2d163f03f
+  t=100 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t=101 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=102 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=103 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=104 client_read      replica=2 block= 7 7d2604d04a4cfc34
+  t=105 client_read      replica=0 block=11 b7602e053ac77b4d
+  t=106 client_read      replica=1 block= 4 e504166027953ce7
+  t=107 client_read      replica=1 block=10 339571450b87b768
+  t=108 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=109 client_read      replica=0 block=10 339571450b87b768
+  t=110 client_read      replica=2 block= 6 7266dce1b00472db
+  t=111 append           replica=0 block=13 9b741e4787d4ec7d
+  t=112 append           replica=0 block=14 66aec0777ac8c2dd
+  t=113 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t=114 append           replica=0 block=15 f5272d7d23ce1db3
+  t=115 client_read      replica=1 block= 4 e504166027953ce7
+  t=116 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=117 client_read      replica=2 block=12 37929b03ab025427
+  t=118 client_read      replica=0 block= 6 7266dce1b00472db
+  t=119 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=120 fault_misdirect  replica=0 block=16 8
+  t=120 fault_misdirect  replica=1 block=16 4
+  t=120 append           replica=0 block=16 7406ebd4c4aaf55a
+  t=121 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=122 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=123 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=123 fault_rot        replica=1 block= 6 3c
+  t=124 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=125 append           replica=0 block=17 23af9125224784de
+  t=126 fault_read_flip  replica=2 block=13 4b
+  t=126 fault_misdirect  replica=2 block=13 5
+  t=126 repair           replica=2 block=13 0
+  t=126 client_read      replica=2 block=13 60c6584cfff130cf
+  t=127 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t=128 append           replica=0 block=18 5853bdc9ce3e14bf
+  t=129 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=130 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=131 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=132 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=133 client_read      replica=2 block=11 b7602e053ac77b4d
+  t=134 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=135 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=136 client_read      replica=2 block=15 95b0a3a3257a02bd
+  t=137 client_read      replica=2 block=13 60c6584cfff130cf
+  t=138 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=138 fault_read_flip  replica=0 block=15 77
+  t=138 scrub_repair     replica=0 block=15 0
+  t=138 fault_misdirect  replica=0 block=15 6
+  t=138 repair           replica=0 block=15 1
+  t=139 client_read      replica=0 block=11 b7602e053ac77b4d
+  t=140 fault_misdirect  replica=2 block=19 a
+  t=140 append           replica=0 block=19 b254cb827cfe4e2e
+  t=141 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=142 repair           replica=2 block=10 0
+  t=142 client_read      replica=2 block=10 339571450b87b768
+  t=143 repair           replica=1 block= 4 2
+  t=143 client_read      replica=1 block= 4 e504166027953ce7
+  t=144 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=145 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=146 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=147 repair           replica=1 block= 6 2
+  t=147 client_read      replica=1 block= 6 7266dce1b00472db
+  t=147 scrub_repair     replica=0 block=16 0
+  t=147 fault_write_flip replica=0 block=16 18e
+  t=147 repair           replica=0 block=16 2
+  t=148 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t=148 fault_rot        replica=2 block=19 120
+  t=149 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=150 client_read      replica=0 block=19 a855300d5d43714d
+  t=150 scrub_repair     replica=1 block=16 0
+  t=150 repair           replica=1 block=16 2
+  t=151 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=152 repair           replica=2 block= 5 0
+  t=152 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=153 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=154 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=155 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=155 fault_rot        replica=0 block= 5 139
+  t=156 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=157 client_read      replica=0 block= 4 e504166027953ce7
+  t=158 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t=159 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=160 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=161 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=162 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=163 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=164 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=165 client_read      replica=1 block= 4 e504166027953ce7
+  t=166 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=167 fault_read_flip  replica=0 block= 5 69
+  t=167 repair           replica=0 block= 5 1
+  t=167 client_read      replica=0 block= 5 1a5baf6791a30fc0
+  t=168 append           replica=0 block=20 c4e4876eac64d55e
+  t=169 client_read      replica=2 block=15 95b0a3a3257a02bd
+  t=170 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=171 client_read      replica=0 block=15 95b0a3a3257a02bd
+  t=172 client_read      replica=0 block= 3 1dc5015b8efce634
+  t=173 client_read      replica=2 block=17 adbb96176974881a
+  t=174 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t=175 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=176 fault_misdirect  replica=0 block=21 5
+  t=176 fault_misdirect  replica=2 block=21 1
+  t=176 append           replica=0 block=21 510846844172142c
+  t=177 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=178 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=179 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=180 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=180 scrub_repair     replica=2 block=19 0
+  t=180 repair           replica=2 block=19 0
+  t=181 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=182 fault_read_flip  replica=0 block=17 15a
+  t=182 repair           replica=0 block=17 1
+  t=182 client_read      replica=0 block=17 adbb96176974881a
+  t=183 client_read      replica=0 block=17 adbb96176974881a
+  t=184 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=185 client_read      replica=2 block= 6 7266dce1b00472db
+  t=186 repair           replica=0 block=16 1
+  t=186 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=187 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=188 client_read      replica=0 block=10 339571450b87b768
+  t=189 client_read      replica=0 block=12 37929b03ab025427
+  t=190 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=190 fault_rot        replica=0 block= 8 8c
+  t=191 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=192 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=192 scrub_repair     replica=0 block=21 0
+  t=192 repair           replica=0 block=21 1
+  t=193 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=194 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=195 fault_misdirect  replica=0 block=22 11
+  t=195 append           replica=0 block=22 a6a40965de8778ac
+  t=196 client_read      replica=2 block=18 c0914b1be37175f6
+  t=197 append           replica=0 block=23 1d2258652e4591e4
+  t=198 append           replica=0 block=24 3c5ed4f3a7bc8372
+  t=198 scrub_repair     replica=2 block=21 0
+  t=198 repair           replica=2 block=21 0
+  t=199 client_read      replica=2 block=11 b7602e053ac77b4d
+  t=199 scrub_repair     replica=0 block= 5 0
+  t=199 repair           replica=0 block= 5 1
+  t=199 scrub_repair     replica=0 block= 6 0
+  t=199 repair           replica=0 block= 6 1
+  t=199 scrub_repair     replica=0 block= 8 0
+  t=199 repair           replica=0 block= 8 1
+  t=199 scrub_repair     replica=0 block=17 0
+  t=199 repair           replica=0 block=17 1
+  t=199 scrub_repair     replica=0 block=22 0
+  t=199 repair           replica=0 block=22 1
+  t=199 scrub_repair     replica=2 block= 1 0
+  t=199 repair           replica=2 block= 1 0
+  t=199 checkpoint       replica=0 block=25 d71c6d3eae21a6cd
+  t=200 client_read      replica=2 block=14 ab5ebc3bc6eb1a14
+  t=201 client_read      replica=0 block=23 a3e41dff26caf778
+  t=202 fault_read_flip  replica=0 block= 1 d9
+  t=202 repair           replica=0 block= 1 1
+  t=202 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t=203 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t=204 client_read      replica=0 block=21 836c72db48a64698
+  t=205 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=206 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=207 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=208 fault_read_flip  replica=1 block=15 1d1
+  t=208 repair           replica=1 block=15 2
+  t=208 client_read      replica=1 block=15 95b0a3a3257a02bd
+  t=209 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=210 client_read      replica=2 block=24 4f8e06535221b6e5
+  t=211 client_read      replica=0 block=23 a3e41dff26caf778
+  t=212 append           replica=0 block=25 4685c94c738b2d62
+  t=213 client_read      replica=1 block= 4 e504166027953ce7
+  t=214 client_read      replica=1 block=20 6d4d9e4470686fc7
+  t=215 client_read      replica=0 block=10 339571450b87b768
+  t=216 client_read      replica=0 block=13 60c6584cfff130cf
+  t=217 client_read      replica=0 block=19 a855300d5d43714d
+  t=217 fault_rot        replica=0 block=15 8f
+  t=218 append           replica=0 block=26 37e69e79e632d3cf
+  t=219 client_read      replica=2 block= 6 7266dce1b00472db
+  t=220 client_read      replica=1 block=25 8a2f680695b3674d
+  t=221 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=222 client_read      replica=0 block=13 60c6584cfff130cf
+  t=223 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=224 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t=225 append           replica=0 block=27 49507ab0c698ab70
+  t=226 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=227 client_read      replica=0 block= 6 7266dce1b00472db
+  t=228 client_read      replica=0 block=13 60c6584cfff130cf
+  t=229 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=229 fault_rot        replica=1 block= 4 15f
+  t=230 client_read      replica=2 block=26 e098211afd39e63b
+  t=231 client_read      replica=2 block=17 adbb96176974881a
+  t=232 client_read      replica=0 block=24 4f8e06535221b6e5
+  t=233 client_read      replica=0 block=12 37929b03ab025427
+  t=234 client_read      replica=2 block=11 b7602e053ac77b4d
+  t=235 fault_read_flip  replica=0 block=17 1ad
+  t=235 repair           replica=0 block=17 1
+  t=235 client_read      replica=0 block=17 adbb96176974881a
+  t=235 fault_rot        replica=1 block=25 18
+  t=236 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=237 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=237 fault_rot        replica=0 block=23 1f2
+  t=238 client_read      replica=0 block=19 a855300d5d43714d
+  t=239 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=240 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=240 fault_rot        replica=2 block= 5 1ab
+  t=241 client_read      replica=0 block=19 a855300d5d43714d
+  t=242 client_read      replica=1 block= 6 7266dce1b00472db
+  t=243 client_read      replica=0 block=11 b7602e053ac77b4d
+  t=244 client_read      replica=1 block=23 a3e41dff26caf778
+  t=244 fault_rot        replica=1 block=11 168
+  t=245 repair           replica=2 block= 5 0
+  t=245 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=246 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=247 append           replica=0 block=28 5667f8a5e04958ea
+  t=248 client_read      replica=0 block=13 60c6584cfff130cf
+  t=249 fault_misdirect  replica=1 block=29 f
+  t=249 append           replica=0 block=29 e399c0170f34a5a9
+  t=250 client_read      replica=0 block=20 6d4d9e4470686fc7
+  t=250 fault_rot        replica=1 block=26 162
+  t=251 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=252 client_read      replica=1 block=17 adbb96176974881a
+  t=253 append           replica=0 block=30 b648f660ac6df29a
+  t=254 client_read      replica=1 block=17 adbb96176974881a
+  t=255 fault_read_flip  replica=2 block= 3 19a
+  t=255 repair           replica=2 block= 3 0
+  t=255 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=256 client_read      replica=2 block=29 cfdcd34fc13fa0a1
+  t=257 client_read      replica=2 block=12 37929b03ab025427
+  t=258 client_read      replica=1 block=21 836c72db48a64698
+  t=258 fault_read_flip  replica=1 block=28 154
+  t=258 scrub_repair     replica=1 block=28 0
+  t=258 repair           replica=1 block=28 2
+  t=259 client_read      replica=1 block=10 339571450b87b768
+  t=260 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=261 append           replica=0 block=31 f8a141fcb315b16c
+  t=262 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=262 fault_rot        replica=0 block= 1 94
+  t=263 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t=264 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=265 client_read      replica=0 block=24 4f8e06535221b6e5
+  t=266 client_read      replica=0 block=13 60c6584cfff130cf
+  t=267 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=267 scrub_repair     replica=1 block=29 0
+  t=267 repair           replica=1 block=29 2
+  t=268 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=269 client_read      replica=2 block=13 60c6584cfff130cf
+  t=270 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=271 client_read      replica=1 block=31 29051e304574a6b0
+  t=272 client_read      replica=0 block=30 ea35c709b97898be
+  t=273 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=274 client_read      replica=2 block=17 adbb96176974881a
+  t=275 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=276 client_read      replica=1 block=18 c0914b1be37175f6
+  t=277 client_read      replica=2 block=25 8a2f680695b3674d
+  t=278 client_read      replica=0 block=31 29051e304574a6b0
+  t=279 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=280 client_read      replica=0 block=25 8a2f680695b3674d
+  t=281 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=282 client_read      replica=1 block=31 29051e304574a6b0
+  t=283 client_read      replica=2 block=30 ea35c709b97898be
+  t=284 client_read      replica=2 block=29 cfdcd34fc13fa0a1
+  t=285 client_read      replica=0 block=18 c0914b1be37175f6
+  t=286 client_read      replica=1 block=29 cfdcd34fc13fa0a1
+  t=287 client_read      replica=1 block=20 6d4d9e4470686fc7
+  t=288 client_read      replica=2 block=20 6d4d9e4470686fc7
+  t=289 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=290 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=291 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=292 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=293 client_read      replica=2 block=26 e098211afd39e63b
+  t=294 client_read      replica=0 block=17 adbb96176974881a
+  t=295 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=296 client_read      replica=2 block=17 adbb96176974881a
+  t=297 client_read      replica=1 block=30 ea35c709b97898be
+  t=298 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t=299 client_read      replica=1 block=31 29051e304574a6b0
+  t=299 scrub_repair     replica=0 block= 1 0
+  t=299 repair           replica=0 block= 1 1
+  t=299 scrub_repair     replica=0 block=15 0
+  t=299 repair           replica=0 block=15 2
+  t=299 scrub_repair     replica=0 block=23 0
+  t=299 repair           replica=0 block=23 1
+  t=299 scrub_repair     replica=1 block= 4 0
+  t=299 repair           replica=1 block= 4 2
+  t=299 scrub_repair     replica=1 block=11 0
+  t=299 repair           replica=1 block=11 2
+  t=299 scrub_repair     replica=1 block=15 0
+  t=299 repair           replica=1 block=15 2
+  t=299 scrub_repair     replica=1 block=25 0
+  t=299 repair           replica=1 block=25 2
+  t=299 scrub_repair     replica=1 block=26 0
+  t=299 repair           replica=1 block=26 2
+  t=299 checkpoint       replica=0 block=32 accd4585bff9d23a
+  t=300 client_read      replica=2 block=10 339571450b87b768
+  t=301 client_read      replica=0 block=15 95b0a3a3257a02bd
+  t=302 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=303 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=303 fault_rot        replica=1 block=18 3d
+  t=304 client_read      replica=1 block=13 60c6584cfff130cf
+  t=305 client_read      replica=0 block=22 d917e3f1e168693e
+  t=306 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=306 fault_read_flip  replica=2 block= 1 1ad
+  t=306 scrub_repair     replica=2 block= 1 0
+  t=306 repair           replica=2 block= 1 0
+  t=307 client_read      replica=0 block=11 b7602e053ac77b4d
+  t=308 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=309 client_read      replica=0 block=24 4f8e06535221b6e5
+  t=310 client_read      replica=1 block=12 37929b03ab025427
+  t=311 client_read      replica=2 block=31 29051e304574a6b0
+  t=312 client_read      replica=2 block=17 adbb96176974881a
+  t=313 client_read      replica=1 block=10 339571450b87b768
+  t=314 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=315 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=315 fault_read_flip  replica=2 block= 2 b1
+  t=315 scrub_repair     replica=2 block= 2 0
+  t=315 fault_read_flip  replica=0 block= 2 10c
+  t=315 repair           replica=2 block= 2 1
+  t=316 client_read      replica=1 block=15 95b0a3a3257a02bd
+  t=317 client_read      replica=1 block=20 6d4d9e4470686fc7
+  t=318 fault_read_flip  replica=1 block=15 103
+  t=318 repair           replica=1 block=15 2
+  t=318 client_read      replica=1 block=15 95b0a3a3257a02bd
+  t=319 client_read      replica=2 block=27 2933ae445c41cf1b
+  t=320 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=321 client_read      replica=0 block=21 836c72db48a64698
+  t=322 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=323 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=324 client_read      replica=1 block=20 6d4d9e4470686fc7
+  t=325 client_read      replica=1 block=22 d917e3f1e168693e
+  t=326 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=327 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=328 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=329 client_read      replica=0 block=25 8a2f680695b3674d
+  t=330 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=331 client_read      replica=1 block=30 ea35c709b97898be
+  t=332 client_read      replica=1 block=21 836c72db48a64698
+  t=333 fault_read_flip  replica=0 block=16 197
+  t=333 repair           replica=0 block=16 1
+  t=333 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=333 fault_rot        replica=0 block=23 13e
+  t=334 client_read      replica=0 block=19 a855300d5d43714d
+  t=335 client_read      replica=2 block=26 e098211afd39e63b
+  t=336 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=337 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=338 client_read      replica=1 block=25 8a2f680695b3674d
+  t=339 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=339 fault_rot        replica=1 block=27 19f
+  t=340 client_read      replica=2 block=22 d917e3f1e168693e
+  t=341 fault_read_flip  replica=2 block= 8 131
+  t=341 fault_misdirect  replica=2 block= 8 4
+  t=341 repair           replica=2 block= 8 0
+  t=341 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=342 client_read      replica=0 block=10 339571450b87b768
+  t=342 fault_read_flip  replica=2 block= 5 61
+  t=342 scrub_repair     replica=2 block= 5 0
+  t=342 repair           replica=2 block= 5 0
+  t=343 client_read      replica=2 block=21 836c72db48a64698
+  t=344 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=345 client_read      replica=1 block= 6 7266dce1b00472db
+  t=346 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t=347 client_read      replica=2 block=30 ea35c709b97898be
+  t=348 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=349 client_read      replica=0 block=19 a855300d5d43714d
+  t=350 client_read      replica=0 block=31 29051e304574a6b0
+  t=351 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=352 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=353 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=353 fault_rot        replica=2 block= 8 150
+  t=354 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t=355 client_read      replica=2 block=10 339571450b87b768
+  t=356 client_read      replica=0 block=21 836c72db48a64698
+  t=357 client_read      replica=2 block=15 95b0a3a3257a02bd
+  t=358 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=359 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=360 client_read      replica=1 block=23 a3e41dff26caf778
+  t=360 fault_read_flip  replica=2 block= 7 1e2
+  t=360 scrub_repair     replica=2 block= 7 0
+  t=360 repair           replica=2 block= 7 0
+  t=361 client_read      replica=0 block=29 cfdcd34fc13fa0a1
+  t=362 client_read      replica=1 block=23 a3e41dff26caf778
+  t=363 client_read      replica=2 block=11 b7602e053ac77b4d
+  t=363 fault_read_flip  replica=0 block= 8 10f
+  t=363 scrub_repair     replica=0 block= 8 0
+  t=363 repair           replica=0 block= 8 1
+  t=364 client_read      replica=0 block=17 adbb96176974881a
+  t=365 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=366 client_read      replica=1 block=12 37929b03ab025427
+  t=367 client_read      replica=2 block=14 ab5ebc3bc6eb1a14
+  t=368 client_read      replica=1 block=17 adbb96176974881a
+  t=369 client_read      replica=1 block=22 d917e3f1e168693e
+  t=369 scrub_repair     replica=2 block= 8 0
+  t=369 repair           replica=2 block= 8 0
+  t=370 client_read      replica=1 block=30 ea35c709b97898be
+  t=371 client_read      replica=2 block=31 29051e304574a6b0
+  t=371 fault_rot        replica=0 block= 6 ed
+  t=372 client_read      replica=1 block=15 95b0a3a3257a02bd
+  t=373 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=373 fault_rot        replica=2 block=20 ea
+  t=374 repair           replica=0 block=23 1
+  t=374 client_read      replica=0 block=23 a3e41dff26caf778
+  t=375 client_read      replica=0 block=13 60c6584cfff130cf
+  t=376 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=377 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=378 client_read      replica=1 block= 6 7266dce1b00472db
+  t=379 client_read      replica=1 block= 4 e504166027953ce7
+  t=380 client_read      replica=0 block=13 60c6584cfff130cf
+  t=381 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t=382 client_read      replica=2 block= 6 7266dce1b00472db
+  t=383 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t=383 fault_rot        replica=1 block=24 7a
+  t=384 client_read      replica=1 block=25 8a2f680695b3674d
+  t=385 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=386 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=387 client_read      replica=0 block=25 8a2f680695b3674d
+  t=388 fault_read_flip  replica=2 block=18 16c
+  t=388 repair           replica=2 block=18 0
+  t=388 client_read      replica=2 block=18 c0914b1be37175f6
+  t=389 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=390 client_read      replica=2 block=18 c0914b1be37175f6
+  t=391 client_read      replica=2 block=17 adbb96176974881a
+  t=392 client_read      replica=0 block=17 adbb96176974881a
+  t=393 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=394 fault_misdirect  replica=2 block= 4 8
+  t=394 repair           replica=2 block= 4 0
+  t=394 client_read      replica=2 block= 4 e504166027953ce7
+  t=395 client_read      replica=2 block= 7 7d2604d04a4cfc34
+  t=396 client_read      replica=2 block=25 8a2f680695b3674d
+  t=397 client_read      replica=2 block=24 4f8e06535221b6e5
+  t=398 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t=399 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t=399 fault_read_flip  replica=0 block=12 19d
+  t=399 scrub_repair     replica=0 block=12 0
+  t=399 repair           replica=0 block=12 1
+  t=399 scrub_repair     replica=0 block= 6 0
+  t=399 repair           replica=0 block= 6 1
+  t=399 scrub_repair     replica=1 block=18 0
+  t=399 repair           replica=1 block=18 2
+  t=399 scrub_repair     replica=1 block=24 0
+  t=399 repair           replica=1 block=24 2
+  t=399 scrub_repair     replica=1 block=27 0
+  t=399 repair           replica=1 block=27 2
+  t=399 scrub_repair     replica=2 block= 4 0
+  t=399 repair           replica=2 block= 4 0
+  t=399 scrub_repair     replica=2 block= 8 0
+  t=399 repair           replica=2 block= 8 0
+  t=399 scrub_repair     replica=2 block=20 0
+  t=399 repair           replica=2 block=20 0
+  t=399 checkpoint       replica=0 block=32 accd4585bff9d23a
+  t=400 client_read      replica=0 block=30 ea35c709b97898be
+  t=401 client_read      replica=1 block=12 37929b03ab025427
+  t=402 client_read      replica=2 block=18 c0914b1be37175f6
+  t=403 client_read      replica=1 block=18 c0914b1be37175f6
+  t=404 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=405 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=406 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=407 client_read      replica=2 block= 7 7d2604d04a4cfc34
+  t=407 fault_rot        replica=1 block=29 e3
+  t=408 client_read      replica=2 block=19 a855300d5d43714d
+  t=409 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=410 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t=411 fault_read_flip  replica=1 block=25 a
+  t=411 repair           replica=1 block=25 2
+  t=411 client_read      replica=1 block=25 8a2f680695b3674d
+  t=412 client_read      replica=1 block=17 adbb96176974881a
+  t=413 fault_read_flip  replica=1 block= 7 197
+  t=413 repair           replica=1 block= 7 2
+  t=413 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t=414 client_read      replica=1 block=23 a3e41dff26caf778
+  t=415 client_read      replica=0 block=25 8a2f680695b3674d
+  t=416 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=417 client_read      replica=2 block=23 a3e41dff26caf778
+  t=418 client_read      replica=0 block= 4 e504166027953ce7
+  t=419 client_read      replica=0 block= 6 7266dce1b00472db
+  t=420 client_read      replica=0 block=31 29051e304574a6b0
+  t=421 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=422 fault_read_flip  replica=1 block=27 1ce
+  t=422 fault_misdirect  replica=1 block=27 6
+  t=422 repair           replica=1 block=27 2
+  t=422 client_read      replica=1 block=27 2933ae445c41cf1b
+  t=423 client_read      replica=1 block=13 60c6584cfff130cf
+  t=424 client_read      replica=0 block=12 37929b03ab025427
+  t=425 client_read      replica=1 block=18 c0914b1be37175f6
+  t=426 client_read      replica=2 block=17 adbb96176974881a
+  t=427 client_read      replica=1 block=10 339571450b87b768
+  t=428 fault_read_flip  replica=1 block=15 156
+  t=428 repair           replica=1 block=15 2
+  t=428 client_read      replica=1 block=15 95b0a3a3257a02bd
+  t=429 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=430 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=431 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=432 client_read      replica=1 block=20 6d4d9e4470686fc7
+  t=433 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=434 client_read      replica=2 block=12 37929b03ab025427
+  t=435 client_read      replica=2 block=25 8a2f680695b3674d
+  t=436 client_read      replica=0 block=10 339571450b87b768
+  t=437 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=438 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=439 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=440 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=441 client_read      replica=2 block=26 e098211afd39e63b
+  t=442 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=443 client_read      replica=0 block=23 a3e41dff26caf778
+  t=444 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=445 client_read      replica=2 block=21 836c72db48a64698
+  t=446 client_read      replica=1 block=12 37929b03ab025427
+  t=447 client_read      replica=0 block=29 cfdcd34fc13fa0a1
+  t=448 client_read      replica=0 block=29 cfdcd34fc13fa0a1
+  t=449 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=450 client_read      replica=1 block=23 a3e41dff26caf778
+  t=451 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t=452 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=453 client_read      replica=2 block=22 d917e3f1e168693e
+  t=454 fault_read_flip  replica=0 block=16 19f
+  t=454 repair           replica=0 block=16 1
+  t=454 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=455 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=456 client_read      replica=1 block=21 836c72db48a64698
+  t=457 client_read      replica=2 block=13 60c6584cfff130cf
+  t=457 fault_rot        replica=1 block= 4 73
+  t=458 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=459 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=459 fault_read_flip  replica=2 block=18 55
+  t=459 scrub_repair     replica=2 block=18 0
+  t=459 repair           replica=2 block=18 0
+  t=460 client_read      replica=0 block=31 29051e304574a6b0
+  t=461 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=462 fault_read_flip  replica=0 block=25 d7
+  t=462 repair           replica=0 block=25 1
+  t=462 client_read      replica=0 block=25 8a2f680695b3674d
+  t=463 client_read      replica=0 block=22 d917e3f1e168693e
+  t=464 client_read      replica=1 block=18 c0914b1be37175f6
+  t=465 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=466 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=467 client_read      replica=0 block=30 ea35c709b97898be
+  t=468 client_read      replica=0 block=11 b7602e053ac77b4d
+  t=469 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=470 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=471 client_read      replica=2 block=10 339571450b87b768
+  t=472 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=473 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=474 client_read      replica=0 block= 4 e504166027953ce7
+  t=475 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=475 fault_rot        replica=1 block= 4 1cd
+  t=476 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=477 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=478 client_read      replica=2 block=29 cfdcd34fc13fa0a1
+  t=479 client_read      replica=2 block=22 d917e3f1e168693e
+  t=480 client_read      replica=0 block=10 339571450b87b768
+  t=480 fault_rot        replica=2 block=21 1f3
+  t=481 client_read      replica=2 block=29 cfdcd34fc13fa0a1
+  t=482 client_read      replica=2 block= 7 7d2604d04a4cfc34
+  t=483 repair           replica=1 block= 4 2
+  t=483 client_read      replica=1 block= 4 e504166027953ce7
+  t=484 client_read      replica=2 block=15 95b0a3a3257a02bd
+  t=485 client_read      replica=0 block= 6 7266dce1b00472db
+  t=486 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=486 scrub_repair     replica=2 block=21 0
+  t=486 repair           replica=2 block=21 0
+  t=487 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=488 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=489 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=490 fault_read_flip  replica=0 block=22 8b
+  t=490 repair           replica=0 block=22 1
+  t=490 client_read      replica=0 block=22 d917e3f1e168693e
+  t=491 client_read      replica=2 block=24 4f8e06535221b6e5
+  t=492 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=493 client_read      replica=2 block= 6 7266dce1b00472db
+  t=494 client_read      replica=2 block=11 b7602e053ac77b4d
+  t=495 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=496 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=496 fault_rot        replica=0 block=17 56
+  t=497 client_read      replica=0 block= 5 1a5baf6791a30fc0
+  t=498 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=499 client_read      replica=1 block=10 339571450b87b768
+  t=499 scrub_repair     replica=0 block=17 0
+  t=499 repair           replica=0 block=17 1
+  t=499 scrub_repair     replica=1 block= 6 0
+  t=499 repair           replica=1 block= 6 2
+  t=499 scrub_repair     replica=1 block=29 0
+  t=499 repair           replica=1 block=29 2
+  t=499 checkpoint       replica=0 block=32 accd4585bff9d23a
+  t=500 client_read      replica=0 block=15 95b0a3a3257a02bd
+  t=501 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=502 client_read      replica=1 block=12 37929b03ab025427
+  t=503 client_read      replica=0 block=10 339571450b87b768
+  t=504 client_read      replica=1 block=25 8a2f680695b3674d
+  t=505 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=506 client_read      replica=0 block=26 e098211afd39e63b
+  t=507 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=508 client_read      replica=1 block=30 ea35c709b97898be
+  t=509 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=510 client_read      replica=0 block=13 60c6584cfff130cf
+  t=511 client_read      replica=0 block=24 4f8e06535221b6e5
+  t=512 client_read      replica=2 block=12 37929b03ab025427
+  t=513 client_read      replica=2 block=18 c0914b1be37175f6
+  t=513 fault_read_flip  replica=2 block=24 10
+  t=513 scrub_repair     replica=2 block=24 0
+  t=513 repair           replica=2 block=24 0
+  t=514 client_read      replica=2 block=23 a3e41dff26caf778
+  t=515 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=516 client_read      replica=2 block=24 4f8e06535221b6e5
+  t=517 client_read      replica=0 block=15 95b0a3a3257a02bd
+  t=517 fault_rot        replica=2 block=13 a0
+  t=518 fault_read_flip  replica=2 block=30 1fa
+  t=518 repair           replica=2 block=30 0
+  t=518 client_read      replica=2 block=30 ea35c709b97898be
+  t=519 client_read      replica=0 block=19 a855300d5d43714d
+  t=520 client_read      replica=2 block=12 37929b03ab025427
+  t=521 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=522 client_read      replica=0 block=29 cfdcd34fc13fa0a1
+  t=523 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=524 client_read      replica=2 block=26 e098211afd39e63b
+  t=525 client_read      replica=1 block=17 adbb96176974881a
+  t=526 client_read      replica=1 block=30 ea35c709b97898be
+  t=527 client_read      replica=0 block=31 29051e304574a6b0
+  t=528 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=529 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=530 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=531 client_read      replica=2 block=17 adbb96176974881a
+  t=532 client_read      replica=2 block=30 ea35c709b97898be
+  t=533 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=534 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=535 client_read      replica=0 block=21 836c72db48a64698
+  t=536 client_read      replica=1 block= 4 e504166027953ce7
+  t=537 client_read      replica=1 block= 4 e504166027953ce7
+  t=538 repair           replica=2 block=13 0
+  t=538 client_read      replica=2 block=13 60c6584cfff130cf
+  t=539 client_read      replica=2 block=25 8a2f680695b3674d
+  t=540 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=541 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=542 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=543 client_read      replica=2 block=19 a855300d5d43714d
+  t=544 client_read      replica=0 block=21 836c72db48a64698
+  t=545 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=546 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=546 fault_read_flip  replica=1 block=28 1b1
+  t=546 scrub_repair     replica=1 block=28 0
+  t=546 repair           replica=1 block=28 2
+  t=547 client_read      replica=0 block=17 adbb96176974881a
+  t=548 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=549 client_read      replica=0 block=31 29051e304574a6b0
+  t=550 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=551 client_read      replica=0 block=15 95b0a3a3257a02bd
+  t=552 client_read      replica=1 block=10 339571450b87b768
+  t=552 fault_rot        replica=1 block=18 176
+  t=553 client_read      replica=0 block=31 29051e304574a6b0
+  t=554 client_read      replica=2 block= 4 e504166027953ce7
+  t=555 client_read      replica=1 block=10 339571450b87b768
+  t=556 fault_read_flip  replica=2 block=19 184
+  t=556 repair           replica=2 block=19 0
+  t=556 client_read      replica=2 block=19 a855300d5d43714d
+  t=557 client_read      replica=1 block=10 339571450b87b768
+  t=558 fault_read_flip  replica=2 block= 3 aa
+  t=558 repair           replica=2 block= 3 0
+  t=558 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=559 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=560 client_read      replica=1 block=12 37929b03ab025427
+  t=561 client_read      replica=0 block= 3 1dc5015b8efce634
+  t=562 client_read      replica=2 block=10 339571450b87b768
+  t=563 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=564 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=565 client_read      replica=0 block=19 a855300d5d43714d
+  t=566 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=567 client_read      replica=0 block= 6 7266dce1b00472db
+  t=568 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=569 fault_read_flip  replica=2 block= 4 80
+  t=569 repair           replica=2 block= 4 0
+  t=569 client_read      replica=2 block= 4 e504166027953ce7
+  t=570 fault_read_flip  replica=0 block= 9 ab
+  t=570 fault_misdirect  replica=0 block= 9 d
+  t=570 repair           replica=0 block= 9 1
+  t=570 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=571 client_read      replica=0 block=22 d917e3f1e168693e
+  t=572 client_read      replica=2 block=27 2933ae445c41cf1b
+  t=573 client_read      replica=2 block=18 c0914b1be37175f6
+  t=574 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=575 client_read      replica=0 block=19 a855300d5d43714d
+  t=576 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=577 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=578 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=579 fault_read_flip  replica=2 block=31 12
+  t=579 repair           replica=2 block=31 0
+  t=579 client_read      replica=2 block=31 29051e304574a6b0
+  t=580 client_read      replica=2 block= 4 e504166027953ce7
+  t=580 fault_rot        replica=1 block=26 184
+  t=581 client_read      replica=1 block=12 37929b03ab025427
+  t=582 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=583 client_read      replica=1 block=30 ea35c709b97898be
+  t=583 fault_rot        replica=2 block=10 84
+  t=584 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=585 client_read      replica=0 block=18 c0914b1be37175f6
+  t=586 client_read      replica=0 block=21 836c72db48a64698
+  t=587 repair           replica=1 block=18 2
+  t=587 client_read      replica=1 block=18 c0914b1be37175f6
+  t=588 client_read      replica=2 block=23 a3e41dff26caf778
+  t=589 client_read      replica=0 block=24 4f8e06535221b6e5
+  t=590 client_read      replica=2 block=21 836c72db48a64698
+  t=591 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=592 repair           replica=1 block=26 2
+  t=592 client_read      replica=1 block=26 e098211afd39e63b
+  t=593 fault_read_flip  replica=1 block=28 1bf
+  t=593 fault_misdirect  replica=1 block=28 19
+  t=593 repair           replica=1 block=28 2
+  t=593 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=594 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=595 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=596 client_read      replica=1 block=12 37929b03ab025427
+  t=597 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=598 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=599 repair           replica=1 block=25 2
+  t=599 client_read      replica=1 block=25 8a2f680695b3674d
+  t=599 scrub_repair     replica=0 block=13 0
+  t=599 repair           replica=0 block=13 1
+  t=599 scrub_repair     replica=2 block=10 0
+  t=599 repair           replica=2 block=10 0
+  t=599 checkpoint       replica=0 block=32 accd4585bff9d23a
+  t=600 checkpoint       replica=0 block=32 accd4585bff9d23a
+  t=600 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=600 client_read      replica=0 block= 1 bd90bfb3338f92d4
+  t=600 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t=600 client_read      replica=0 block= 3 1dc5015b8efce634
+  t=600 client_read      replica=0 block= 4 e504166027953ce7
+  t=600 client_read      replica=0 block= 5 1a5baf6791a30fc0
+  t=600 client_read      replica=0 block= 6 7266dce1b00472db
+  t=600 client_read      replica=0 block= 7 7d2604d04a4cfc34
+  t=600 client_read      replica=0 block= 8 9e4e5b2870d9ba87
+  t=600 client_read      replica=0 block= 9 cea4bfb6db13e623
+  t=600 client_read      replica=0 block=10 339571450b87b768
+  t=600 client_read      replica=0 block=11 b7602e053ac77b4d
+  t=600 client_read      replica=0 block=12 37929b03ab025427
+  t=600 client_read      replica=0 block=13 60c6584cfff130cf
+  t=600 client_read      replica=0 block=14 ab5ebc3bc6eb1a14
+  t=600 client_read      replica=0 block=15 95b0a3a3257a02bd
+  t=600 client_read      replica=0 block=16 ed8cc0c728accaec
+  t=600 client_read      replica=0 block=17 adbb96176974881a
+  t=600 client_read      replica=0 block=18 c0914b1be37175f6
+  t=600 client_read      replica=0 block=19 a855300d5d43714d
+  t=600 client_read      replica=0 block=20 6d4d9e4470686fc7
+  t=600 client_read      replica=0 block=21 836c72db48a64698
+  t=600 client_read      replica=0 block=22 d917e3f1e168693e
+  t=600 client_read      replica=0 block=23 a3e41dff26caf778
+  t=600 client_read      replica=0 block=24 4f8e06535221b6e5
+  t=600 client_read      replica=0 block=25 8a2f680695b3674d
+  t=600 client_read      replica=0 block=26 e098211afd39e63b
+  t=600 client_read      replica=0 block=27 2933ae445c41cf1b
+  t=600 client_read      replica=0 block=28 7d8c7bd0ff0aab
+  t=600 client_read      replica=0 block=29 cfdcd34fc13fa0a1
+  t=600 client_read      replica=0 block=30 ea35c709b97898be
+  t=600 client_read      replica=0 block=31 29051e304574a6b0
+  t=600 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=600 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=600 client_read      replica=1 block= 2 b1614d3d1c927e34
+  t=600 client_read      replica=1 block= 3 1dc5015b8efce634
+  t=600 client_read      replica=1 block= 4 e504166027953ce7
+  t=600 client_read      replica=1 block= 5 1a5baf6791a30fc0
+  t=600 client_read      replica=1 block= 6 7266dce1b00472db
+  t=600 client_read      replica=1 block= 7 7d2604d04a4cfc34
+  t=600 client_read      replica=1 block= 8 9e4e5b2870d9ba87
+  t=600 client_read      replica=1 block= 9 cea4bfb6db13e623
+  t=600 client_read      replica=1 block=10 339571450b87b768
+  t=600 client_read      replica=1 block=11 b7602e053ac77b4d
+  t=600 client_read      replica=1 block=12 37929b03ab025427
+  t=600 client_read      replica=1 block=13 60c6584cfff130cf
+  t=600 client_read      replica=1 block=14 ab5ebc3bc6eb1a14
+  t=600 client_read      replica=1 block=15 95b0a3a3257a02bd
+  t=600 client_read      replica=1 block=16 ed8cc0c728accaec
+  t=600 client_read      replica=1 block=17 adbb96176974881a
+  t=600 client_read      replica=1 block=18 c0914b1be37175f6
+  t=600 client_read      replica=1 block=19 a855300d5d43714d
+  t=600 client_read      replica=1 block=20 6d4d9e4470686fc7
+  t=600 client_read      replica=1 block=21 836c72db48a64698
+  t=600 client_read      replica=1 block=22 d917e3f1e168693e
+  t=600 client_read      replica=1 block=23 a3e41dff26caf778
+  t=600 client_read      replica=1 block=24 4f8e06535221b6e5
+  t=600 client_read      replica=1 block=25 8a2f680695b3674d
+  t=600 client_read      replica=1 block=26 e098211afd39e63b
+  t=600 client_read      replica=1 block=27 2933ae445c41cf1b
+  t=600 client_read      replica=1 block=28 7d8c7bd0ff0aab
+  t=600 client_read      replica=1 block=29 cfdcd34fc13fa0a1
+  t=600 client_read      replica=1 block=30 ea35c709b97898be
+  t=600 client_read      replica=1 block=31 29051e304574a6b0
+  t=600 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=600 client_read      replica=2 block= 1 bd90bfb3338f92d4
+  t=600 client_read      replica=2 block= 2 b1614d3d1c927e34
+  t=600 client_read      replica=2 block= 3 1dc5015b8efce634
+  t=600 client_read      replica=2 block= 4 e504166027953ce7
+  t=600 client_read      replica=2 block= 5 1a5baf6791a30fc0
+  t=600 client_read      replica=2 block= 6 7266dce1b00472db
+  t=600 client_read      replica=2 block= 7 7d2604d04a4cfc34
+  t=600 client_read      replica=2 block= 8 9e4e5b2870d9ba87
+  t=600 client_read      replica=2 block= 9 cea4bfb6db13e623
+  t=600 client_read      replica=2 block=10 339571450b87b768
+  t=600 client_read      replica=2 block=11 b7602e053ac77b4d
+  t=600 client_read      replica=2 block=12 37929b03ab025427
+  t=600 client_read      replica=2 block=13 60c6584cfff130cf
+  t=600 client_read      replica=2 block=14 ab5ebc3bc6eb1a14
+  t=600 client_read      replica=2 block=15 95b0a3a3257a02bd
+  t=600 client_read      replica=2 block=16 ed8cc0c728accaec
+  t=600 client_read      replica=2 block=17 adbb96176974881a
+  t=600 client_read      replica=2 block=18 c0914b1be37175f6
+  t=600 client_read      replica=2 block=19 a855300d5d43714d
+  t=600 client_read      replica=2 block=20 6d4d9e4470686fc7
+  t=600 client_read      replica=2 block=21 836c72db48a64698
+  t=600 client_read      replica=2 block=22 d917e3f1e168693e
+  t=600 client_read      replica=2 block=23 a3e41dff26caf778
+  t=600 client_read      replica=2 block=24 4f8e06535221b6e5
+  t=600 client_read      replica=2 block=25 8a2f680695b3674d
+  t=600 client_read      replica=2 block=26 e098211afd39e63b
+  t=600 client_read      replica=2 block=27 2933ae445c41cf1b
+  t=600 client_read      replica=2 block=28 7d8c7bd0ff0aab
+  t=600 client_read      replica=2 block=29 cfdcd34fc13fa0a1
+  t=600 client_read      replica=2 block=30 ea35c709b97898be
+  t=600 client_read      replica=2 block=31 29051e304574a6b0
+seed=1 trace=b33ae975aeb47d6b PASS

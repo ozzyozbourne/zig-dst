@@ -1,0 +1,4 @@
+  dump seed=0 step=0 roll_a=2 a=924233 roll_b=91 b=343514 got=633873 want=633873
+  dump seed=0 step=1 roll_a=42 a=274594 roll_b=99 b=4294967283 got=137290 want=2147620938
+  step 1: average(274594, 4294967283) = 137290, want 2147620938
+seed=0 steps=2 trace=5e8db608ab3a4b37 FAIL

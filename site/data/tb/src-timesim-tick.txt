@@ -1,0 +1,10 @@
+    pub fn tick(self: *TimeSim) void {
+        self.ticks += 1;
+        self.monotonic.ns = self.ticks * self.tick_duration.ns;
+        const realtime_value: i64 = @as(i64, @intCast(self.realtime_epoch.ns)) +
+            @as(i64, @intCast(self.monotonic.ns));
+        const offset_value = self.offset(self.ticks);
+        assert(offset_value < realtime_value);
+
+        self.realtime.ns = @intCast(realtime_value - offset_value);
+    }

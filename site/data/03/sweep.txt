@@ -1,0 +1,5 @@
+PASS: 1000000 seeds
+
+real	0m5.147s
+user	0m4.142s
+sys	0m0.004s

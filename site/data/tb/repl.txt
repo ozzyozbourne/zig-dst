@@ -1,0 +1,32 @@
+$ ./tigerbeetle repl --cluster=0 --addresses=3000 --command="lookup_accounts id=1, id=2;"
+2026-10-29 18:52:28.506Z warning(io): TCP receive buffer is smaller than requested: requested=4194304 effective=212992
+2026-10-29 18:52:28.506Z warning(io): TCP send buffer is smaller than requested: requested=2097152 effective=212992
+2026-10-29 18:52:28.596Z info(message_bus): 186380486177899198827279501286949237364: on_connect: connected to=0
+{
+  "id": "1",
+  "debits_pending": "0",
+  "debits_posted": "10",
+  "credits_pending": "0",
+  "credits_posted": "0",
+  "user_data_128": "0",
+  "user_data_64": "0",
+  "user_data_32": "0",
+  "ledger": "700",
+  "code": "10",
+  "flags": [],
+  "timestamp": "1793264250783035330"
+}
+{
+  "id": "2",
+  "debits_pending": "0",
+  "debits_posted": "0",
+  "credits_pending": "0",
+  "credits_posted": "10",
+  "user_data_128": "0",
+  "user_data_64": "0",
+  "user_data_32": "0",
+  "ledger": "700",
+  "code": "10",
+  "flags": [],
+  "timestamp": "1793264250783035331"
+}

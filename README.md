@@ -7,6 +7,17 @@ This guide has three parts:
 
 Every number in this guide comes from a real run in this orb.
 
+## Visual site
+
+`site/` is a static, interactive version of this guide: an overview, a page on TigerBeetle's VOPR, and one
+page per example with step-through replays, charts and in-browser mini-simulations. Every number on it is
+parsed from real program output stored in `site/data/`.
+
+```sh
+cd site && python3 -m http.server 8000      # then open http://localhost:8000
+site/tools/capture.sh                       # re-run all programs and refresh the data (Zig 0.17)
+```
+
 ---
 
 ## Part 1 — What, why, where

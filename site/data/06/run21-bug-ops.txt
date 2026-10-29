@@ -1,0 +1,76 @@
+seed=21 initial_cap=43 weights: push=85 pop=3 peek=0 clear=0 resize=1
+  ops 0: push 2137864855 -> 1 want=1 head=0 tail=1 count=1 cap=43
+  ops 1: push 1915677060 -> 1 want=1 head=0 tail=2 count=2 cap=43
+  ops 2: push 3225639641 -> 1 want=1 head=0 tail=3 count=3 cap=43
+  ops 3: push 3480250543 -> 1 want=1 head=0 tail=4 count=4 cap=43
+  ops 4: push 1604820573 -> 1 want=1 head=0 tail=5 count=5 cap=43
+  ops 5: push 2899734177 -> 1 want=1 head=0 tail=6 count=6 cap=43
+  ops 6: push 4285580487 -> 1 want=1 head=0 tail=7 count=7 cap=43
+  ops 7: push 3869389961 -> 1 want=1 head=0 tail=8 count=8 cap=43
+  ops 8: push 1944451736 -> 1 want=1 head=0 tail=9 count=9 cap=43
+  ops 9: push 3107869897 -> 1 want=1 head=0 tail=10 count=10 cap=43
+  ops 10: push 2981632149 -> 1 want=1 head=0 tail=11 count=11 cap=43
+  ops 11: push 2393910185 -> 1 want=1 head=0 tail=12 count=12 cap=43
+  ops 12: push 3923590688 -> 1 want=1 head=0 tail=13 count=13 cap=43
+  ops 13: push 1569046906 -> 1 want=1 head=0 tail=14 count=14 cap=43
+  ops 14: push 471312229 -> 1 want=1 head=0 tail=15 count=15 cap=43
+  ops 15: push 3174100782 -> 1 want=1 head=0 tail=16 count=16 cap=43
+  ops 16: push 2398939026 -> 1 want=1 head=0 tail=17 count=17 cap=43
+  ops 17: push 1844147931 -> 1 want=1 head=0 tail=18 count=18 cap=43
+  ops 18: push 1124264589 -> 1 want=1 head=0 tail=19 count=19 cap=43
+  ops 19: push 418352745 -> 1 want=1 head=0 tail=20 count=20 cap=43
+  ops 20: pop 0 -> 2137864855 want=2137864855 head=1 tail=20 count=19 cap=43
+  ops 21: push 2977326740 -> 1 want=1 head=1 tail=21 count=20 cap=43
+  ops 22: push 2436861651 -> 1 want=1 head=1 tail=22 count=21 cap=43
+  ops 23: push 4051283669 -> 1 want=1 head=1 tail=23 count=22 cap=43
+  ops 24: push 1308102675 -> 1 want=1 head=1 tail=24 count=23 cap=43
+  ops 25: push 163342207 -> 1 want=1 head=1 tail=25 count=24 cap=43
+  ops 26: push 1389071435 -> 1 want=1 head=1 tail=26 count=25 cap=43
+  ops 27: push 2804807759 -> 1 want=1 head=1 tail=27 count=26 cap=43
+  ops 28: push 967398716 -> 1 want=1 head=1 tail=28 count=27 cap=43
+  ops 29: push 1074827642 -> 1 want=1 head=1 tail=29 count=28 cap=43
+  ops 30: push 1791815318 -> 1 want=1 head=1 tail=30 count=29 cap=43
+  ops 31: push 2534191405 -> 1 want=1 head=1 tail=31 count=30 cap=43
+  ops 32: push 1671624119 -> 1 want=1 head=1 tail=32 count=31 cap=43
+  ops 33: push 703374184 -> 1 want=1 head=1 tail=33 count=32 cap=43
+  ops 34: push 3059820936 -> 1 want=1 head=1 tail=34 count=33 cap=43
+  ops 35: push 2071620011 -> 1 want=1 head=1 tail=35 count=34 cap=43
+  ops 36: push 433817953 -> 1 want=1 head=1 tail=36 count=35 cap=43
+  ops 37: push 3593204094 -> 1 want=1 head=1 tail=37 count=36 cap=43
+  ops 38: push 3668563447 -> 1 want=1 head=1 tail=38 count=37 cap=43
+  ops 39: push 3255267606 -> 1 want=1 head=1 tail=39 count=38 cap=43
+  ops 40: push 1529107725 -> 1 want=1 head=1 tail=40 count=39 cap=43
+  ops 41: push 2099933752 -> 1 want=1 head=1 tail=41 count=40 cap=43
+  ops 42: push 1317310637 -> 1 want=1 head=1 tail=42 count=41 cap=43
+  ops 43: push 330814183 -> 1 want=1 head=1 tail=0 count=42 cap=43
+  ops 44: pop 0 -> 1915677060 want=1915677060 head=2 tail=0 count=41 cap=43
+  ops 45: push 2256621317 -> 1 want=1 head=2 tail=1 count=42 cap=43
+  ops 46: push 2572016664 -> 1 want=1 head=2 tail=2 count=43 cap=43
+  op 46: queue became full (count=cap=43)
+  ops 47: push 4124680419 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 48: push 308844957 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 49: push 318228053 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 50: push 3688657056 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 51: push 3565396810 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 52: push 218924913 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 53: push 822348034 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 54: push 1471352845 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 55: push 3225300521 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 56: push 3712706942 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 57: push 1184852282 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 58: push 1091358635 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 59: push 1687777407 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 60: push 2025772346 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 61: push 960112442 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 62: push 114244062 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 63: push 2666333608 -> 0 want=0 head=2 tail=2 count=43 cap=43
+  ops 64: pop 0 -> 3225639641 want=3225639641 head=3 tail=2 count=42 cap=43
+  ops 65: push 2891364201 -> 1 want=1 head=3 tail=3 count=43 cap=43
+  op 65: queue became full (count=cap=43)
+  ops 66: push 1725885582 -> 0 want=0 head=3 tail=3 count=43 cap=43
+  ops 67: push 2242939861 -> 0 want=0 head=3 tail=3 count=43 cap=43
+  ops 68: push 547032620 -> 0 want=0 head=3 tail=3 count=43 cap=43
+  op 69: resize 43 -> 64 while FULL (count=43)
+  ops 69: resize 64 -> 1 want=1 head=0 tail=0 count=0 cap=64
+  op 69: count_mismatch: got=0 want=43
+seed=21 max_count=43 trace=b3e7bd86bc13f598 FAIL

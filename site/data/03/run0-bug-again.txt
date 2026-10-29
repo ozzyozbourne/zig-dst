@@ -1,0 +1,23 @@
+accounts=2 (balance 100 each) tasks=2
+  T0: [0->1 $41] [1->0 $1] [0->1 $56]
+  T1: [0->1 $28] [0->1 $3]
+  t=  0 T1 read    acct0 = 100
+  t=  1 T0 read    acct0 = 100
+  t=  2 T0 read    acct1 = 100
+  t=  3 T0 write   acct0 := 59
+  t=  4 T1 read    acct1 = 100
+  t=  5 T0 write   acct1 := 141
+  t=  6 T0 read    acct1 = 141
+  t=  7 T1 write   acct0 := 72
+  t=  8 T1 write   acct1 := 128
+  t=  9 T1 read    acct0 = 72
+  t= 10 T0 read    acct0 = 72
+  t= 11 T1 read    acct1 = 128
+  t= 12 T1 write   acct0 := 69
+  t= 13 T1 write   acct1 := 131
+  t= 14 T0 write   acct1 := 140
+  t= 15 T0 write   acct0 := 73
+schedule (16 ticks, task picked per tick): 1 0 0 0 1 0 0 1 1 1 0 1 1 1 0 0
+balances: 73 140  total=213 expected=200
+FAILURE: money_not_conserved at tick 16
+seed=0 ticks=16 trace=60d07731b56382d1 FAIL

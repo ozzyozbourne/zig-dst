@@ -1,0 +1,246 @@
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 96%): seq=12@27+2 seq=13@29+3 seq=14@32+2 seq=15@34+3
+  | cache: 27=kept 28=kept 29=kept 30=kept 31=kept 32=kept 33=kept 34=kept 35=kept 36=kept
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 93%):
+  | cache:
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 67%): seq=17@38+2 seq=18@40+2
+  | cache: 38=dropped 39=kept 40=dropped 41=dropped
+  | scan: 16 records in sectors [0,38); last: seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok seq=16@37+1:crc_ok
+  | stop @38: seq=3032735385440829629 want=17 key=5 len=50 checksum=9ff4d83ebeaa44ac computed=f02cff221a3558f8 parent=9040f2ae99028dcf want=bc307679f33f64f3
+  | bytes: ac 44 aa be 3e d8 f4 9f cf 8d 02 99 ae f2 40 90 bd 40 f5 d2 c3 70 16 2a 05 32 69 33 dc bc d4 b7
+  | high water: sector 42
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 45 records (acked 45, in-flight 2); stop: checksum mismatch (TORN record)
+  | unsynced (keep 53%): seq=46@98+3 seq=47@101+2
+  | cache: 98=kept 99=dropped 100=dropped 101=dropped 102=dropped
+  | scan: 45 records in sectors [0,98); last: seq=42@91+3:crc_ok seq=43@94+1:crc_ok seq=44@95+1:crc_ok seq=45@96+2:crc_ok
+  | stop @98: seq=46 want=46 key=1 len=102 checksum=407531cb3af29df3 computed=e620e345b7a158d0 parent=5f55747d42307ba0 want=5f55747d42307ba0
+  | bytes: f3 9d f2 3a cb 31 75 40 a0 7b 30 42 7d 74 55 5f 2e 00 00 00 00 00 00 00 01 66 00 00 00 00 00 00
+  | high water: sector 103
+tick  167: crash #5: cache sectors applied=0 dropped=2; recovered 51 records (acked 51, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 46%): seq=52@109+2
+  | cache: 109=dropped 110=dropped
+  | scan: 51 records in sectors [0,109); last: seq=48@102+2:crc_ok seq=49@104+3:crc_ok seq=50@107+1:crc_ok seq=51@108+1:crc_ok
+  | stop @109: seq=8152799956720362223 want=52 key=71 len=205
+  | bytes: 5f 0c b5 f0 cc e8 92 13 45 88 bc bc 85 d7 32 0d ef 22 23 81 5d 90 24 71 47 cd b6 4a 6a 4d 1d aa
+  | high water: sector 111
+tick  224: crash #6: cache sectors applied=0 dropped=4; recovered 67 records (acked 67, in-flight 2); stop: checksum mismatch (TORN record)
+  | unsynced (keep 15%): seq=68@148+2 seq=69@150+3
+  | cache: 149=dropped 150=dropped 151=dropped 152=dropped
+  | scan: 67 records in sectors [0,148); last: seq=64@136+3:crc_ok seq=65@139+3:crc_ok seq=66@142+3:crc_ok seq=67@145+3:crc_ok
+  | stop @148: seq=68 want=68 key=3 len=46 checksum=5c12ecf7833aa19b computed=66c8437222201a2e parent=25631b5225a1d416 want=25631b5225a1d416
+  | bytes: 9b a1 3a 83 f7 ec 12 5c 16 d4 a1 25 52 1b 63 25 44 00 00 00 00 00 00 00 03 2e 00 00 00 00 00 00
+  | high water: sector 153
+tick  254: crash #7: cache sectors applied=1 dropped=3; recovered 77 records (acked 77, in-flight 3); stop: checksum mismatch (TORN record)
+  | unsynced (keep 9%): seq=78@172+2 seq=79@174+1 seq=80@175+3
+  | cache: 173=dropped 175=dropped 176=dropped 177=kept
+  | scan: 77 records in sectors [0,172); last: seq=74@163+3:crc_ok seq=75@166+3:crc_ok seq=76@169+1:crc_ok seq=77@170+2:crc_ok
+  | stop @172: seq=78 want=78 key=3 len=46 checksum=21ec02c86c4efe43 computed=32e20c6283c7c2ec parent=e877258f17d35cfe want=e877258f17d35cfe
+  | bytes: 43 fe 4e 6c c8 02 ec 21 fe 5c d3 17 8f 25 77 e8 4e 00 00 00 00 00 00 00 03 2e 00 00 00 00 00 00
+  | high water: sector 178
+tick  452: crash #8: cache sectors applied=1 dropped=0; recovered 143 records (acked 142, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 71%): seq=143@313+2
+  | cache: 313=kept
+  | scan: 143 records in sectors [0,315); last: seq=140@307+3:crc_ok seq=141@310+1:crc_ok seq=142@311+2:crc_ok seq=143@313+2:crc_ok
+  | stop @315: seq=3060321979602437991 want=144 key=202 len=82 checksum=0902472c75254c25 computed=142a1868008fdade parent=48c272acbcede0c1 want=6b5a6da12700fcfb
+  | bytes: 25 4c 25 75 2c 47 02 09 c1 e0 ed bc ac 72 c2 48 67 07 86 4c a0 72 78 2a ca 52 18 92 bb 9c af a9
+  | high water: sector 315
+tick  506: crash #9: cache sectors applied=5 dropped=3; recovered 158 records (acked 158, in-flight 4); stop: checksum mismatch (TORN record)
+  | unsynced (keep 42%): seq=159@344+3 seq=160@347+3 seq=161@350+1 seq=162@351+2
+  | cache: 344=kept 345=dropped 347=kept 348=dropped 349=kept 350=kept 351=kept 352=dropped
+  | scan: 158 records in sectors [0,344); last: seq=155@335+1:crc_ok seq=156@336+2:crc_ok seq=157@338+3:crc_ok seq=158@341+3:crc_ok
+  | stop @344: seq=159 want=159 key=1 len=158 checksum=7a59e50b3ff07d92 computed=f696b76e1399dcf8 parent=6b696634e0dbd60b want=6b696634e0dbd60b
+  | bytes: 92 7d f0 3f 0b e5 59 7a 0b d6 db e0 34 66 69 6b 9f 00 00 00 00 00 00 00 01 9e 00 00 00 00 00 00
+  | high water: sector 353
+tick  519: crash #10: cache sectors applied=6 dropped=1; recovered 161 records (acked 159, in-flight 3); stop: checksum mismatch (TORN record)
+  | unsynced (keep 45%): seq=160@347+2 seq=161@349+3 seq=162@352+2
+  | cache: 347=kept 348=kept 349=kept 350=kept 351=kept 352=kept 353=dropped
+  | scan: 161 records in sectors [0,352); last: seq=158@341+3:crc_ok seq=159@344+3:crc_ok seq=160@347+2:crc_ok seq=161@349+3:crc_ok
+  | stop @352: seq=162 want=162 key=0 len=96 checksum=eafee640a5b92709 computed=ba916a64882b0b37 parent=80585b1b6bae306d want=80585b1b6bae306d
+  | bytes: 09 27 b9 a5 40 e6 fe ea 6d 30 ae 6b 1b 5b 58 80 a2 00 00 00 00 00 00 00 00 60 00 00 00 00 00 00
+  | high water: sector 354
+tick  895: crash #11: cache sectors applied=0 dropped=0; recovered 252 records (acked 251, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 29%): seq=252@553+1
+  | cache:
+  | scan: 252 records in sectors [0,554); last: seq=249@546+2:crc_ok seq=250@548+3:crc_ok seq=251@551+2:crc_ok seq=252@553+1:crc_ok
+  | stop @554: seq=1086143707175743972 want=253 key=152 len=238
+  | bytes: 34 76 ef ea 5b 9e e7 fb ef b3 3c 2b e1 0c ab 08 e4 71 3c 71 f2 c1 12 0f 98 ee 48 c0 d9 ab 3b 2e
+  | high water: sector 554
+tick 1000: crash #12: cache sectors applied=6 dropped=2; recovered 284 records (acked 283, in-flight 4); stop: checksum mismatch (TORN record)
+  | unsynced (keep 78%): seq=284@624+3 seq=285@627+3 seq=286@630+2 seq=287@632+3
+  | cache: 624=kept 625=kept 626=kept 627=kept 628=dropped 629=kept 633=dropped 634=kept
+  | scan: 284 records in sectors [0,627); last: seq=281@618+2:crc_ok seq=282@620+1:crc_ok seq=283@621+3:crc_ok seq=284@624+3:crc_ok
+  | stop @627: seq=285 want=285 key=0 len=132 checksum=d4e633117db23895 computed=d1d46e8859659abe parent=c21f217d88b8f159 want=c21f217d88b8f159
+  | bytes: 95 38 b2 7d 11 33 e6 d4 59 f1 b8 88 7d 21 1f c2 1d 01 00 00 00 00 00 00 00 84 00 00 00 00 00 00
+  | high water: sector 635
+tick 1002: crash #13: cache sectors applied=2 dropped=0; recovered 285 records (acked 284, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 62%): seq=285@627+2
+  | cache: 627=kept 628=kept
+  | scan: 285 records in sectors [0,629); last: seq=282@620+1:crc_ok seq=283@621+3:crc_ok seq=284@624+3:crc_ok seq=285@627+2:crc_ok
+  | stop @629: seq=15353201466530046771 want=286 key=218 len=49 checksum=01e8760b00504600 computed=160b5ef04364c038 parent=14a8494c3be8743b want=fe756c27995a9696
+  | bytes: 00 46 50 00 0b 76 e8 01 3b 74 e8 3b 4c 49 a8 14 33 a3 87 99 63 87 11 d5 da 31 40 3d 15 68 4e db
+  | high water: sector 635
+tick 1020: crash #14: cache sectors applied=5 dropped=0; recovered 291 records (acked 289, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 88%): seq=290@638+3 seq=291@641+3
+  | cache: 638=kept 639=kept 640=kept 641=kept 643=kept
+  | scan: 291 records in sectors [0,644); last: seq=288@633+2:crc_ok seq=289@635+3:crc_ok seq=290@638+3:crc_ok seq=291@641+3:crc_ok
+  | stop @644: seq=10733915142204542248 want=292 key=113 len=118 checksum=2c67d1005e332b7a computed=b9862b0673b493d2 parent=858b3f15c988b2ca want=40bfc2a560280fc9
+  | bytes: 7a 2b 33 5e 00 d1 67 2c ca b2 88 c9 15 3f 8b 85 28 cd 49 7c f3 86 f6 94 71 76 36 85 a1 22 e2 7e
+  | high water: sector 644
+tick 1071: crash #15: cache sectors applied=4 dropped=0; recovered 302 records (acked 300, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 91%): seq=301@666+3 seq=302@669+1
+  | cache: 666=kept 667=kept 668=kept 669=kept
+  | scan: 302 records in sectors [0,670); last: seq=299@661+3:crc_ok seq=300@664+2:crc_ok seq=301@666+3:crc_ok seq=302@669+1:crc_ok
+  | stop @670: seq=12937085538156367315 want=303 key=31 len=226
+  | bytes: e5 db 66 1c f4 e6 7a 32 58 c6 51 13 ed 34 28 cd d3 4d a7 da c0 c2 89 b3 1f e2 45 d0 03 3b 3c 7a
+  | high water: sector 670
+tick 1084: crash #16: cache sectors applied=3 dropped=0; recovered 306 records (acked 304, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 94%): seq=305@674+1 seq=306@675+2
+  | cache: 674=kept 675=kept 676=kept
+  | scan: 306 records in sectors [0,677); last: seq=303@670+3:crc_ok seq=304@673+1:crc_ok seq=305@674+1:crc_ok seq=306@675+2:crc_ok
+  | stop @677: seq=4939470656510614930 want=307 key=193 len=171
+  | bytes: 5f af d4 49 d7 7a ca 93 37 3c 55 f8 e0 a9 bd 5a 92 dd c7 43 64 86 8c 44 c1 ab 32 a4 e4 48 08 d4
+  | high water: sector 677
+tick 1234: crash #17: cache sectors applied=1 dropped=2; recovered 349 records (acked 349, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 34%): seq=350@777+3
+  | cache: 777=dropped 778=kept 779=dropped
+  | scan: 349 records in sectors [0,777); last: seq=346@769+2:crc_ok seq=347@771+1:crc_ok seq=348@772+3:crc_ok seq=349@775+2:crc_ok
+  | stop @777: seq=9235452305347781959 want=350 key=82 len=133 checksum=9a44557fb594e526 computed=9a1e6515528da96b parent=59787e3e79e73f97 want=b2e9af4192ad16e3
+  | bytes: 26 e5 94 b5 7f 55 44 9a 97 3f e7 79 3e 7e 78 59 47 25 51 b0 f0 ea 2a 80 52 85 ef 1e 89 1c ef b6
+  | high water: sector 780
+tick 1268: crash #18: cache sectors applied=0 dropped=0; recovered 360 records (acked 360, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 39%):
+  | cache:
+  | scan: 360 records in sectors [0,805); last: seq=357@795+3:crc_ok seq=358@798+3:crc_ok seq=359@801+2:crc_ok seq=360@803+2:crc_ok
+  | stop @805: seq=2618208300873449937 want=361 key=45 len=121 checksum=924222a36fe40ded computed=3bb648109bc29191 parent=b27febd9ecdc7a83 want=6afc768296714ff5
+  | bytes: ed 0d e4 6f a3 22 42 92 83 7a dc ec d9 eb 7f b2 d1 81 8a e9 93 be 55 24 2d 79 42 9c e1 b1 c9 21
+  | high water: sector 805
+tick 1291: crash #19: cache sectors applied=0 dropped=4; recovered 362 records (acked 362, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 22%): seq=363@811+1 seq=364@812+3
+  | cache: 811=dropped 812=dropped 813=dropped 814=dropped
+  | scan: 362 records in sectors [0,811); last: seq=359@801+2:crc_ok seq=360@803+2:crc_ok seq=361@805+3:crc_ok seq=362@808+3:crc_ok
+  | stop @811: seq=12220479833675723366 want=363 key=35 len=73 checksum=68b43f4ac48b5eb8 computed=1094131b0c714c82 parent=956c696a3e41370b want=1624cfe52f2747b6
+  | bytes: b8 5e 8b c4 4a 3f b4 68 0b 37 41 3e 6a 69 6c 95 66 f2 10 6f a9 dd 97 a9 23 49 85 d0 57 dc 29 3a
+  | high water: sector 815
+tick 1334: crash #20: cache sectors applied=3 dropped=0; recovered 378 records (acked 376, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 87%): seq=377@841+2 seq=378@843+2
+  | cache: 841=kept 842=kept 844=kept
+  | scan: 378 records in sectors [0,845); last: seq=375@836+3:crc_ok seq=376@839+2:crc_ok seq=377@841+2:crc_ok seq=378@843+2:crc_ok
+  | stop @845: seq=12409199092564814818 want=379 key=26 len=165
+  | bytes: d3 36 3a 77 0f 2f 83 25 da 04 fe 61 47 9d db b1 e2 eb 6c f3 d3 54 36 ac 1a a5 f3 cd cc 98 ad 19
+  | high water: sector 845
+tick 1447: crash #21: cache sectors applied=0 dropped=0; recovered 410 records (acked 410, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 100%):
+  | cache:
+  | scan: 410 records in sectors [0,918); last: seq=407@910+2:crc_ok seq=408@912+1:crc_ok seq=409@913+2:crc_ok seq=410@915+3:crc_ok
+  | stop @918: seq=15395209407693651890 want=411 key=64 len=127 checksum=df464613e418cfbf computed=6dcd0883ca781207 parent=aca32c8f31c0dee1 want=686aadd369265564
+  | bytes: bf cf 18 e4 13 46 46 df e1 de c0 31 8f 2c a3 ac b2 ff 54 94 63 c5 a6 d5 40 7f 5c d3 ab 5a db 00
+  | high water: sector 918
+tick 1654: crash #22: cache sectors applied=2 dropped=2; recovered 472 records (acked 471, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 16%): seq=472@1046+1 seq=473@1047+3
+  | cache: 1046=kept 1047=dropped 1048=dropped 1049=kept
+  | scan: 472 records in sectors [0,1047); last: seq=469@1040+2:crc_ok seq=470@1042+3:crc_ok seq=471@1045+1:crc_ok seq=472@1046+1:crc_ok
+  | stop @1047: seq=11841703238007283948 want=473 key=85 len=220
+  | bytes: 27 d7 2d a9 ca 71 75 fc cf 8c 03 48 54 97 23 93 ec 60 04 dd 5a 2e 56 a4 55 dc 57 3a 8d 6a 82 49
+  | high water: sector 1050
+tick 1755: crash #23: cache sectors applied=1 dropped=5; recovered 499 records (acked 499, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 31%): seq=500@1111+3 seq=501@1114+1 seq=502@1115+2
+  | cache: 1111=dropped 1112=dropped 1113=dropped 1114=dropped 1115=dropped 1116=kept
+  | scan: 499 records in sectors [0,1111); last: seq=496@1101+3:crc_ok seq=497@1104+1:crc_ok seq=498@1105+3:crc_ok seq=499@1108+3:crc_ok
+  | stop @1111: seq=1235864092256647787 want=500 key=166 len=213
+  | bytes: 08 2f 46 d6 64 52 5b ae 31 68 30 1d 34 90 ae c8 6b 3a 9e 11 d8 ab 26 11 a6 d5 cc 5f bc e7 a6 be
+  | high water: sector 1117
+tick 1818: crash #24: cache sectors applied=2 dropped=1; recovered 509 records (acked 509, in-flight 1); stop: checksum mismatch (TORN record)
+  | unsynced (keep 84%): seq=510@1133+3
+  | cache: 1133=kept 1134=dropped 1135=kept
+  | scan: 509 records in sectors [0,1133); last: seq=506@1123+3:crc_ok seq=507@1126+3:crc_ok seq=508@1129+1:crc_ok seq=509@1130+3:crc_ok
+  | stop @1133: seq=510 want=510 key=4 len=115 checksum=9adebe72e5aeec4f computed=af6ed2db6d9632cf parent=b45346dca90d2552 want=b45346dca90d2552
+  | bytes: 4f ec ae e5 72 be de 9a 52 25 0d a9 dc 46 53 b4 fe 01 00 00 00 00 00 00 04 73 00 00 00 00 00 00
+  | high water: sector 1136
+tick 1868: crash #25: cache sectors applied=6 dropped=4; recovered 522 records (acked 522, in-flight 4); stop: checksum mismatch (TORN record)
+  | unsynced (keep 41%): seq=523@1167+3 seq=524@1170+3 seq=525@1173+2 seq=526@1175+2
+  | cache: 1167=kept 1168=dropped 1169=dropped 1170=kept 1171=dropped 1172=kept 1173=dropped 1174=kept 1175=kept 1176=kept
+  | scan: 522 records in sectors [0,1167); last: seq=519@1156+2:crc_ok seq=520@1158+3:crc_ok seq=521@1161+3:crc_ok seq=522@1164+3:crc_ok
+  | stop @1167: seq=523 want=523 key=2 len=125 checksum=768896d40d5b7296 computed=a3eadb45c267f554 parent=7a881a79e22a19b8 want=7a881a79e22a19b8
+  | bytes: 96 72 5b 0d d4 96 88 76 b8 19 2a e2 79 1a 88 7a 0b 02 00 00 00 00 00 00 02 7d 00 00 00 00 00 00
+  | high water: sector 1177
+tick 1971: crash #26: cache sectors applied=0 dropped=6; recovered 555 records (acked 555, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 10%): seq=556@1240+3 seq=557@1243+2 seq=558@1245+1
+  | cache: 1240=dropped 1241=dropped 1242=dropped 1243=dropped 1244=dropped 1245=dropped
+  | scan: 555 records in sectors [0,1240); last: seq=552@1231+3:crc_ok seq=553@1234+2:crc_ok seq=554@1236+1:crc_ok seq=555@1237+3:crc_ok
+  | stop @1240: seq=1236234682349433212 want=556 key=39 len=9 checksum=2794ebbffaecbb2b computed=14867382342ed6aa parent=4fd13fb51c78679b want=1f441e4a9dfb220e
+  | bytes: 2b bb ec fa bf eb 94 27 9b 67 78 1c b5 3f d1 4f 7c b1 74 cc e4 fc 27 11 27 09 5b 06 bb 6f cd c0
+  | high water: sector 1246
+tick 1983: crash #27: cache sectors applied=0 dropped=0; recovered 559 records (acked 559, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 84%):
+  | cache:
+  | scan: 559 records in sectors [0,1250); last: seq=556@1240+2:crc_ok seq=557@1242+3:crc_ok seq=558@1245+2:crc_ok seq=559@1247+3:crc_ok
+  | stop @1250: seq=12149634867083153099 want=560 key=134 len=190
+  | bytes: 91 86 ae c0 6c b5 0c f3 70 7d 84 4d 52 02 72 4a cb 0e 31 43 8a 2c 9c a8 86 be c6 77 9c 5e 9a 24
+  | high water: sector 1250
+tick 1991: crash #28: cache sectors applied=0 dropped=0; recovered 561 records (acked 561, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 41%):
+  | cache:
+  | scan: 561 records in sectors [0,1255); last: seq=558@1245+2:crc_ok seq=559@1247+3:crc_ok seq=560@1250+2:crc_ok seq=561@1252+3:crc_ok
+  | stop @1255: seq=12521572712227668476 want=562 key=76 len=177
+  | bytes: cb 5a f8 58 de 76 6e 97 35 87 4d f4 22 fe 44 c1 fc 01 8e 25 0a 90 c5 ad 4c b1 c9 14 dd 2c ef 65
+  | high water: sector 1255
+tick 1992: crash #29: cache sectors applied=0 dropped=0; recovered 561 records (acked 561, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 60%):
+  | cache:
+  | scan: 561 records in sectors [0,1255); last: seq=558@1245+2:crc_ok seq=559@1247+3:crc_ok seq=560@1250+2:crc_ok seq=561@1252+3:crc_ok
+  | stop @1255: seq=12521572712227668476 want=562 key=76 len=177
+  | bytes: cb 5a f8 58 de 76 6e 97 35 87 4d f4 22 fe 44 c1 fc 01 8e 25 0a 90 c5 ad 4c b1 c9 14 dd 2c ef 65
+  | high water: sector 1255
+tick 2000: crash #30: cache sectors applied=4 dropped=1; recovered 562 records (acked 561, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 37%): seq=562@1255+3 seq=563@1258+2 seq=564@1260+1 seq=565@1261+2
+  | cache: 1256=kept 1258=dropped 1259=kept 1261=kept 1262=kept
+  | scan: 562 records in sectors [0,1258); last: seq=559@1247+3:crc_ok seq=560@1250+2:crc_ok seq=561@1252+3:crc_ok seq=562@1255+3:crc_ok
+  | stop @1258: seq=1040265603019402174 want=563 key=157 len=66 checksum=3426fa8248710d28 computed=567b598720a0481a parent=9921f5f99da3fcf1 want=0ac66b401b850706
+  | bytes: 28 0d 71 48 82 fa 26 34 f1 fc a3 9d f9 f5 21 99 be 6b 07 ec 0d c4 6f 0e 9d 42 97 58 22 1f bc af
+  | high water: sector 1263
+tick 2050: crash #31: cache sectors applied=2 dropped=2; recovered 572 records (acked 571, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 63%): seq=572@1279+2 seq=573@1281+2 seq=574@1283+2 seq=575@1285+1
+  | cache: 1279=kept 1281=dropped 1284=kept 1285=dropped
+  | scan: 572 records in sectors [0,1281); last: seq=569@1270+3:crc_ok seq=570@1273+3:crc_ok seq=571@1276+3:crc_ok seq=572@1279+2:crc_ok
+  | stop @1281: seq=10452013232426902002 want=573 key=107 len=91 checksum=e4587c47dc37c845 computed=aa9641a3fa46cf17 parent=6c12f20006b69bca want=b349f79b43d692fb
+  | bytes: 45 c8 37 dc 47 7c 58 e4 ca 9b b6 06 00 f2 12 6c f2 e1 7c 62 a8 02 0d 91 6b 5b 14 8d 4d ce 79 1b
+  | high water: sector 1286
+tick 2091: crash #32: cache sectors applied=0 dropped=2; recovered 584 records (acked 584, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 16%): seq=585@1311+2
+  | cache: 1311=dropped 1312=dropped
+  | scan: 584 records in sectors [0,1311); last: seq=581@1300+2:crc_ok seq=582@1302+3:crc_ok seq=583@1305+3:crc_ok seq=584@1308+3:crc_ok
+  | stop @1311: seq=14631158495426793710 want=585 key=195 len=73 checksum=22a7232d1c2a7bf9 computed=a5caf9a2f88ad535 parent=f296aca9452a7b95 want=eabe0d4996950b0f
+  | bytes: f9 7b 2a 1c 2d 23 a7 22 95 7b 2a 45 a9 ac 96 f2 ee 50 5a e4 21 51 0c cb c3 49 f2 db 75 c2 19 1e
+  | high water: sector 1313
+tick 2261: crash #33: cache sectors applied=2 dropped=1; recovered 629 records (acked 629, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 21%): seq=630@1411+3
+  | cache: 1411=dropped 1412=kept 1413=kept
+  | scan: 629 records in sectors [0,1411); last: seq=626@1401+2:crc_ok seq=627@1403+2:crc_ok seq=628@1405+3:crc_ok seq=629@1408+3:crc_ok
+  | stop @1411: seq=9136190247324536853 want=630 key=30 len=36 checksum=da07e79a3d59de6c computed=37fe5a2eb2218286 parent=2dd43f1e90154519 want=a1dd38167b46c0a7
+  | bytes: 6c de 59 3d 9a e7 07 da 19 45 15 90 1e 3f d4 2d 15 d0 2a d4 9f 44 ca 7e 1e 24 f3 ed 9e 49 3c c2
+  | high water: sector 1414
+tick 2431: crash #34: cache sectors applied=4 dropped=1; recovered 678 records (acked 676, in-flight 3); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 48%): seq=677@1516+3 seq=678@1519+3 seq=679@1522+2
+  | cache: 1517=kept 1520=kept 1521=kept 1522=dropped 1523=kept
+  | scan: 678 records in sectors [0,1522); last: seq=675@1512+3:crc_ok seq=676@1515+1:crc_ok seq=677@1516+3:crc_ok seq=678@1519+3:crc_ok
+  | stop @1522: seq=5051752753676540912 want=679 key=231 len=75 checksum=9dd05f3af9c213bf computed=500b6734c476ff6a parent=528fefe643e2a7af want=fcaddba95a084f42
+  | bytes: bf 13 c2 f9 3a 5f d0 9d af a7 e2 43 e6 ef 8f 52 f0 db fd 37 5d 6e 1b 46 e7 4b 97 28 9b a6 d1 c1
+  | high water: sector 1524
+tick 2623: crash #35: cache sectors applied=1 dropped=2; recovered 726 records (acked 726, in-flight 1); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 49%): seq=727@1621+3
+  | cache: 1621=dropped 1622=dropped 1623=kept
+  | scan: 726 records in sectors [0,1621); last: seq=723@1615+2:crc_ok seq=724@1617+1:crc_ok seq=725@1618+1:crc_ok seq=726@1619+2:crc_ok
+  | stop @1621: seq=2404661297435092270 want=727 key=62 len=152 checksum=83cc33af7df6283d computed=edc1e53d280c699a parent=80033ad9099b5c97 want=64daa5b18655ef12
+  | bytes: 3d 28 f6 7d af 33 cc 83 97 5c 9b 09 d9 3a 03 80 2e a5 bf a6 b5 12 5f 21 3e 98 5c e0 93 1b 42 b4
+  | high water: sector 1624
+seed=0 crashes=35 acked=843 trace=3985da6fcf7f0c84 PASS

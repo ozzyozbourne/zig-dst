@@ -1,0 +1,7 @@
+ELECTION SAFETY VIOLATED: term 19 has two leaders: node 1 and node 0 (tick 1191)
+FAIL at seed=86 (election_safety) after 87 seeds. Replay with:
+  zig run main.zig -- run 86 --bug-volatile-vote
+
+real	0m0.026s
+user	0m0.026s
+sys	0m0.000s

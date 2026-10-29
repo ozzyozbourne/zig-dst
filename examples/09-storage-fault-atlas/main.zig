@@ -37,6 +37,8 @@
 //! Usage:
 //!   zig run main.zig -- run   <seed>  [--bug-trust-read] [--bug-misdirect]
 //!   zig run main.zig -- sweep <count> [--bug-trust-read] [--bug-misdirect]
+//!   Add --all-events to `run` to also print every append and client read (output only; the
+//!   trace hash and the result are unchanged).
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -57,6 +59,8 @@ const checkpoint_interval = 100;
 
 var bug_trust_read = false;
 var bug_misdirect = false;
+/// Print-only: with `run`, also show `append` and `client_read` events (used by the site replay).
+var all_events = false;
 
 const Block = [block_size]u8;
 const Payload = [payload_size]u8;
@@ -163,7 +167,7 @@ const Sim = struct {
 
     fn event(sim: *Sim, e: Event, replica: u8, address: u64, extra: u64) void {
         sim.trace.update(std.mem.asBytes(&[_]u64{ @backingInt(e), sim.tick, replica, address, extra }));
-        if (sim.verbose and e.interesting()) {
+        if (sim.verbose and (all_events or e.interesting())) {
             std.debug.print("  t={d:>3} {s:<16} replica={d} block={d:>2} {x}\n", .{
                 sim.tick, @tagName(e), replica, address, extra,
             });
@@ -429,6 +433,8 @@ pub fn main(init: std.process.Init) !void {
             bug_trust_read = true;
         } else if (std.mem.eql(u8, arg, "--bug-misdirect")) {
             bug_misdirect = true;
+        } else if (std.mem.eql(u8, arg, "--all-events")) {
+            all_events = true;
         } else {
             std.debug.print("unknown flag: {s}\n", .{arg});
             std.process.exit(2);

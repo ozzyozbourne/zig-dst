@@ -24,11 +24,14 @@
 //!   zig run main.zig -- run    <seed>  [--bug] [--no-swarm]  # one seed, verbose
 //!   zig run main.zig -- sweep  <count> [--bug] [--no-swarm]  # seeds 0..count-1
 //!   zig run main.zig -- shrink <seed>  [--bug] [--no-swarm]  # minimize a failing seed
+//!   add --ops to `run` (every op with head/tail/count/cap) or `shrink` (every accepted
+//!   deletion, as original op indices). Logging only: traces and results are unchanged.
 const std = @import("std");
 const assert = std.debug.assert;
 
 var bug_enabled = false;
 var swarm_enabled = true;
+var print_ops = false;
 
 const cap_min = 32;
 const cap_max = 64;
@@ -156,6 +159,8 @@ const Case = struct {
     initial_cap: u32,
     len: u32,
     ops: [ops_per_seed]Op,
+    /// Index of each op in the originally generated list (only used for --ops output).
+    orig: [ops_per_seed]u16,
 };
 
 const Weights = [kind_count]u32;
@@ -185,7 +190,7 @@ fn pick_kind(random: std.Random, weights: Weights) Kind {
     assert(total > 0);
     var pick = random.uintLessThan(u32, total);
     for (weights, 0..) |w, i| {
-        if (pick < w) return @enumFromInt(i);
+        if (pick < w) return @fromBackingInt(@intCast(i));
         pick -= w;
     }
     unreachable;
@@ -197,6 +202,7 @@ fn generate(seed: u64, case: *Case) Weights {
     const weights = gen_weights(random);
     case.initial_cap = random.intRangeAtMost(u32, cap_min, cap_max);
     case.len = ops_per_seed;
+    for (&case.orig, 0..) |*o, i| o.* = @intCast(i);
     for (&case.ops) |*op| {
         const kind = pick_kind(random, weights);
         op.* = switch (kind) {
@@ -267,7 +273,10 @@ fn execute(case: *const Case, verbose: bool) Result {
         };
         // A [3]u64 array, not a tuple: tuples of mixed widths have padding bytes with
         // undefined contents, which would make the trace hash nondeterministic.
-        trace.update(std.mem.asBytes(&[3]u64{ @intFromEnum(op.kind), op.arg, got }));
+        trace.update(std.mem.asBytes(&[3]u64{ @backingInt(op.kind), op.arg, got }));
+        if (verbose and print_ops) std.debug.print("  ops {d}: {s} {d} -> {d} want={d} head={d} tail={d} count={d} cap={d}\n", .{
+            i, @tagName(op.kind), op.arg, @as(i64, @bitCast(got)), @as(i64, @bitCast(want)), q.head, q.tail, q.count, q.cap,
+        });
 
         const failure: ?Failure = if (got != want)
             .{ .kind = .result_mismatch, .op_index = i, .got = got, .want = want }
@@ -310,8 +319,14 @@ fn shrink_delete(case: *Case, kind: FailureKind) void {
             var candidate = case.*;
             const tail = case.ops[end..case.len];
             @memcpy(candidate.ops[start..][0..tail.len], tail);
+            std.mem.copyForwards(u16, candidate.orig[start..][0..tail.len], case.orig[end..case.len]);
             candidate.len = case.len - (end - start);
             if (still_fails(&candidate, kind)) {
+                if (print_ops) {
+                    std.debug.print("  deleted chunk={d} orig=", .{chunk});
+                    for (case.orig[start..end], 0..) |o, k| std.debug.print("{s}{d}", .{ if (k == 0) "" else ",", o });
+                    std.debug.print(" -> {d} ops\n", .{candidate.len});
+                }
                 case.* = candidate; // keep `start`: the next chunk slid into this position
                 progress = true;
             } else start += chunk;
@@ -403,6 +418,11 @@ fn shrink(seed: u64) void {
         std.debug.print("\n", .{});
         i = j;
     }
+    if (print_ops) {
+        std.debug.print("  kept orig=", .{});
+        for (case.orig[0..case.len], 0..) |o, k| std.debug.print("{s}{d}", .{ if (k == 0) "" else ",", o });
+        std.debug.print("\n", .{});
+    }
     std.debug.print("seed={d} shrunk trace={x:0>16} FAIL\n", .{ seed, final.trace_hash });
     std.process.exit(1);
 }
@@ -414,7 +434,7 @@ fn run_seed(seed: u64, verbose: bool) Result {
     const weights = generate(seed, &case);
     if (verbose) {
         std.debug.print("seed={d} initial_cap={d} weights:", .{ seed, case.initial_cap });
-        for (weights, 0..) |w, k| std.debug.print(" {s}={d}", .{ @tagName(@as(Kind, @enumFromInt(k))), w });
+        for (weights, 0..) |w, k| std.debug.print(" {s}={d}", .{ @tagName(@as(Kind, @fromBackingInt(@intCast(k)))), w });
         std.debug.print("\n", .{});
     }
     const r = execute(&case, verbose);
@@ -430,6 +450,7 @@ pub fn main(init: std.process.Init) !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--bug")) bug_enabled = true;
         if (std.mem.eql(u8, arg, "--no-swarm")) swarm_enabled = false;
+        if (std.mem.eql(u8, arg, "--ops")) print_ops = true;
     }
     const flags = if (bug_enabled and !swarm_enabled)
         " --bug --no-swarm"

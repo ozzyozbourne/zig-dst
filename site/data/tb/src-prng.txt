@@ -1,0 +1,33 @@
+pub fn from_seed(seed: u64) PRNG {
+    var s = seed;
+    return .{ .s = .{
+        split_mix_64(&s),
+        split_mix_64(&s),
+        split_mix_64(&s),
+        split_mix_64(&s),
+    } };
+}
+fn split_mix_64(s: *u64) u64 {
+    s.* +%= 0x9e3779b97f4a7c15;
+
+    var z = s.*;
+    z = (z ^ (z >> 30)) *% 0xbf58476d1ce4e5b9;
+    z = (z ^ (z >> 27)) *% 0x94d049bb133111eb;
+    return z ^ (z >> 31);
+}
+fn next(prng: *PRNG) u64 {
+    const r = std.math.rotl(u64, prng.s[0] +% prng.s[3], 23) +% prng.s[0];
+
+    const t = prng.s[1] << 17;
+
+    prng.s[2] ^= prng.s[0];
+    prng.s[3] ^= prng.s[1];
+    prng.s[1] ^= prng.s[2];
+    prng.s[0] ^= prng.s[3];
+
+    prng.s[2] ^= t;
+
+    prng.s[3] = math.rotl(u64, prng.s[3], 45);
+
+    return r;
+}

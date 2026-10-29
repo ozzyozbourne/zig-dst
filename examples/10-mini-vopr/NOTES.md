@@ -171,6 +171,12 @@ Fault coverage in a spot check of seeds 0–199 (correct code): a replica crashe
 crash lost unsynced writes in 56, a partition occurred in 114, and a non-initial primary was
 elected in 125.
 
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--events`: print @send/@recv/@cut/@lost/@drop/@write/@durable/@commit lines for every packet and disk write.
+
 ## Exercises
 
 1. Make a backup send `prepare_ok` as soon as it appends to its in-memory log, not when the write

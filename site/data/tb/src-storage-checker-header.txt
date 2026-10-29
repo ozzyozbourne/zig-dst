@@ -1,0 +1,20 @@
+//! Verify deterministic storage.
+//!
+//! At each replica compact and checkpoint, check that storage is byte-for-byte identical across
+//! replicas.
+//!
+//! Areas verified between compaction bars:
+//! - Acquired Grid blocks (when ¬syncing) (excluding an open manifest block)
+//!
+//! Areas verified at checkpoint:
+//! - SuperBlock vsr_state.checkpoint
+//! - ClientReplies (when repair finishes)
+//! - Acquired Grid blocks (when syncing finishes)
+//!
+//! Areas not verified:
+//! - SuperBlock headers, which hold replica-specific state.
+//! - WAL headers, which may differ because the WAL writes deliberately corrupt redundant headers
+//!   to faulty slots to ensure recovery is consistent.
+//! - WAL prepares — a replica can commit + checkpoint an op before it is persisted to the WAL.
+//!   (The primary can commit from the pipeline-queue, backups can commit from the pipeline-cache.)
+//! - Non-allocated Grid blocks, which may differ due to state sync.

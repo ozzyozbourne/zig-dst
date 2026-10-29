@@ -1,0 +1,31 @@
+  t=  0 c0 invoke W(x:=1) -> primary
+  t=  0 c1 invoke W(x:=2) -> primary
+  t=  0 c2 invoke W(x:=3) -> primary
+  t=  5 c1 ok     W(x:=2) at v2
+  t=  6 c2 ok     W(x:=3) at v3
+  t=  7 c0 ok     W(x:=1) at v1
+  t=  9 c1 invoke R(x) -> primary (session token v2)
+  t= 10 c0 invoke R(x) -> backup (session token v1)
+  t= 10 c2 invoke W(y:=4) -> primary
+  t= 10    backup applies v1 (x:=1)
+  t= 13 c1 ok     R(x)=3 from primary at v3
+  t= 16 c1 invoke R(x) -> primary (session token v3)
+  t= 17 c0 ok     R(x)=1 from backup at v1
+
+NON-LINEARIZABLE history on key 'x'. Minimal sub-history (4 of 5 ops on this key):
+
+  who  op         [invoke, complete] timeline (t=0..17, 1 tick/col)
+  c0   W(x:=1)    [   0,    7]       |------|  primary v1
+  c2   W(x:=3)    [   0,    6]       |-----|  primary v3
+  c1   R(x)=3     [   9,   13]                |---|  primary v3
+  c0   R(x)=1     [  10,   17]                 |------|  backup v1
+
+  Real-time order forced by the history:
+    c0 W(x:=1) completed at t=7 before c1 R(x)=3 was invoked at t=9
+    c0 W(x:=1) completed at t=7 before c0 R(x)=1 was invoked at t=10
+    c2 W(x:=3) completed at t=6 before c1 R(x)=3 was invoked at t=9
+    c2 W(x:=3) completed at t=6 before c0 R(x)=1 was invoked at t=10
+  No order of these ops that respects real time is a legal register execution,
+  and removing any one op makes the history linearizable again.
+
+seed=3 ops=7 trace=4bc12f9b0095aded FAIL

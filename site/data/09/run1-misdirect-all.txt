@@ -1,0 +1,26 @@
+  faults: read=11% write=2% misdirect=13% rot=7%
+  atlas replica 0: .xx..xx.xx..xxxxxx.xxxxx.xxxxx..
+  atlas replica 1: x..xx.xx..xx...xxxx...x.xxxxxxxx
+  atlas replica 2: xxxxxx.xxxxxxxx...xxxx.xx.....xx
+  t=  1 append           replica=0 block= 0 8db16cfd933bbee3
+  t=  2 append           replica=0 block= 1 6a719e83921be3cb
+  t=  3 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t=  4 client_read      replica=0 block= 0 e06ef2e61d6a7880
+  t=  5 fault_read_flip  replica=2 block= 0 8d
+  t=  5 repair           replica=2 block= 0 0
+  t=  5 client_read      replica=2 block= 0 e06ef2e61d6a7880
+  t=  6 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t=  7 fault_misdirect  replica=2 block= 2 1
+  t=  7 append           replica=0 block= 2 6fb9dbe36b291fb5
+  t=  8 client_read      replica=0 block= 2 b1614d3d1c927e34
+  t=  9 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 10 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 11 fault_read_flip  replica=1 block= 0 58
+  t= 11 repair           replica=1 block= 0 2
+  t= 11 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 12 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 13 client_read      replica=1 block= 1 bd90bfb3338f92d4
+  t= 14 client_read      replica=1 block= 0 e06ef2e61d6a7880
+  t= 15 client_read      replica=2 block= 1 b1614d3d1c927e34
+  t= 15 FAIL CorruptDataReturned: replica=2 block=1
+seed=1 trace=54ce8d97a0503e62 FAIL CorruptDataReturned

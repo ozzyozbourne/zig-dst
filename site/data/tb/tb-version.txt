@@ -1,0 +1,2 @@
+$ ./tigerbeetle version
+TigerBeetle version 65535.0.0+0450c32

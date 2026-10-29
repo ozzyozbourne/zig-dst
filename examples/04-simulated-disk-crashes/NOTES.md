@@ -167,6 +167,12 @@ seed=0 crashes=35 acked=843 trace=3985da6fcf7f0c84 PASS
 Across seeds 0–199 of the correct code, recoveries stopped 1288 times on a checksum mismatch
 (torn record), 9 times on a parent mismatch (stale record), and 6114 times on an unexpected seq.
 
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--sectors`: after each crash, print kept/dropped cache sectors, the last scanned records and where recovery stopped.
+
 ## Exercises
 
 1. Remove the `parent` check in `Store.recover` (keep the checksum) and sweep. Explain the

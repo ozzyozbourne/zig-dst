@@ -1,0 +1,10 @@
+  faults: read=0% write=20% misdirect=1% rot=10%
+  atlas replica 0: xxx.xxx.xx.x...xx.xxxxxx.xxx.xxx
+  atlas replica 1: ..xx.x.xx.x.xxx..x....xxx...x.x.
+  atlas replica 2: xx.xx.xx.xxxxxxxxxxxxx..xxxxxx.x
+  t=  8 fault_rot        replica=2 block= 0 101
+  t=  9 scrub_repair     replica=2 block= 0 0
+  t=  9 repair           replica=2 block= 0 0
+  t= 16 fault_rot        replica=0 block= 1 5f
+  t= 27 FAIL CorruptDataReturned: replica=0 block=1
+seed=0 trace=ed1a70000c0e0d2e FAIL CorruptDataReturned

@@ -30,11 +30,16 @@
 //! Usage:
 //!   zig run main.zig -- run   <seed>  [--bug-ack-before-fsync] [--bug-no-checksum]
 //!   zig run main.zig -- sweep <count> [--bug-ack-before-fsync] [--bug-no-checksum]
+//!   (add --sectors to `run` for a sector-level dump after each crash; output only)
 const std = @import("std");
 const assert = std.debug.assert;
 
 var bug_ack_before_fsync = false;
 var bug_no_checksum = false;
+/// `--sectors` (run mode only): after each crash, also print the sector-level detail (unsynced
+/// records, per-sector crash outcome, the tail of the recovery scan, the record it stopped at).
+/// Output only: it draws nothing from the PRNG and adds nothing to the trace.
+var verbose_sectors = false;
 
 // Small sectors so that records span 1..3 sectors and tearing is common. Real disks use
 // 512 B or 4 KiB; TigerBeetle uses constants.sector_size = 4096.
@@ -64,6 +69,11 @@ fn event(tag: u8, a: u64, b: u64) void {
 // Simulated disk.
 
 const CachedSector = struct { sector: u32, data: [sector_size]u8 };
+
+/// `--sectors` only: what the last crash did to each cached sector, in cache order.
+var crash_log: [batch_max * 3]struct { sector: u32, applied: bool } = undefined;
+var crash_log_len: usize = 0;
+var crash_keep_percent: u8 = 0;
 
 const Disk = struct {
     /// Survives a crash. Starts full of random bytes (like TigerBeetle's testing Storage, which
@@ -129,12 +139,19 @@ const Disk = struct {
     fn crash(disk: *Disk) struct { applied: usize, dropped: usize } {
         const keep_percent = disk.random.uintAtMost(u8, 100);
         var applied: usize = 0;
+        crash_log_len = 0;
         for (disk.cache.items) |c| {
-            if (disk.random.uintLessThan(u8, 100) < keep_percent) {
+            const keep = disk.random.uintLessThan(u8, 100) < keep_percent;
+            if (keep) {
                 disk.apply(c);
                 applied += 1;
             }
+            if (verbose_sectors) {
+                crash_log[crash_log_len] = .{ .sector = c.sector, .applied = keep };
+                crash_log_len += 1;
+            }
         }
+        if (verbose_sectors) crash_keep_percent = keep_percent;
         const dropped = disk.cache.items.len - applied;
         disk.cache.clearRetainingCapacity();
         return .{ .applied = applied, .dropped = dropped };
@@ -356,6 +373,65 @@ fn check_recovery(
     return true;
 }
 
+/// `--sectors`: sector-level view of one crash and the recovery that followed. Sector numbers are
+/// 64-byte units; `seq=S@N+K` means record S occupies sectors N..N+K-1.
+fn print_sectors(
+    disk: *const Disk,
+    before: *const Store,
+    after: *const Store,
+    recovered: []const Record,
+    high_water: u64,
+) void {
+    const p = std.debug.print;
+    // The batch appended since the last fsync sits back to back, ending at the old log_end.
+    var offset = before.log_end;
+    for (before.batch[0..before.batch_len]) |*r| offset -= Record.sectors(r.len) * sector_size;
+    p("  | unsynced (keep {d}%):", .{crash_keep_percent});
+    for (before.batch[0..before.batch_len]) |*r| {
+        const n = Record.sectors(r.len);
+        p(" seq={d}@{d}+{d}", .{ r.seq, offset / sector_size, n });
+        offset += n * sector_size;
+    }
+    p("\n  | cache:", .{});
+    for (crash_log[0..crash_log_len]) |c| p(" {d}={s}", .{ c.sector, if (c.applied) "kept" else "dropped" });
+    // The last few replayed records, each re-checked against its checksum on disk.
+    p("\n  | scan: {d} records in sectors [0,{d}); last:", .{ recovered.len, after.log_end / sector_size });
+    var buffer: [3 * sector_size]u8 = undefined;
+    offset = 0;
+    for (recovered, 0..) |*r, i| {
+        const size = Record.sectors(r.len) * sector_size;
+        if (i + 4 >= recovered.len) {
+            disk.read(offset, buffer[0..size]);
+            const ok = record_checksum(buffer[8 .. header_size + r.len]) ==
+                std.mem.readInt(u64, buffer[0..8], .little);
+            p(" seq={d}@{d}+{d}:{s}", .{ r.seq, offset / sector_size, size / sector_size, if (ok) "crc_ok" else "crc_BAD" });
+        }
+        offset += size;
+    }
+    // The record the scan stopped at, field by field.
+    p("\n  | stop @{d}:", .{after.log_end / sector_size});
+    if (after.log_end + sector_size <= disk.durable.len) {
+        disk.read(after.log_end, buffer[0..sector_size]);
+        const len = buffer[25];
+        p(" seq={d} want={d} key={d} len={d}", .{
+            std.mem.readInt(u64, buffer[16..24], .little), after.next_seq, buffer[24], len,
+        });
+        const size = Record.sectors(len) * sector_size;
+        if (len > 0 and len <= value_max and after.log_end + size <= disk.durable.len) {
+            disk.read(after.log_end, buffer[0..size]);
+            p(" checksum={x:0>16} computed={x:0>16} parent={x:0>16} want={x:0>16}", .{
+                std.mem.readInt(u64, buffer[0..8], .little),
+                record_checksum(buffer[8 .. header_size + len]),
+                std.mem.readInt(u64, buffer[8..16], .little),
+                after.last_checksum,
+            });
+        }
+        p("\n  | bytes:", .{});
+        for (buffer[0..header_size]) |b| p(" {x:0>2}", .{b});
+    }
+    p("\n  | high water: sector {d}\n", .{high_water / sector_size});
+}
+
 fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
@@ -382,6 +458,7 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
     var crashes: u32 = 0;
     var tick: u64 = 0;
     var ok = true;
+    var high_water: u64 = 0; // furthest byte the log has ever reached (only printed by --sectors)
 
     while (tick < ticks_per_seed) : (tick += 1) {
         disk.tick();
@@ -389,6 +466,7 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
         // A crash can land anywhere: between append and fsync, during fsync, right after an ack.
         if (random.uintLessThan(u32, crash_one_in) == 0) {
             crashes += 1;
+            const before = store; // only read by --sectors
             const c = disk.crash();
             event('C', c.applied, c.dropped);
             store = try Store.recover(gpa, &disk, &recovered);
@@ -401,6 +479,7 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
                     recovered.items.len, acked.items.len, in_flight.items.len, store.stop,
                 },
             );
+            if (verbose and verbose_sectors) print_sectors(&disk, &before, &store, recovered.items, high_water);
             if (!try check_recovery(gpa, verbose, &acked, in_flight.items, recovered.items, &store)) {
                 ok = false;
                 break;
@@ -444,7 +523,9 @@ fn run_seed(gpa: std.mem.Allocator, seed: u64, verbose: bool) !Result {
             };
             random.bytes(r.value[0..r.len]);
             event('P', r.seq, r.len);
-            if (try store.put(gpa, &disk, r)) {
+            const acked_now = try store.put(gpa, &disk, r);
+            high_water = @max(high_water, store.log_end);
+            if (acked_now) {
                 try acked.append(gpa, r);
                 event('A', r.seq, 1);
                 assert(store.table[r.key].?.eql(&r));
@@ -471,6 +552,8 @@ pub fn main(init: std.process.Init) !void {
             bug_ack_before_fsync = true;
         } else if (std.mem.eql(u8, arg, "--bug-no-checksum")) {
             bug_no_checksum = true;
+        } else if (std.mem.eql(u8, arg, "--sectors")) {
+            verbose_sectors = true;
         } else {
             std.debug.print("unknown flag: {s}\n", .{arg});
             std.process.exit(2);

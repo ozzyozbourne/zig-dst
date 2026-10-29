@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deterministic Simulation Testing — a visual guide through TigerBeetle</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .seedhero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: center; }
+  @media (max-width: 860px) { .seedhero { grid-template-columns: 1fr; } }
+  #world svg text { font-family: var(--mono); }
+  .orbit { transform-origin: 250px 210px; animation: spin 40s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .packet { offset-rotate: 0deg; animation: travel 2.4s linear infinite; }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .swap { transition: opacity .45s ease, transform .45s ease; }
+  .modebtns button { min-width: 140px; }
+  #seedgrid { display: grid; grid-template-columns: repeat(40, 1fr); gap: 3px; margin: 12px 0; }
+  #seedgrid i { aspect-ratio: 1; border-radius: 3px; background: #1a2336; transition: background .2s, transform .2s; cursor: pointer; }
+  #seedgrid i.p { background: #1f5c3b; }
+  #seedgrid i.f { background: var(--bug); transform: scale(1.15); box-shadow: 0 0 8px var(--bug); }
+  #seedgrid i.sel { outline: 2px solid var(--yellow); }
+  .matrix td.y { text-align: center; color: var(--accent2); font-weight: 700; }
+  .matrix td.new { text-align: center; color: #0b0f17; background: var(--accent2); font-weight: 700; border-radius: 4px; }
+  .matrix td { text-align: center; }
+  .matrix td:first-child, .matrix td:nth-child(2) { text-align: left; }
+  .killer { display: flex; gap: 12px; align-items: flex-start; }
+  .killer .ic { font-size: 1.5rem; line-height: 1; }
+  .phase { display: flex; height: 54px; border-radius: 10px; overflow: hidden; font-family: var(--mono); font-size: .85rem; }
+  .phase div { display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero fade-in seedhero">
+    <div>
+      <div class="tags"><span class="tag">Zig 0.17</span><span class="tag">TigerBeetle VOPR</span><span class="tag easy">10 runnable projects</span></div>
+      <h1>Deterministic Simulation Testing</h1>
+      <p class="lede">Run your <strong>real code</strong> inside a <strong>fake world</strong> — fake clock, fake network,
+        fake disk, fake scheduler — where every event is chosen by <strong>one random seed</strong>. Throw faults at it,
+        check invariants after every step, and when something breaks, the seed <em>is</em> the bug report.</p>
+      <p class="src">This site visualizes what happens underneath. Every chart is built from real program output captured in this repo — nothing is mocked up.</p>
+    </div>
+    <div class="viz" id="world" style="margin:0"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>Three properties, all required</h2>
+    <div class="grid g3">
+      <div class="card"><h3>🧪 Simulation</h3><p>Every source of nondeterminism — time, network, disk, thread scheduling, randomness —
+        sits behind an interface. The test plugs in a simulated implementation that can <strong>inject faults on demand</strong>
+        and advance time instantly.</p></div>
+      <div class="card"><h3>🎯 Determinism</h3><p>Same seed + same code ⇒ the <strong>exact same execution</strong>, byte for byte.
+        A failure is one integer. It can never be "flaky, can't reproduce" — you replay it under a debugger.</p></div>
+      <div class="card"><h3>✅ Testing</h3><p>Invariants and oracles are checked <strong>continuously</strong> — after every step,
+        message, or disk write — not just at the end. A bug is caught at the tick where it happens, not a million ticks later.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>The trick: swap the world, keep the code</h2>
+    <p>Production code never calls <code>clock_gettime</code>, <code>send()</code>, or <code>pwrite()</code> directly. It talks to
+      <code>Time</code>, <code>MessageBus</code>, and <code>Storage</code> interfaces. TigerBeetle literally makes the replica
+      generic over them: <code>ReplicaType(StateMachine, MessageBus, Storage, AOF)</code>. Toggle the world below.</p>
+    <div class="controls modebtns"><button id="m-prod">Production world</button><button id="m-sim" class="on">Simulated world</button></div>
+    <div class="viz" id="swapviz"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>A seed sweep, live in your browser</h2>
+    <p>The core loop of every DST harness is tiny: <code>for seed in 0..N: run(seed); if (fail) print(seed)</code>.
+      Below is a JS re-implementation of <a href="01-seeded-randomness.html">example 01</a> (a buggy
+      <code>average(a,b) = (a+b)/2</code> on u32 with a biased input generator). Each square is one seed.
+      Click any square to replay that seed — it always produces the same trace hash.</p>
+    <div class="callout info"><strong>Illustration, not the real program.</strong>This sweep uses DST.Rand (sfc32) in JS, so seed numbers differ from the Zig program. The real Zig sweep results are in section 05.</div>
+    <div class="controls">
+      <button class="primary" id="sw-run">▶ sweep 1600 seeds</button>
+      <label><input type="checkbox" id="sw-bug" checked> --bug</label>
+      <label><input type="checkbox" id="sw-bias" checked> biased generator</label>
+      <span class="out" id="sw-out"></span>
+    </div>
+    <div id="seedgrid"></div>
+    <div class="grid g2">
+      <div><h4>Replay of selected seed (run #1)</h4><pre class="term" id="rp1" style="max-height:220px">click a square</pre></div>
+      <div><h4>Replay of selected seed (run #2)</h4><pre class="term" id="rp2" style="max-height:220px">click a square</pre></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>Two phases: safety, then liveness</h2>
+    <p>Faults can legitimately stop progress (a partitioned cluster <em>should</em> refuse to commit). So a simulator like the VOPR
+      splits the run: first check that <strong>nothing wrong</strong> happens under faults; then heal a core of nodes and check that
+      <strong>everything eventually happens</strong>. This shape appears in examples 05, 08, 09, and 10, and in
+      <code>src/vopr.zig</code> as <code>transition_to_liveness_mode(core)</code>.</p>
+    <div class="phase">
+      <div style="flex:3;background:linear-gradient(90deg,#3b1520,#4a1a28)">SAFETY PHASE · faults on · loss, dup, partitions, crashes, corruption<br>assert: no divergence, no lost acks, conservation</div>
+      <div style="flex:.08;background:var(--yellow)"></div>
+      <div style="flex:1.4;background:linear-gradient(90deg,#123828,#174a33)">LIVENESS · heal core<br>assert: converges in ≤ N ticks</div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h4>Safety violations look like</h4><p>two leaders in one term · op N committed with two different checksums · an acked write lost after a crash · money not conserved · corrupt bytes returned to a client</p></div>
+      <div class="card"><h4>Liveness violations look like</h4><p>a healthy quorum that never elects a leader · a client whose retry is never answered · replicas that never converge · a block that can't be repaired even though a good copy exists</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Real results: 16 planted bugs, all found, all replayable</h2>
+    <p>Captured by <code>site/tools/captures/home.sh</code>: every example's default sweep with the correct code, then the same sweep with each
+      planted bug. The bar is the <strong>first failing seed</strong> (how long the search took). Hover for the trace hash of the replay.</p>
+    <div class="grid g4" id="stats"></div>
+    <div class="viz" id="firstseed"></div>
+    <table class="data" id="sweeptable"></table>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Why it's worth it: compression and search</h2>
+    <div class="grid g2">
+      <div class="card"><h3>Time compression</h3><p>Time is a counter, so a 12-hour TTL costs one addition. Example 02's default sweep:</p>
+        <div id="tc"></div></div>
+      <div class="card"><h3>Search strategy matters</h3><p>Example 06's ring-buffer bug needs ≥32 pushes with no clear, then a resize. Same bug, same seed count, two generators:</p>
+        <div id="swarm"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>The progression: each project adds one layer</h2>
+    <p>Projects build on each other. <span style="color:var(--accent2)">●</span> = used, highlighted cell = introduced in that project.</p>
+    <div class="viz" style="overflow-x:auto"><table class="data matrix" id="matrix"></table></div>
+    <div class="grid g3" id="cards"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>Determinism killers (and how the examples avoid them)</h2>
+    <div class="grid g2">
+      <div class="card killer"><span class="ic">⏰</span><div><strong>Wall clock</strong><p>Any <code>now()</code> makes runs differ. Inject <code>Time</code>; advance a tick counter (ex 02, <code>TimeSim</code> in <code>src/stdx/time.zig</code>).</p></div></div>
+      <div class="card killer"><span class="ic">🧵</span><div><strong>OS threads</strong><p>The kernel picks interleavings. Use one event loop or explicit state-machine tasks with a seeded scheduler (ex 03). TigerBeetle is single-threaded by design.</p></div></div>
+      <div class="card killer"><span class="ic">🎲</span><div><strong>Hidden randomness</strong><p>One PRNG per run, everything derived from it — including sub-seeds for network and storage (<code>options_swarm</code>).</p></div></div>
+      <div class="card killer"><span class="ic">🗺️</span><div><strong>Unordered iteration</strong><p>Hash maps keyed by pointers, or randomized iteration (Go maps), reorder events. Iterate in index order.</p></div></div>
+      <div class="card killer"><span class="ic">🧱</span><div><strong>Uninitialized bytes</strong><p>Hashing a struct with padding gave example 06 <em>different trace hashes for identical runs</em> until it hashed a <code>[3]u64</code> instead. Real bug caught while building this guide.</p></div></div>
+      <div class="card killer"><span class="ic">🌐</span><div><strong>Real IO</strong><p>Sockets and files have their own timing. Replace them with a packet simulator (ex 05) and in-memory storage (ex 04, 09).</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>Where DST helps — and where it doesn't</h2>
+    <div class="grid g2">
+      <div class="callout ok"><strong>Strong fit</strong>consensus &amp; replication · storage engines and WALs · crash recovery · exactly-once delivery · schedulers · caches with TTLs · any concurrent state machine</div>
+      <div class="callout warn"><strong>Weak fit</strong>code bound to big nondeterministic platforms you can't stub (GPU drivers, browsers) · performance measurement (a simulator models latency, it doesn't measure it) · retrofitting a codebase that calls the clock and spawns threads everywhere</div>
+    </div>
+    <p>Language matters less than architecture. Zig, C, C++ (FoundationDB) and Rust (madsim, turmoil) make it natural; JS/TS and Python
+      work through a custom event loop; Go and the JVM fight you because the runtime owns scheduling — unless you use a deterministic
+      hypervisor like Antithesis.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">10</span>Run it yourself</h2>
+<pre class="code"><span class="c"># any example (Zig 0.17)</span>
+cd examples/10-mini-vopr
+zig run -OReleaseSafe main.zig -- sweep 20000 --bug-commit-early   <span class="c"># search seeds</span>
+zig run -OReleaseSafe main.zig -- run 3 --bug-commit-early          <span class="c"># replay one, verbose</span>
+
+<span class="c"># regenerate every capture on this site, then serve it</span>
+site/tools/capture.sh
+cd site &amp;&amp; python3 -m http.server 8000</pre>
+  </section>
+</main>
+
+<script type="text/plain" id="sweeps" data-src="data/home/sweeps.tsv">
+id	flag	count	result	seed	trace	ms
+01	none	10000	PASS	-	-	5
+01	--bug	10000	FAIL	0	5e8db608ab3a4b37	2
+02	none	100000	PASS	-	-	767
+02	--bug	100000	FAIL	1	b51d0a68fc5da3f4	2
+03	none	1000000	PASS	-	-	4169
+03	--bug	1000000	FAIL	0	60d07731b56382d1	2
+03	--bug-deadlock	1000000	FAIL	1	026ddce53296649e	2
+04	none	2000	PASS	-	-	3035
+04	--bug-ack-before-fsync	2000	FAIL	0	05849ac5c0fa49b0	2
+04	--bug-no-checksum	2000	FAIL	0	826972d8c8dd33cc	2
+05	none	10000	PASS	-	-	1052
+05	--bug-no-dedup	10000	FAIL	0	d88bc34622415f6f	2
+05	--bug-reply-stale	10000	FAIL	0	967f8d2b76791c6e	2
+06	none	20000	PASS	-	-	930
+06	--bug	20000	FAIL	21	b3e7bd86bc13f598	4
+07	none	100000	PASS	-	-	1066
+07	--bug	100000	FAIL	1	3e1850e49d1b089a	2
+08	none	5000	PASS	-	-	1468
+08	--bug-volatile-vote	5000	FAIL	86	3dfa85464a32b0b4	30
+08	--bug-no-quorum	5000	FAIL	0	02dcb41e2bd60ee0	2
+09	none	10000	PASS	-	-	5943
+09	--bug-trust-read	10000	FAIL	0	ed1a70000c0e0d2e	2
+09	--bug-misdirect	10000	FAIL	1	54ce8d97a0503e62	3
+10	none	20000	PASS	-	-	20465
+10	--bug-commit-early	20000	FAIL	3	692aa09c1869a180	39
+10	--bug-view-change-log	20000	FAIL	3	33f68caccfde5918	4
+</script>
+<script type="text/plain" id="tcomp" data-src="data/home/time-compression.txt">
+PASS: 100000 seeds, simulated 9498765621 s (2638546 h) of clock time
+
+real	0m0.926s
+user	0m0.788s
+sys	0m0.032s
+</script>
+<script type="text/plain" id="swon" data-src="data/home/swarm-on.txt">
+FAIL at seed=21 after 22 seeds. Replay with:
+  zig run main.zig -- run 21 --bug
+  zig run main.zig -- shrink 21 --bug
+</script>
+<script type="text/plain" id="swoff" data-src="data/home/swarm-off.txt">
+PASS: 20000 seeds (0 reached >= 32 queued items; deepest queue=14)
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "home" });
+const { el, s, C } = DST;
+
+/* ---------- hero: the seed spawning a world ---------- */
+(function hero() {
+  const svg = s("svg", { viewBox: "0 0 500 420" });
+  const cx = 250, cy = 210;
+  const parts = [
+    { a: -90, label: "clock", sub: "tick += 1", col: C.accent },
+    { a: -18, label: "network", sub: "loss · dup", col: C.accent2 },
+    { a: 54, label: "disk", sub: "torn · flip", col: C.warn },
+    { a: 126, label: "scheduler", sub: "who runs next", col: C.violet },
+    { a: 198, label: "faults", sub: "crash · split", col: C.bug },
+  ];
+  const g = s("g", { class: "orbit" });
+  svg.append(s("circle", { cx, cy, r: 150, fill: "none", stroke: C.line, "stroke-dasharray": "3 6" }));
+  parts.forEach((p, i) => {
+    const r = 150, x = cx + r * Math.cos(p.a * Math.PI / 180), y = cy + r * Math.sin(p.a * Math.PI / 180);
+    const path = `M${cx},${cy} L${x},${y}`;
+    svg.append(s("path", { d: path, stroke: p.col, "stroke-width": 1.5, opacity: .5, class: "flow", fill: "none" }));
+    const dot = s("circle", { r: 4, fill: p.col, class: "packet", style: `offset-path:path('${path}');animation-delay:${i * .45}s` });
+    svg.append(dot);
+    const node = s("g", {}, s("circle", { cx: x, cy: y, r: 38, fill: "#101828", stroke: p.col, "stroke-width": 2 }),
+      s("text", { x, y: y - 2, "text-anchor": "middle", fill: C.text, "font-size": 13, "font-weight": 700 }, p.label),
+      s("text", { x, y: y + 14, "text-anchor": "middle", fill: C.muted, "font-size": 9 }, p.sub));
+    svg.append(node);
+  });
+  const seed = s("text", { x: cx, y: cy + 8, "text-anchor": "middle", fill: "#0b0f17", "font-size": 18, "font-weight": 800 }, "42");
+  svg.append(s("circle", { cx, cy, r: 46, fill: C.yellow, class: "pulse" }), s("text", { x: cx, y: cy - 14, "text-anchor": "middle", fill: "#0b0f17", "font-size": 10, "font-weight": 700 }, "SEED"), seed);
+  svg.append(s("text", { x: cx, y: 410, "text-anchor": "middle", fill: C.dim, "font-size": 11 }, "one u64 → PRNG → every decision in the world"));
+  let n = 42; setInterval(() => { n = (n * 1103515245 + 12345) % 100000; seed.textContent = n; }, 1600);
+  DST.$("#world").append(svg);
+})();
+
+/* ---------- production vs simulated world ---------- */
+(function swap() {
+  const W = 1000, H = 330;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const deps = [
+    { y: 30, name: "Time", prod: "clock_gettime(MONOTONIC)", sim: "TimeSim · ticks × tick_duration · drift" },
+    { y: 105, name: "MessageBus", prod: "TCP sockets · io_uring", sim: "PacketSimulator · Exp delay · loss · partitions" },
+    { y: 180, name: "Storage", prod: "O_DIRECT file · io_uring", sim: "in-memory sectors · faults · misdirects" },
+    { y: 255, name: "Scheduling", prod: "kernel / event loop", sim: "Simulator.tick() · one thread · seeded order" },
+  ];
+  svg.append(s("rect", { x: 30, y: 60, width: 260, height: 210, rx: 14, fill: "#141e33", stroke: C.accent, "stroke-width": 2 }));
+  svg.append(s("text", { x: 160, y: 150, "text-anchor": "middle", fill: C.text, "font-size": 20, "font-weight": 700 }, "your real code"));
+  svg.append(s("text", { x: 160, y: 176, "text-anchor": "middle", fill: C.muted, "font-size": 12, "font-family": "monospace" }, "ReplicaType(SM, Bus, Storage, AOF)"));
+  svg.append(s("text", { x: 160, y: 198, "text-anchor": "middle", fill: C.muted, "font-size": 12, "font-family": "monospace" }, "+ thousands of asserts (on in prod)"));
+  const prodG = s("g", { class: "swap" }), simG = s("g", { class: "swap" });
+  deps.forEach((d, i) => {
+    svg.append(s("line", { x1: 290, y1: 165, x2: 520, y2: d.y + 26, stroke: C.line, "stroke-width": 2 }));
+    svg.append(s("rect", { x: 420, y: d.y + 8, width: 120, height: 36, rx: 8, fill: "#0f1726", stroke: C.line }));
+    svg.append(s("text", { x: 480, y: d.y + 31, "text-anchor": "middle", fill: C.text, "font-size": 13, "font-family": "monospace" }, d.name));
+    prodG.append(s("rect", { x: 560, y: d.y, width: 420, height: 52, rx: 10, fill: "#1b2538", stroke: C.dim }),
+      s("text", { x: 580, y: d.y + 31, fill: C.muted, "font-size": 14, "font-family": "monospace" }, "⚙ " + d.prod));
+    simG.append(s("rect", { x: 560, y: d.y, width: 420, height: 52, rx: 10, fill: "#102a2a", stroke: C.accent2, "stroke-width": 1.5 }),
+      s("text", { x: 580, y: d.y + 31, fill: C.accent2, "font-size": 13, "font-family": "monospace" }, "🎲 " + d.sim));
+    simG.append(s("circle", { cx: 970, cy: d.y + 8, r: 5, fill: C.yellow, class: "pulse" }));
+  });
+  svg.append(prodG, simG);
+  svg.append(s("text", { x: 770, y: 324, "text-anchor": "middle", fill: C.dim, "font-size": 11 }, "yellow dot = driven by the seed's PRNG"));
+  DST.$("#swapviz").append(svg);
+  const set = (sim) => {
+    simG.style.opacity = sim ? 1 : 0; simG.style.transform = sim ? "none" : "translateX(30px)";
+    prodG.style.opacity = sim ? 0 : 1; prodG.style.transform = sim ? "translateX(-30px)" : "none";
+    DST.$("#m-sim").classList.toggle("on", sim); DST.$("#m-prod").classList.toggle("on", !sim);
+  };
+  DST.$("#m-sim").onclick = () => set(true); DST.$("#m-prod").onclick = () => set(false); set(true);
+})();
+
+/* ---------- live seed sweep (JS re-implementation of example 01) ---------- */
+(function sweep() {
+  const N = 1600, grid = DST.$("#seedgrid");
+  const cells = Array.from({ length: N }, (_, i) => { const c = el("i", { title: "seed " + i }); c.onclick = () => replay(i); grid.append(c); return c; });
+  const MAX = 4294967295;
+  function gen(r, biased) {
+    if (!biased) return Math.floor(r.float() * (MAX + 1));
+    const b = r.int(100);
+    if (b < 98) return r.int(1000001);
+    if (b === 98) return Math.floor(r.float() * (MAX + 1));
+    return MAX - r.int(17);
+  }
+  function fnv(h, v) { for (let k = 0; k < 4; k++) { h ^= (v >>> (8 * k)) & 255; h = Math.imul(h, 16777619) >>> 0; } return h; }
+  function run(seed, bug, biased, log) {
+    const r = DST.Rand(seed); let h = 2166136261; const steps = 1 + r.int(8);
+    for (let i = 0; i < steps; i++) {
+      const a = gen(r, biased), b = gen(r, biased);
+      const got = bug ? Math.floor(((a + b) >>> 0) / 2) : Math.floor(a / 2) + Math.floor(b / 2) + (a & b & 1);
+      const want = Math.floor((a + b) / 2);
+      h = fnv(fnv(fnv(h, a), b), got);
+      if (log) log.push(`step ${i}: average(${a}, ${b}) = ${got}` + (got !== want ? `   want ${want}  ✗` : ""));
+      if (got !== want) return { ok: false, h, steps: i + 1 };
+    }
+    return { ok: true, h, steps };
+  }
+  let sel = -1;
+  function replay(i) {
+    if (sel >= 0) cells[sel].classList.remove("sel"); sel = i; cells[i].classList.add("sel");
+    const bug = DST.$("#sw-bug").checked, bias = DST.$("#sw-bias").checked;
+    [DST.$("#rp1"), DST.$("#rp2")].forEach((pre) => {
+      const log = [`$ run ${i}${bug ? " --bug" : ""}${bias ? "" : " (uniform)"}`]; const r = run(i, bug, bias, log);
+      log.push(`seed=${i} steps=${r.steps} trace=${r.h.toString(16).padStart(8, "0")} ${r.ok ? "PASS" : "FAIL"}`);
+      pre.innerHTML = log.map((l) => /FAIL|✗/.test(l) ? `<span class="f">${DST.esc(l)}</span>` : /PASS/.test(l) ? `<span class="k">${DST.esc(l)}</span>` : DST.esc(l)).join("\n");
+    });
+  }
+  DST.$("#sw-run").onclick = () => {
+    const bug = DST.$("#sw-bug").checked, bias = DST.$("#sw-bias").checked;
+    cells.forEach((c) => (c.className = "")); let i = 0, fails = 0, first = -1;
+    const tick = () => {
+      for (let k = 0; k < 40 && i < N; k++, i++) {
+        const r = run(i, bug, bias); cells[i].className = r.ok ? "p" : "f";
+        if (!r.ok) { fails++; if (first < 0) { first = i; replay(i); } }
+      }
+      DST.$("#sw-out").textContent = `${i}/${N} seeds · ${fails} failing · ${(100 * fails / i).toFixed(1)}%` + (first >= 0 ? ` · first fail seed=${first}` : "");
+      if (i < N) requestAnimationFrame(tick);
+    };
+    tick();
+  };
+  DST.$("#sw-run").click();
+})();
+
+/* ---------- real sweep results ---------- */
+(function results() {
+  const rows = DST.text("sweeps").trim().split("\n").slice(1).map((l) => { const [id, flag, count, result, seed, trace, ms] = l.split("\t"); return { id, flag, count: +count, result, seed: seed === "-" ? null : +seed, trace, ms: +ms }; });
+  const correct = rows.filter((r) => r.flag === "none"), bugs = rows.filter((r) => r.flag !== "none");
+  const seedsRun = correct.reduce((a, r) => a + r.count, 0);
+  const stats = [
+    [`${correct.filter((r) => r.result === "PASS").length}/${correct.length}`, "correct examples pass their full default sweep"],
+    [seedsRun.toLocaleString(), "seeds simulated for those sweeps"],
+    [`${bugs.filter((r) => r.result === "FAIL").length}/${bugs.length}`, "planted bugs found by their sweep"],
+    [`${(correct.reduce((a, r) => a + r.ms, 0) / 1000).toFixed(1)} s`, "total wall time of the correct-code sweeps"],
+  ];
+  DST.$("#stats").append(...stats.map(([n, l]) => el("div", { class: "stat fade-in" }, el("div", { class: "num" }, n), el("div", { class: "lbl" }, l))));
+  const title = (id) => (DST.PAGES.find((p) => p.short === id) || {}).title || id;
+  DST.bar("#firstseed", bugs.map((r) => ({ label: `${r.id} ${r.flag}`, value: r.seed ?? 0, color: r.seed > 10 ? C.warn : C.bug, note: `${title(r.id)}\n${r.flag}: FAIL at seed=${r.seed}\nreplay trace=${r.trace}` })),
+    { labelW: 300, fmt: (v) => `seed ${v}`, max: Math.max(...bugs.map((r) => r.seed)) });
+  DST.$("#firstseed").append(el("div", { class: "cap" }, "Most bugs fall at seed 0–3 because the examples crank fault rates up; 06 and 08 need a real search."));
+  const t = DST.$("#sweeptable");
+  t.append(el("tr", {}, ["#", "project", "flag", "seeds", "result", "first fail", "replay trace", "wall ms"].map((h, i) => el("th", { class: i >= 3 && i !== 4 && i !== 6 ? "num" : null }, h))));
+  rows.forEach((r) => t.append(el("tr", {},
+    el("td", {}, el("a", { href: (DST.PAGES.find((p) => p.short === r.id) || {}).href }, r.id)), el("td", {}, title(r.id)),
+    el("td", {}, el("code", {}, r.flag === "none" ? "(correct)" : r.flag)), el("td", { class: "num" }, r.count.toLocaleString()),
+    el("td", {}, el("span", { class: "ev " + (r.result === "PASS" ? "good" : "bad") }, r.result)), el("td", { class: "num" }, r.seed ?? "—"),
+    el("td", {}, r.trace === "-" ? "—" : el("code", {}, r.trace)), el("td", { class: "num" }, r.ms))));
+})();
+
+/* ---------- compression + swarm ---------- */
+(function why() {
+  const tc = DST.text("tcomp");
+  const simS = +(tc.match(/simulated (\d+) s/) || [])[1];
+  const real = tc.match(/real\s+(\d+)m([\d.]+)s/); const realS = +real[1] * 60 + +real[2];
+  const ratio = simS / realS;
+  DST.$("#tc").append(
+    el("div", { class: "grid g2" },
+      el("div", { class: "stat" }, el("div", { class: "num" }, (simS / 3600 / 24 / 365).toFixed(0) + " yr"), el("div", { class: "lbl" }, `simulated clock time (${simS.toLocaleString()} s)`)),
+      el("div", { class: "stat" }, el("div", { class: "num" }, realS.toFixed(2) + " s"), el("div", { class: "lbl" }, "real wall time"))));
+  DST.bar("#tc", [{ label: "real seconds", value: realS, color: C.dim }, { label: "simulated seconds", value: simS, color: C.accent2 }],
+    { log: true, labelW: 130, width: 520, fmt: (v) => v.toLocaleString(undefined, { maximumFractionDigits: 2 }) });
+  DST.$("#tc").append(el("p", { class: "src" }, `≈ ${ratio.toExponential(2)} simulated seconds per real second (log scale). Source: `, el("code", {}, "data/home/time-compression.txt")));
+
+  const parse = (t) => ({ fail: t.match(/FAIL at seed=(\d+)/), depth: t.match(/deepest queue=(\d+)/), reached: t.match(/(\d+) reached/) });
+  const on = parse(DST.text("swon")), off = parse(DST.text("swoff"));
+  DST.$("#swarm").append(el("div", { class: "grid g2" },
+    el("div", { class: "stat" }, el("div", { class: "num", style: { color: C.ok } }, on.fail ? "seed " + on.fail[1] : "not found"), el("div", { class: "lbl" }, "swarm: first failing seed")),
+    el("div", { class: "stat" }, el("div", { class: "num", style: { color: C.bug } }, off.fail ? "seed " + off.fail[1] : "never"), el("div", { class: "lbl" }, "uniform mix, 20,000 seeds"))));
+  DST.$("#swarm").append(el("p", { class: "src" }, `With a uniform mix the deepest queue reached in 20,000 seeds was ${off.depth ? off.depth[1] : "?"} items — the bug needs 32. Swarm testing gives some seeds "push" weight 85 and "pop" weight 3, so queues get deep. Earlier, 1,000,000 uniform seeds also never found it.`));
+  DST.term("#swarm", "$ sweep 20000 --bug --no-swarm\n" + DST.text("swoff").trim() + "\n$ sweep 20000 --bug\n" + DST.text("swon").trim()).style.whiteSpace = "pre-wrap";
+})();
+
+/* ---------- progression matrix ---------- */
+(function matrix() {
+  const cols = ["seed", "biased gen", "sim time", "scheduler", "sim disk", "crashes", "sim network", "liveness phase", "swarm", "shrinking", "history oracle", "partitions", "corruption", "consensus"];
+  const ex = [
+    ["01", "Seeded randomness", "Easy", "seed,biased gen", "Integer overflow in average()"],
+    ["02", "Simulated time", "Easy", "sim time", "TTL off-by-one exactly at the deadline"],
+    ["03", "Deterministic scheduler", "Easy–Med", "scheduler", "Lost update · deadlock"],
+    ["04", "Simulated disk & crashes", "Medium", "sim disk,crashes", "Ack before fsync · torn record replayed"],
+    ["05", "Simulated network", "Medium", "sim network,liveness phase", "Retry applied twice · stale reply"],
+    ["06", "Swarm testing & shrinking", "Medium", "swarm,shrinking", "Resize of a full ring loses data"],
+    ["07", "Linearizability checker", "Med–Hard", "history oracle", "Stale reads from async backup"],
+    ["08", "Leader election & partitions", "Hard", "partitions", "votedFor not persisted · reachable-majority quorum"],
+    ["09", "Storage fault atlas", "Hard", "corruption", "Trusting local reads · checksum without address"],
+    ["10", "Mini-VOPR", "Hardest", "consensus", "Commit before quorum · bad view-change log"],
+  ];
+  const uses = { "01": "", "02": "seed", "03": "seed", "04": "seed,sim time", "05": "seed,sim time", "06": "seed,biased gen", "07": "seed,sim network", "08": "seed,sim time,sim network,crashes,liveness phase", "09": "seed,sim disk,liveness phase,swarm", "10": "seed,sim time,sim disk,crashes,sim network,liveness phase,swarm,partitions" };
+  const t = DST.$("#matrix");
+  t.append(el("tr", {}, el("th", {}, "#"), el("th", {}, "project"), cols.map((c) => el("th", { style: { writingMode: "vertical-rl", transform: "rotate(180deg)", height: "110px", textAlign: "left" } }, c))));
+  ex.forEach(([id, name, lvl, introduces]) => {
+    const intro = introduces.split(","), used = uses[id].split(",");
+    t.append(el("tr", {}, el("td", {}, id), el("td", {}, el("a", { href: DST.PAGES.find((p) => p.short === id).href }, name)),
+      cols.map((c) => intro.includes(c) ? el("td", { class: "new" }, "★") : used.includes(c) ? el("td", { class: "y" }, "●") : el("td", {}, ""))));
+  });
+  const lvlTag = (l) => /Hard/.test(l) && !/Med–Hard/.test(l) ? "hard" : /Med/.test(l) ? "medium" : "easy";
+  DST.$("#cards").append(...ex.map(([id, name, lvl, intro, bug]) => el("a", { class: "card", href: DST.PAGES.find((p) => p.short === id).href },
+    el("div", { class: "tags" }, el("span", { class: "tag " + lvlTag(lvl) }, lvl), el("span", { class: "tag" }, "Example " + id)),
+    el("h3", {}, name), el("p", {}, el("span", { style: { color: "var(--accent2)" } }, "New: " + intro.replace(/,/g, ", ")), el("br"), el("span", { class: "src" }, "🐞 " + bug)))));
+})();
+</script>
+</body>
+</html>

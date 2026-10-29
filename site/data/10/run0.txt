@@ -1,0 +1,924 @@
+
+          SEED=0
+
+          replicas=3
+          clients=1
+          requests_per_client=15
+          request_idle_max=7 ticks
+          one_way_delay_min=3 ticks
+          one_way_delay_max=8 ticks
+          packet_loss_probability=5/100
+          packet_duplicate_probability=3/100
+          partition_mode=uniform_split
+          partition_symmetry=asymmetric
+          partition_probability=0/10000
+          unpartition_probability=19/1000
+          partition_stability=103 ticks
+          unpartition_stability=3 ticks
+          write_latency_min=3 ticks
+          write_latency_max=12 ticks
+          crash_probability=17/100000 (x10 while writes are pending)
+          crash_stability=57 ticks
+          restart_probability=47/1000
+          restart_stability=49 ticks
+
+     1 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=1 at=8
+     8 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=1 at=8
+     8 @write replica=0 kind=append view=0 op=1 at=11
+     8 @send from=0 to=1 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=12
+     8 @send from=0 to=2 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=11
+    11 @recv from=0 to=2 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=11
+    11 @write replica=2 kind=append view=0 op=1 at=22
+    11 @durable replica=0 kind=append view=0 op=1
+    12 @recv from=0 to=1 cmd=prepare view=0 op=1 commit=0 client=0 request=1 at=12
+    12 @write replica=1 kind=append view=0 op=1 at=20
+    20 @durable replica=1 kind=append view=0 op=1
+    20 @send from=1 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=27
+    22 @durable replica=2 kind=append view=0 op=1
+    22 @send from=2 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=25
+    25 @recv from=2 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=25
+    25 @commit replica=0 op=1 checksum=32c62a9029bb3dc6 client=0 request=1 view=0 transfer=0>2:5 result=ok
+    25  0   / ...    0V   1/__1C   0LV   1Wo  0W!
+    25 @send from=0 to=3 cmd=reply view=0 op=1 commit=0 client=0 request=1 at=31
+    27 @recv from=1 to=0 cmd=prepare_ok view=0 op=1 commit=0 client=0 request=0 at=27
+    31 @recv from=0 to=3 cmd=reply view=0 op=1 commit=0 client=0 request=1 at=31
+    38 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=2 at=45
+    45 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=2 at=45
+    45 @write replica=0 kind=append view=0 op=2 at=53
+    45 @send from=0 to=1 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=50
+    45 @lost from=0 to=2 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=45
+    50 @recv from=0 to=1 cmd=prepare view=0 op=2 commit=1 client=0 request=2 at=50
+    50 @write replica=1 kind=append view=0 op=2 at=60
+    50 @commit replica=1 op=1 checksum=32c62a9029bb3dc6 client=0 request=1 view=0 transfer=0>2:5 result=ok
+    50  1   \ ...    0V   1/__2C   0LV   1Wo  1W!
+    50 @send from=0 to=1 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=58
+    50 @send from=0 to=2 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=55
+    53 @durable replica=0 kind=append view=0 op=2
+    55 @recv from=0 to=2 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=55
+    55 @send from=2 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=58
+    55 @commit replica=2 op=1 checksum=32c62a9029bb3dc6 client=0 request=1 view=0 transfer=0>2:5 result=ok
+    55  2   \ ...    0V   1/__1C   0LV   1Wo  0W!
+    58 @recv from=0 to=1 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=58
+    58 @recv from=2 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=58
+    58 @send from=0 to=2 cmd=start_view view=0 op=2 commit=1 client=0 request=0 at=64
+    58 @send from=0 to=1 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=61
+    58 @send from=0 to=2 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=64
+    60 @durable replica=1 kind=append view=0 op=2
+    60 @send from=1 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=63
+    61 @recv from=0 to=1 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=61
+    61 @send from=1 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=64
+    63 @recv from=1 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=63
+    63 @commit replica=0 op=2 checksum=f1516858a72ade79 client=0 request=2 view=0 transfer=1>3:65 result=ok
+    63  0   / ...    0V   2/__2C   0LV   2Wo  0W!
+    63 @send from=0 to=3 cmd=reply view=0 op=2 commit=0 client=0 request=2 at=67
+    64 @recv from=0 to=2 cmd=start_view view=0 op=2 commit=1 client=0 request=0 at=64
+    64 @write replica=2 kind=install view=0 op=2 at=67
+    64  2 > \ ...    0V   1/__2C   0LV   1Wo  1W!
+    64 @recv from=0 to=2 cmd=commit view=0 op=2 commit=1 client=0 request=0 at=64
+    64 @recv from=1 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=64
+    66 @send from=0 to=1 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=72
+    66 @send from=0 to=2 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=70
+    67 @recv from=0 to=3 cmd=reply view=0 op=2 commit=0 client=0 request=2 at=67
+    67 @durable replica=2 kind=install view=0 op=2
+    67 @send from=2 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=70
+    67 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=3 at=70
+    70 @recv from=0 to=2 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=70
+    70 @commit replica=2 op=2 checksum=f1516858a72ade79 client=0 request=2 view=0 transfer=1>3:65 result=ok
+    70  2   \ ...    0V   2/__2C   0LV   2Wo  0W!
+    70 @recv from=2 to=0 cmd=prepare_ok view=0 op=2 commit=0 client=0 request=0 at=70
+    70 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=3 at=70
+    70 @write replica=0 kind=append view=0 op=3 at=76
+    70 @send from=0 to=1 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=75
+    70 @send from=0 to=2 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=76
+    72 @recv from=0 to=1 cmd=commit view=0 op=2 commit=2 client=0 request=0 at=72
+    72 @commit replica=1 op=2 checksum=f1516858a72ade79 client=0 request=2 view=0 transfer=1>3:65 result=ok
+    72  1   \ ...    0V   2/__2C   0LV   2Wo  0W!
+    74 @send from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=77
+    74 @lost from=0 to=2 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=74
+    75 @recv from=0 to=1 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=75
+    75 @write replica=1 kind=append view=0 op=3 at=79
+    76 @recv from=0 to=2 cmd=prepare view=0 op=3 commit=2 client=0 request=3 at=76
+    76 @write replica=2 kind=append view=0 op=3 at=83
+    76 @durable replica=0 kind=append view=0 op=3
+    77 @recv from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=77
+    79 @durable replica=1 kind=append view=0 op=3
+    79 @send from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=85
+    82 @send from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=85
+    82 @send from=0 to=2 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=90
+    83 @durable replica=2 kind=append view=0 op=3
+    83 @send from=2 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=86
+    85 @recv from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=85
+    85 @commit replica=0 op=3 checksum=a87c9e6fe1ba7d5b client=0 request=3 view=0 transfer=3>0:27 result=ok
+    85  0   / ...    0V   3/__3C   0LV   3Wo  0W!
+    85 @send from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=92
+    85 @send from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=88
+    85 @recv from=0 to=1 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=85
+    85 @send from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=93
+    86 @recv from=2 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=86
+    88 @recv from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=88
+    90 @recv from=0 to=2 cmd=commit view=0 op=3 commit=2 client=0 request=0 at=90
+    90 @send from=2 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=93
+    90 @send from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=95
+    90 @send from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=95
+    91 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=4 at=95
+    92 @recv from=0 to=3 cmd=reply view=0 op=3 commit=0 client=0 request=3 at=92
+    93 @recv from=1 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=93
+    93 @recv from=2 to=0 cmd=prepare_ok view=0 op=3 commit=0 client=0 request=0 at=93
+    95 @recv from=0 to=1 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=95
+    95 @commit replica=1 op=3 checksum=a87c9e6fe1ba7d5b client=0 request=3 view=0 transfer=3>0:27 result=ok
+    95  1   \ ...    0V   3/__3C   0LV   3Wo  0W!
+    95 @recv from=0 to=2 cmd=commit view=0 op=3 commit=3 client=0 request=0 at=95
+    95 @commit replica=2 op=3 checksum=a87c9e6fe1ba7d5b client=0 request=3 view=0 transfer=3>0:27 result=ok
+    95  2   \ ...    0V   3/__3C   0LV   3Wo  0W!
+    95 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=4 at=95
+    95 @write replica=0 kind=append view=0 op=4 at=100
+    95 @lost from=0 to=1 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=95
+    95 @send from=0 to=2 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=100
+    98 @send from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=101
+    98 @send from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=101
+   100 @recv from=0 to=2 cmd=prepare view=0 op=4 commit=3 client=0 request=4 at=100
+   100 @write replica=2 kind=append view=0 op=4 at=104
+   100 @durable replica=0 kind=append view=0 op=4
+   101 @recv from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=101
+   101 @send from=1 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=108
+   101 @recv from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=101
+   104 @durable replica=2 kind=append view=0 op=4
+   104 @send from=2 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=110
+   106 @send from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=114
+   106 @send from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=109
+   108 @recv from=1 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=108
+   108 @send from=0 to=1 cmd=start_view view=0 op=4 commit=3 client=0 request=0 at=113
+   109 @recv from=0 to=2 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=109
+   109 @lost from=2 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=109
+   110 @recv from=2 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=110
+   110 @commit replica=0 op=4 checksum=73253b319326b63a client=0 request=4 view=0 transfer=3>1:23 result=ok
+   110  0   / ...    0V   4/__4C   0LV   4Wo  0W!
+   110 @send from=0 to=3 cmd=reply view=0 op=4 commit=0 client=0 request=4 at=116
+   113 @recv from=0 to=1 cmd=start_view view=0 op=4 commit=3 client=0 request=0 at=113
+   113 @write replica=1 kind=install view=0 op=4 at=125
+   113  1 > \ ...    0V   3/__4C   0LV   3Wo  1W!
+   114 @recv from=0 to=1 cmd=commit view=0 op=4 commit=3 client=0 request=0 at=114
+   114 @send from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=119
+   114 @send from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=119
+   114 @send from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=117
+   116 @recv from=0 to=3 cmd=reply view=0 op=4 commit=0 client=0 request=4 at=116
+   117 @recv from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=117
+   117 @commit replica=2 op=4 checksum=73253b319326b63a client=0 request=4 view=0 transfer=3>1:23 result=ok
+   117  2   \ ...    0V   4/__4C   0LV   4Wo  0W!
+   119 @recv from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=119
+   119 @commit replica=1 op=4 checksum=73253b319326b63a client=0 request=4 view=0 transfer=3>1:23 result=ok
+   119  1   \ ...    0V   4/__4C   0LV   3Wo  1W!
+   119 @recv from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=119
+   122 @send from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=127
+   122 @send from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=125
+   123 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=131
+   125 @recv from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=125
+   125 @durable replica=1 kind=install view=0 op=4
+   125 @send from=1 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=128
+   127 @recv from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=127
+   128 @recv from=1 to=0 cmd=prepare_ok view=0 op=4 commit=0 client=0 request=0 at=128
+   130 @send from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=138
+   130 @send from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=137
+   131 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=5 at=131
+   131 @write replica=0 kind=append view=0 op=5 at=138
+   131 @send from=0 to=1 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=135
+   131 @send from=0 to=2 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=134
+   134 @recv from=0 to=2 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=134
+   134 @write replica=2 kind=append view=0 op=5 at=142
+   135 @recv from=0 to=1 cmd=prepare view=0 op=5 commit=4 client=0 request=5 at=135
+   135 @write replica=1 kind=append view=0 op=5 at=139
+   137 @recv from=0 to=2 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=137
+   138 @recv from=0 to=1 cmd=commit view=0 op=4 commit=4 client=0 request=0 at=138
+   138 @durable replica=0 kind=append view=0 op=5
+   138 @send from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=146
+   138 @send from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=145
+   139 @durable replica=1 kind=append view=0 op=5
+   139 @send from=1 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=143
+   142 @durable replica=2 kind=append view=0 op=5
+   142 @send from=2 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=150
+   143 @recv from=1 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=143
+   143 @commit replica=0 op=5 checksum=62c2ca6771fe67a9 client=0 request=5 view=0 transfer=3>2:27 result=ok
+   143  0   / ...    0V   5/__5C   0LV   5Wo  0W!
+   143 @send from=0 to=3 cmd=reply view=0 op=5 commit=0 client=0 request=5 at=147
+   145 @recv from=0 to=2 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=145
+   145 @send from=2 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=150
+   146 @recv from=0 to=1 cmd=commit view=0 op=5 commit=4 client=0 request=0 at=146
+   146 @send from=1 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=149
+   146 @send from=0 to=1 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=150
+   146 @send from=0 to=2 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=153
+   147 @recv from=0 to=3 cmd=reply view=0 op=5 commit=0 client=0 request=5 at=147
+   149 @recv from=1 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=149
+   150 @recv from=2 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=150
+   150 @recv from=2 to=0 cmd=prepare_ok view=0 op=5 commit=0 client=0 request=0 at=150
+   150 @recv from=0 to=1 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=150
+   150 @commit replica=1 op=5 checksum=62c2ca6771fe67a9 client=0 request=5 view=0 transfer=3>2:27 result=ok
+   150  1   \ ...    0V   5/__5C   0LV   5Wo  0W!
+   152 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=6 at=159
+   153 @recv from=0 to=2 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=153
+   153 @commit replica=2 op=5 checksum=62c2ca6771fe67a9 client=0 request=5 view=0 transfer=3>2:27 result=ok
+   153  2   \ ...    0V   5/__5C   0LV   5Wo  0W!
+   154 @send from=0 to=1 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=162
+   154 @send from=0 to=2 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=159
+   159 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=6 at=159
+   159 @write replica=0 kind=append view=0 op=6 at=164
+   159 @send from=0 to=1 cmd=prepare view=0 op=6 commit=5 client=0 request=6 at=167
+   159 @send from=0 to=2 cmd=prepare view=0 op=6 commit=5 client=0 request=6 at=166
+   159 @recv from=0 to=2 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=159
+   162 @recv from=0 to=1 cmd=commit view=0 op=5 commit=5 client=0 request=0 at=162
+   162 @send from=0 to=1 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=169
+   162 @lost from=0 to=2 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=162
+   164 @durable replica=0 kind=append view=0 op=6
+   166 @recv from=0 to=2 cmd=prepare view=0 op=6 commit=5 client=0 request=6 at=166
+   166 @write replica=2 kind=append view=0 op=6 at=170
+   167 @recv from=0 to=1 cmd=prepare view=0 op=6 commit=5 client=0 request=6 at=167
+   167 @write replica=1 kind=append view=0 op=6 at=170
+   169 @recv from=0 to=1 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=169
+   170 @durable replica=1 kind=append view=0 op=6
+   170 @send from=1 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=175
+   170 @durable replica=2 kind=append view=0 op=6
+   170 @send from=2 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=178
+   170 @send from=2 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=174
+   170 @send from=0 to=1 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=177
+   170 @send from=0 to=2 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=177
+   174 @recv from=2 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=174
+   174 @commit replica=0 op=6 checksum=b6e95f0b68d26a82 client=0 request=6 view=0 transfer=1>3:19 result=ok
+   174  0   / ...    0V   6/__6C   0LV   6Wo  0W!
+   174 @send from=0 to=3 cmd=reply view=0 op=6 commit=0 client=0 request=6 at=180
+   175 @recv from=1 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=175
+   177 @recv from=0 to=1 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=177
+   177 @send from=1 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=181
+   177 @recv from=0 to=2 cmd=commit view=0 op=6 commit=5 client=0 request=0 at=177
+   177 @send from=2 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=185
+   178 @recv from=2 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=178
+   178 @send from=0 to=1 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=181
+   178 @send from=0 to=2 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=182
+   180 @recv from=0 to=3 cmd=reply view=0 op=6 commit=0 client=0 request=6 at=180
+   181 @recv from=1 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=181
+   181 @recv from=0 to=1 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=181
+   181 @commit replica=1 op=6 checksum=b6e95f0b68d26a82 client=0 request=6 view=0 transfer=1>3:19 result=ok
+   181  1   \ ...    0V   6/__6C   0LV   6Wo  0W!
+   182 @recv from=0 to=2 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=182
+   182 @commit replica=2 op=6 checksum=b6e95f0b68d26a82 client=0 request=6 view=0 transfer=1>3:19 result=ok
+   182  2   \ ...    0V   6/__6C   0LV   6Wo  0W!
+   185 @recv from=2 to=0 cmd=prepare_ok view=0 op=6 commit=0 client=0 request=0 at=185
+   185 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=7 at=188
+   186 @send from=0 to=1 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=193
+   186 @send from=0 to=2 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=190
+   188 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=7 at=188
+   188 @write replica=0 kind=append view=0 op=7 at=200
+   188 @send from=0 to=1 cmd=prepare view=0 op=7 commit=6 client=0 request=7 at=196
+   188 @send from=0 to=1 cmd=prepare view=0 op=7 commit=6 client=0 request=7 at=193
+   188 @send from=0 to=2 cmd=prepare view=0 op=7 commit=6 client=0 request=7 at=195
+   190 @recv from=0 to=2 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=190
+   193 @recv from=0 to=1 cmd=commit view=0 op=6 commit=6 client=0 request=0 at=193
+   193 @recv from=0 to=1 cmd=prepare view=0 op=7 commit=6 client=0 request=7 at=193
+   193 @write replica=1 kind=append view=0 op=7 at=198
+   194 @send from=0 to=1 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=201
+   194 @send from=0 to=2 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=201
+   195 @recv from=0 to=2 cmd=prepare view=0 op=7 commit=6 client=0 request=7 at=195
+   195 @write replica=2 kind=append view=0 op=7 at=206
+   196 @recv from=0 to=1 cmd=prepare view=0 op=7 commit=6 client=0 request=7 at=196
+   198 @durable replica=1 kind=append view=0 op=7
+   198 @send from=1 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=203
+   200 @durable replica=0 kind=append view=0 op=7
+   201 @recv from=0 to=1 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=201
+   201 @send from=1 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=206
+   201 @recv from=0 to=2 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=201
+   202 @send from=0 to=1 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=206
+   202 @send from=0 to=2 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=208
+   203 @recv from=1 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=203
+   203 @commit replica=0 op=7 checksum=8be1f5233ae35d52 client=0 request=7 view=0 transfer=1>3:13 result=ok
+   203  0   / ...    0V   7/__7C   0LV   7Wo  0W!
+   203 @send from=0 to=3 cmd=reply view=0 op=7 commit=0 client=0 request=7 at=206
+   206 @recv from=1 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=206
+   206 @recv from=0 to=1 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=206
+   206 @send from=1 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=213
+   206 @recv from=0 to=3 cmd=reply view=0 op=7 commit=0 client=0 request=7 at=206
+   206 @durable replica=2 kind=append view=0 op=7
+   206 @send from=2 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=211
+   206 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=8 at=211
+   208 @recv from=0 to=2 cmd=commit view=0 op=7 commit=6 client=0 request=0 at=208
+   208 @send from=2 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=211
+   210 @lost from=0 to=1 cmd=commit view=0 op=7 commit=7 client=0 request=0 at=210
+   210 @send from=0 to=2 cmd=commit view=0 op=7 commit=7 client=0 request=0 at=216
+   211 @recv from=2 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=211
+   211 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=8 at=211
+   211 @write replica=0 kind=append view=0 op=8 at=216
+   211 @send from=0 to=1 cmd=prepare view=0 op=8 commit=7 client=0 request=8 at=218
+   211 @send from=0 to=2 cmd=prepare view=0 op=8 commit=7 client=0 request=8 at=215
+   211 @recv from=2 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=211
+   213 @recv from=1 to=0 cmd=prepare_ok view=0 op=7 commit=0 client=0 request=0 at=213
+   215 @recv from=0 to=2 cmd=prepare view=0 op=8 commit=7 client=0 request=8 at=215
+   215 @write replica=2 kind=append view=0 op=8 at=221
+   215 @commit replica=2 op=7 checksum=8be1f5233ae35d52 client=0 request=7 view=0 transfer=1>3:13 result=ok
+   215  2   \ ...    0V   7/__8C   0LV   7Wo  1W!
+   216 @recv from=0 to=2 cmd=commit view=0 op=7 commit=7 client=0 request=0 at=216
+   216 @durable replica=0 kind=append view=0 op=8
+   218 @recv from=0 to=1 cmd=prepare view=0 op=8 commit=7 client=0 request=8 at=218
+   218 @write replica=1 kind=append view=0 op=8 at=226
+   218 @commit replica=1 op=7 checksum=8be1f5233ae35d52 client=0 request=7 view=0 transfer=1>3:13 result=ok
+   218  1   \ ...    0V   7/__8C   0LV   7Wo  1W!
+   218 @send from=0 to=1 cmd=commit view=0 op=8 commit=7 client=0 request=0 at=222
+   218 @send from=0 to=2 cmd=commit view=0 op=8 commit=7 client=0 request=0 at=222
+   221 @durable replica=2 kind=append view=0 op=8
+   221 @send from=2 to=0 cmd=prepare_ok view=0 op=8 commit=0 client=0 request=0 at=226
+   222 @recv from=0 to=1 cmd=commit view=0 op=8 commit=7 client=0 request=0 at=222
+   222 @recv from=0 to=2 cmd=commit view=0 op=8 commit=7 client=0 request=0 at=222
+   222 @send from=2 to=0 cmd=prepare_ok view=0 op=8 commit=0 client=0 request=0 at=228
+   226 @recv from=2 to=0 cmd=prepare_ok view=0 op=8 commit=0 client=0 request=0 at=226
+   226 @commit replica=0 op=8 checksum=5bb599f18fb08de3 client=0 request=8 view=0 transfer=1>3:48 result=insufficient_funds
+   226  0   / ...    0V   8/__8C   0LV   8Wo  0W!
+   226 @send from=0 to=3 cmd=reply view=0 op=8 commit=0 client=0 request=8 at=232
+   226 @durable replica=1 kind=append view=0 op=8
+   226 @send from=1 to=0 cmd=prepare_ok view=0 op=8 commit=0 client=0 request=0 at=230
+   226 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=231
+   226 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=229
+   228 @recv from=2 to=0 cmd=prepare_ok view=0 op=8 commit=0 client=0 request=0 at=228
+   229 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=229
+   229 @commit replica=2 op=8 checksum=5bb599f18fb08de3 client=0 request=8 view=0 transfer=1>3:48 result=insufficient_funds
+   229  2   \ ...    0V   8/__8C   0LV   8Wo  0W!
+   230 @recv from=1 to=0 cmd=prepare_ok view=0 op=8 commit=0 client=0 request=0 at=230
+   231 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=231
+   231 @commit replica=1 op=8 checksum=5bb599f18fb08de3 client=0 request=8 view=0 transfer=1>3:48 result=insufficient_funds
+   231  1   \ ...    0V   8/__8C   0LV   8Wo  0W!
+   232 @recv from=0 to=3 cmd=reply view=0 op=8 commit=0 client=0 request=8 at=232
+   233 @lost from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=9 at=233
+   234 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=239
+   234 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=237
+   237 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=237
+   239 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=239
+   242 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=249
+   242 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=248
+   248 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=248
+   249 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=249
+   250 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=255
+   250 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=257
+   255 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=255
+   257 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=257
+   258 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=265
+   258 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=262
+   262 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=262
+   265 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=265
+   266 @lost from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=266
+   266 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=274
+   273 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=9 at=277
+   274 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=274
+   274 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=281
+   274 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=280
+   277 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=9 at=277
+   280 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=280
+   281 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=281
+   282 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=290
+   282 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=286
+   286 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=286
+   290 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=290
+   290 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=296
+   290 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=298
+   296 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=296
+   298 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=298
+   298 @lost from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=298
+   298 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=304
+   304 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=304
+   306 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=313
+   306 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=311
+   311 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=311
+   313 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=313
+   313 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=9 at=320
+   313 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=9 at=319
+   314 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=322
+   314 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=318
+   318 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=318
+   319 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=9 at=319
+   320 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=9 at=320
+   322 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=322
+   322 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=326
+   322 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=330
+   326 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=326
+   330 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=330
+   330 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=338
+   330 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=333
+   333 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=333
+   338 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=338
+   338 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=344
+   338 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=346
+   344 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=344
+   346 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=346
+   346 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=352
+   346 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=353
+   352 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=352
+   353 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=353
+   353 @lost from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=9 at=353
+   354 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=359
+   354 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=359
+   359 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=359
+   359 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=359
+   362 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=368
+   362 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=367
+   367 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=367
+   368 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=368
+   370 @lost from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=370
+   370 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=373
+   373 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=373
+   378 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=382
+   378 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=386
+   382 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=382
+   386 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=386
+   386 @lost from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=386
+   386 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=394
+   393 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=9 at=401
+   394 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=394
+   394 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=400
+   394 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=401
+   400 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=400
+   401 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=9 at=401
+   401 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=401
+   402 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=409
+   402 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=406
+   406 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=406
+   409 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=409
+   410 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=417
+   410 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=418
+   417 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=417
+   418 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=418
+   418 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=423
+   418 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=421
+   421 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=421
+   423 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=423
+   426 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=433
+   426 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=429
+   429 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=429
+   433 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=433
+   433 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=9 at=438
+   434 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=440
+   434 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=442
+   438 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=9 at=438
+   440 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=440
+   442 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=442
+   442 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=450
+   442 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=449
+   449 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=449
+   450 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=450
+   450 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=455
+   450 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=454
+   454 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=454
+   455 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=455
+   458 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=464
+   458 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=464
+   464 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=464
+   464 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=464
+   466 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=474
+   466 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=471
+   471 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=471
+   473 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=9 at=479
+   474 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=474
+   474 @send from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=481
+   474 @send from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=481
+   479 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=9 at=479
+   479 @write replica=0 kind=append view=0 op=9 at=484
+   479 @send from=0 to=1 cmd=prepare view=0 op=9 commit=8 client=0 request=9 at=486
+   479 @send from=0 to=2 cmd=prepare view=0 op=9 commit=8 client=0 request=9 at=482
+   481 @recv from=0 to=1 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=481
+   481 @recv from=0 to=2 cmd=commit view=0 op=8 commit=8 client=0 request=0 at=481
+   482 @recv from=0 to=2 cmd=prepare view=0 op=9 commit=8 client=0 request=9 at=482
+   482 @write replica=2 kind=append view=0 op=9 at=488
+   482 @send from=0 to=1 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=490
+   482 @send from=0 to=2 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=489
+   484 @durable replica=0 kind=append view=0 op=9
+   486 @recv from=0 to=1 cmd=prepare view=0 op=9 commit=8 client=0 request=9 at=486
+   486 @write replica=1 kind=append view=0 op=9 at=489
+   488 @durable replica=2 kind=append view=0 op=9
+   488 @send from=2 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=493
+   489 @recv from=0 to=2 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=489
+   489 @send from=2 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=493
+   489 @durable replica=1 kind=append view=0 op=9
+   489 @send from=1 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=497
+   490 @recv from=0 to=1 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=490
+   490 @send from=1 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=495
+   490 @send from=0 to=1 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=495
+   490 @send from=0 to=2 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=493
+   493 @recv from=2 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=493
+   493 @commit replica=0 op=9 checksum=f2e478216f93fa7e client=0 request=9 view=0 transfer=0>2:49 result=ok
+   493  0   / ...    0V   9/__9C   0LV   9Wo  0W!
+   493 @send from=0 to=3 cmd=reply view=0 op=9 commit=0 client=0 request=9 at=500
+   493 @recv from=2 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=493
+   493 @recv from=0 to=2 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=493
+   493 @send from=2 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=499
+   495 @recv from=1 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=495
+   495 @recv from=0 to=1 cmd=commit view=0 op=9 commit=8 client=0 request=0 at=495
+   495 @send from=1 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=498
+   497 @recv from=1 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=497
+   498 @recv from=1 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=498
+   498 @send from=0 to=1 cmd=commit view=0 op=9 commit=9 client=0 request=0 at=501
+   498 @send from=0 to=2 cmd=commit view=0 op=9 commit=9 client=0 request=0 at=505
+   499 @recv from=2 to=0 cmd=prepare_ok view=0 op=9 commit=0 client=0 request=0 at=499
+   500 @recv from=0 to=3 cmd=reply view=0 op=9 commit=0 client=0 request=9 at=500
+   500 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=10 at=505
+   500 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=10 at=505
+   501 @recv from=0 to=1 cmd=commit view=0 op=9 commit=9 client=0 request=0 at=501
+   501 @commit replica=1 op=9 checksum=f2e478216f93fa7e client=0 request=9 view=0 transfer=0>2:49 result=ok
+   501  1   \ ...    0V   9/__9C   0LV   9Wo  0W!
+   505 @recv from=0 to=2 cmd=commit view=0 op=9 commit=9 client=0 request=0 at=505
+   505 @commit replica=2 op=9 checksum=f2e478216f93fa7e client=0 request=9 view=0 transfer=0>2:49 result=ok
+   505  2   \ ...    0V   9/__9C   0LV   9Wo  0W!
+   505 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=10 at=505
+   505 @write replica=0 kind=append view=0 op=10 at=514
+   505 @send from=0 to=1 cmd=prepare view=0 op=10 commit=9 client=0 request=10 at=513
+   505 @send from=0 to=2 cmd=prepare view=0 op=10 commit=9 client=0 request=10 at=510
+   505 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=10 at=505
+   506 @send from=0 to=1 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=511
+   506 @send from=0 to=2 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=511
+   510 @recv from=0 to=2 cmd=prepare view=0 op=10 commit=9 client=0 request=10 at=510
+   510 @write replica=2 kind=append view=0 op=10 at=518
+   511 @recv from=0 to=1 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=511
+   511 @send from=1 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=516
+   511 @recv from=0 to=2 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=511
+   513 @recv from=0 to=1 cmd=prepare view=0 op=10 commit=9 client=0 request=10 at=513
+   513 @write replica=1 kind=append view=0 op=10 at=519
+   514 @durable replica=0 kind=append view=0 op=10
+   514 @send from=0 to=1 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=517
+   514 @send from=0 to=2 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=521
+   516 @recv from=1 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=516
+   516 @send from=0 to=1 cmd=start_view view=0 op=10 commit=9 client=0 request=0 at=521
+   517 @recv from=0 to=1 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=517
+   518 @durable replica=2 kind=append view=0 op=10
+   518 @send from=2 to=0 cmd=prepare_ok view=0 op=10 commit=0 client=0 request=0 at=521
+   519 @durable replica=1 kind=append view=0 op=10
+   519 @send from=1 to=0 cmd=prepare_ok view=0 op=10 commit=0 client=0 request=0 at=522
+   521 @recv from=0 to=2 cmd=commit view=0 op=10 commit=9 client=0 request=0 at=521
+   521 @send from=2 to=0 cmd=prepare_ok view=0 op=10 commit=0 client=0 request=0 at=527
+   521 @recv from=0 to=1 cmd=start_view view=0 op=10 commit=9 client=0 request=0 at=521
+   521 @recv from=2 to=0 cmd=prepare_ok view=0 op=10 commit=0 client=0 request=0 at=521
+   521 @commit replica=0 op=10 checksum=25994ad2076cb43d client=0 request=10 view=0 transfer=3>2:77 result=ok
+   521  0   / ...    0V  10/_10C   0LV  10Wo  0W!
+   521 @send from=0 to=3 cmd=reply view=0 op=10 commit=0 client=0 request=10 at=526
+   522 @recv from=1 to=0 cmd=prepare_ok view=0 op=10 commit=0 client=0 request=0 at=522
+   522 @send from=0 to=1 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=527
+   522 @send from=0 to=2 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=528
+   526 @recv from=0 to=3 cmd=reply view=0 op=10 commit=0 client=0 request=10 at=526
+   527 @recv from=2 to=0 cmd=prepare_ok view=0 op=10 commit=0 client=0 request=0 at=527
+   527 @recv from=0 to=1 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=527
+   527 @commit replica=1 op=10 checksum=25994ad2076cb43d client=0 request=10 view=0 transfer=3>2:77 result=ok
+   527  1   \ ...    0V  10/_10C   0LV  10Wo  0W!
+   528 @recv from=0 to=2 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=528
+   528 @commit replica=2 op=10 checksum=25994ad2076cb43d client=0 request=10 view=0 transfer=3>2:77 result=ok
+   528  2   \ ...    0V  10/_10C   0LV  10Wo  0W!
+   530 @send from=0 to=1 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=533
+   530 @send from=0 to=2 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=534
+   532 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=11 at=539
+   533 @recv from=0 to=1 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=533
+   534 @recv from=0 to=2 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=534
+   538 @send from=0 to=1 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=542
+   538 @send from=0 to=2 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=544
+   539 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=11 at=539
+   539 @write replica=0 kind=append view=0 op=11 at=550
+   539 @send from=0 to=1 cmd=prepare view=0 op=11 commit=10 client=0 request=11 at=547
+   539 @send from=0 to=2 cmd=prepare view=0 op=11 commit=10 client=0 request=11 at=543
+   542 @recv from=0 to=1 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=542
+   543 @recv from=0 to=2 cmd=prepare view=0 op=11 commit=10 client=0 request=11 at=543
+   543 @write replica=2 kind=append view=0 op=11 at=547
+   544 @recv from=0 to=2 cmd=commit view=0 op=10 commit=10 client=0 request=0 at=544
+   546 @send from=0 to=1 cmd=commit view=0 op=11 commit=10 client=0 request=0 at=550
+   546 @lost from=0 to=2 cmd=commit view=0 op=11 commit=10 client=0 request=0 at=546
+   547 @recv from=0 to=1 cmd=prepare view=0 op=11 commit=10 client=0 request=11 at=547
+   547 @write replica=1 kind=append view=0 op=11 at=552
+   547 @durable replica=2 kind=append view=0 op=11
+   547 @send from=2 to=0 cmd=prepare_ok view=0 op=11 commit=0 client=0 request=0 at=553
+   550 @recv from=0 to=1 cmd=commit view=0 op=11 commit=10 client=0 request=0 at=550
+   550 @durable replica=0 kind=append view=0 op=11
+   552 @durable replica=1 kind=append view=0 op=11
+   552 @send from=1 to=0 cmd=prepare_ok view=0 op=11 commit=0 client=0 request=0 at=558
+   553 @recv from=2 to=0 cmd=prepare_ok view=0 op=11 commit=0 client=0 request=0 at=553
+   553 @commit replica=0 op=11 checksum=3fa71859844f2c89 client=0 request=11 view=0 transfer=1>3:49 result=insufficient_funds
+   553  0   / ...    0V  11/_11C   0LV  11Wo  0W!
+   553 @send from=0 to=3 cmd=reply view=0 op=11 commit=0 client=0 request=11 at=557
+   554 @send from=0 to=1 cmd=commit view=0 op=11 commit=11 client=0 request=0 at=560
+   554 @send from=0 to=2 cmd=commit view=0 op=11 commit=11 client=0 request=0 at=557
+   557 @recv from=0 to=3 cmd=reply view=0 op=11 commit=0 client=0 request=11 at=557
+   557 @recv from=0 to=2 cmd=commit view=0 op=11 commit=11 client=0 request=0 at=557
+   557 @commit replica=2 op=11 checksum=3fa71859844f2c89 client=0 request=11 view=0 transfer=1>3:49 result=insufficient_funds
+   557  2   \ ...    0V  11/_11C   0LV  11Wo  0W!
+   558 @recv from=1 to=0 cmd=prepare_ok view=0 op=11 commit=0 client=0 request=0 at=558
+   559 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=12 at=562
+   560 @recv from=0 to=1 cmd=commit view=0 op=11 commit=11 client=0 request=0 at=560
+   560 @commit replica=1 op=11 checksum=3fa71859844f2c89 client=0 request=11 view=0 transfer=1>3:49 result=insufficient_funds
+   560  1   \ ...    0V  11/_11C   0LV  11Wo  0W!
+   562 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=12 at=562
+   562 @write replica=0 kind=append view=0 op=12 at=566
+   562 @send from=0 to=1 cmd=prepare view=0 op=12 commit=11 client=0 request=12 at=568
+   562 @send from=0 to=2 cmd=prepare view=0 op=12 commit=11 client=0 request=12 at=568
+   562 @send from=0 to=1 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=569
+   562 @send from=0 to=2 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=566
+   566 @recv from=0 to=2 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=566
+   566 @send from=2 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=574
+   566 @durable replica=0 kind=append view=0 op=12
+   568 @recv from=0 to=1 cmd=prepare view=0 op=12 commit=11 client=0 request=12 at=568
+   568 @write replica=1 kind=append view=0 op=12 at=571
+   568 @recv from=0 to=2 cmd=prepare view=0 op=12 commit=11 client=0 request=12 at=568
+   568 @write replica=2 kind=append view=0 op=12 at=572
+   569 @recv from=0 to=1 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=569
+   570 @send from=0 to=1 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=576
+   570 @send from=0 to=2 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=576
+   571 @durable replica=1 kind=append view=0 op=12
+   571 @send from=1 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=575
+   572 @durable replica=2 kind=append view=0 op=12
+   572 @send from=2 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=580
+   574 @recv from=2 to=0 cmd=get_view view=0 op=0 commit=0 client=0 request=0 at=574
+   574 @send from=0 to=2 cmd=start_view view=0 op=12 commit=11 client=0 request=0 at=578
+   575 @recv from=1 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=575
+   575 @commit replica=0 op=12 checksum=28e26a9c302f6d52 client=0 request=12 view=0 transfer=2>1:30 result=ok
+   575  0   / ...    0V  12/_12C   0LV  12Wo  0W!
+   575 @send from=0 to=3 cmd=reply view=0 op=12 commit=0 client=0 request=12 at=580
+   576 @recv from=0 to=1 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=576
+   576 @send from=1 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=582
+   576 @recv from=0 to=2 cmd=commit view=0 op=12 commit=11 client=0 request=0 at=576
+   576 @send from=2 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=583
+   578 @recv from=0 to=2 cmd=start_view view=0 op=12 commit=11 client=0 request=0 at=578
+   578 @send from=0 to=1 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=583
+   578 @send from=0 to=2 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=584
+   580 @recv from=2 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=580
+   580 @recv from=0 to=3 cmd=reply view=0 op=12 commit=0 client=0 request=12 at=580
+   582 @recv from=1 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=582
+   582 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=13 at=589
+   583 @recv from=2 to=0 cmd=prepare_ok view=0 op=12 commit=0 client=0 request=0 at=583
+   583 @recv from=0 to=1 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=583
+   583 @commit replica=1 op=12 checksum=28e26a9c302f6d52 client=0 request=12 view=0 transfer=2>1:30 result=ok
+   583  1   \ ...    0V  12/_12C   0LV  12Wo  0W!
+   584 @recv from=0 to=2 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=584
+   584 @commit replica=2 op=12 checksum=28e26a9c302f6d52 client=0 request=12 view=0 transfer=2>1:30 result=ok
+   584  2   \ ...    0V  12/_12C   0LV  12Wo  0W!
+   586 @send from=0 to=1 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=594
+   586 @send from=0 to=2 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=591
+   589 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=13 at=589
+   589 @write replica=0 kind=append view=0 op=13 at=598
+   589 @send from=0 to=1 cmd=prepare view=0 op=13 commit=12 client=0 request=13 at=597
+   589 @send from=0 to=2 cmd=prepare view=0 op=13 commit=12 client=0 request=13 at=596
+   591 @recv from=0 to=2 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=591
+   594 @recv from=0 to=1 cmd=commit view=0 op=12 commit=12 client=0 request=0 at=594
+   594 @send from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=599
+   594 @send from=0 to=2 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=598
+   596 @recv from=0 to=2 cmd=prepare view=0 op=13 commit=12 client=0 request=13 at=596
+   596 @write replica=2 kind=append view=0 op=13 at=605
+   597 @recv from=0 to=1 cmd=prepare view=0 op=13 commit=12 client=0 request=13 at=597
+   597 @write replica=1 kind=append view=0 op=13 at=609
+   598 @recv from=0 to=2 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=598
+   598 @durable replica=0 kind=append view=0 op=13
+   599 @recv from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=599
+   602 @send from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=608
+   602 @send from=0 to=2 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=608
+   605 @durable replica=2 kind=append view=0 op=13
+   605 @send from=2 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=611
+   608 @recv from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=608
+   608 @recv from=0 to=2 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=608
+   608 @send from=2 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=612
+   609 @durable replica=1 kind=append view=0 op=13
+   609 @send from=1 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=612
+   610 @send from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=613
+   610 @send from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=614
+   610 @send from=0 to=2 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=617
+   611 @recv from=2 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=611
+   611 @commit replica=0 op=13 checksum=f7895d1f14e346dd client=0 request=13 view=0 transfer=2>0:24 result=ok
+   611  0   / ...    0V  13/_13C   0LV  13Wo  0W!
+   611 @send from=0 to=3 cmd=reply view=0 op=13 commit=0 client=0 request=13 at=617
+   612 @recv from=2 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=612
+   612 @recv from=1 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=612
+   613 @recv from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=613
+   613 @send from=1 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=617
+   614 @recv from=0 to=1 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=614
+   614 @send from=1 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=619
+   617 @recv from=0 to=2 cmd=commit view=0 op=13 commit=12 client=0 request=0 at=617
+   617 @send from=2 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=620
+   617 @recv from=0 to=3 cmd=reply view=0 op=13 commit=0 client=0 request=13 at=617
+   617 @recv from=1 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=617
+   618 @send from=0 to=1 cmd=commit view=0 op=13 commit=13 client=0 request=0 at=625
+   618 @send from=0 to=1 cmd=commit view=0 op=13 commit=13 client=0 request=0 at=626
+   618 @send from=0 to=2 cmd=commit view=0 op=13 commit=13 client=0 request=0 at=624
+   619 @recv from=1 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=619
+   620 @recv from=2 to=0 cmd=prepare_ok view=0 op=13 commit=0 client=0 request=0 at=620
+   620 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=14 at=623
+   623 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=14 at=623
+   623 @write replica=0 kind=append view=0 op=14 at=635
+   623 @send from=0 to=1 cmd=prepare view=0 op=14 commit=13 client=0 request=14 at=630
+   623 @send from=0 to=2 cmd=prepare view=0 op=14 commit=13 client=0 request=14 at=626
+   624 @recv from=0 to=2 cmd=commit view=0 op=13 commit=13 client=0 request=0 at=624
+   624 @commit replica=2 op=13 checksum=f7895d1f14e346dd client=0 request=13 view=0 transfer=2>0:24 result=ok
+   624  2   \ ...    0V  13/_13C   0LV  13Wo  0W!
+   625 @recv from=0 to=1 cmd=commit view=0 op=13 commit=13 client=0 request=0 at=625
+   625 @commit replica=1 op=13 checksum=f7895d1f14e346dd client=0 request=13 view=0 transfer=2>0:24 result=ok
+   625  1   \ ...    0V  13/_13C   0LV  13Wo  0W!
+   626 @recv from=0 to=1 cmd=commit view=0 op=13 commit=13 client=0 request=0 at=626
+   626 @recv from=0 to=2 cmd=prepare view=0 op=14 commit=13 client=0 request=14 at=626
+   626 @write replica=2 kind=append view=0 op=14 at=631
+   626 @send from=0 to=1 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=631
+   626 @send from=0 to=2 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=633
+   630 @recv from=0 to=1 cmd=prepare view=0 op=14 commit=13 client=0 request=14 at=630
+   630 @write replica=1 kind=append view=0 op=14 at=639
+   631 @recv from=0 to=1 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=631
+   631 @durable replica=2 kind=append view=0 op=14
+   631 @send from=2 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=639
+   633 @recv from=0 to=2 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=633
+   633 @send from=2 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=639
+   634 @send from=0 to=1 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=638
+   634 @send from=0 to=2 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=638
+   635 @durable replica=0 kind=append view=0 op=14
+   638 @recv from=0 to=1 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=638
+   638 @recv from=0 to=2 cmd=commit view=0 op=14 commit=13 client=0 request=0 at=638
+   638 @send from=2 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=643
+   639 @recv from=2 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=639
+   639 @commit replica=0 op=14 checksum=2456dbf1b96e9a88 client=0 request=14 view=0 transfer=1>2:15 result=ok
+   639  0   / ...    0V  14/_14C   0LV  14Wo  0W!
+   639 @lost from=0 to=3 cmd=reply view=0 op=14 commit=0 client=0 request=14 at=639
+   639 @recv from=2 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=639
+   639 @durable replica=1 kind=append view=0 op=14
+   639 @send from=1 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=644
+   642 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=645
+   642 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=650
+   643 @recv from=2 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=643
+   644 @recv from=1 to=0 cmd=prepare_ok view=0 op=14 commit=0 client=0 request=0 at=644
+   645 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=645
+   645 @commit replica=1 op=14 checksum=2456dbf1b96e9a88 client=0 request=14 view=0 transfer=1>2:15 result=ok
+   645  1   \ ...    0V  14/_14C   0LV  14Wo  0W!
+   650 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=650
+   650 @commit replica=2 op=14 checksum=2456dbf1b96e9a88 client=0 request=14 view=0 transfer=1>2:15 result=ok
+   650  2   \ ...    0V  14/_14C   0LV  14Wo  0W!
+   650 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=654
+   650 @lost from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=650
+   654 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=654
+   658 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=663
+   658 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=665
+   660 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=14 at=665
+   660 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=14 at=665
+   663 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=663
+   665 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=665
+   665 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=14 at=665
+   665 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=14 at=665
+   666 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=671
+   666 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=671
+   666 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=673
+   671 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=671
+   671 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=671
+   673 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=673
+   674 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=682
+   674 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=678
+   678 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=678
+   682 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=682
+   682 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=687
+   682 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=689
+   687 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=687
+   689 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=689
+   690 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=697
+   690 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=696
+   696 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=696
+   697 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=697
+   698 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=703
+   698 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=706
+   700 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=14 at=705
+   703 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=703
+   705 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=14 at=705
+   706 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=706
+   706 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=714
+   706 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=713
+   713 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=713
+   714 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=714
+   714 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=722
+   714 @lost from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=714
+   722 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=722
+   722 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=729
+   722 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=728
+   728 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=728
+   729 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=729
+   730 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=735
+   730 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=736
+   735 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=735
+   736 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=736
+   738 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=746
+   738 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=744
+   740 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=14 at=748
+   744 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=744
+   746 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=746
+   746 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=752
+   746 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=754
+   748 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=14 at=748
+   748 @send from=0 to=3 cmd=reply view=0 op=14 commit=0 client=0 request=14 at=751
+   751 @recv from=0 to=3 cmd=reply view=0 op=14 commit=0 client=0 request=14 at=751
+   752 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=752
+   753 @lost from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=15 at=753
+   754 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=754
+   754 @lost from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=754
+   754 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=757
+   757 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=757
+   762 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=767
+   762 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=768
+   767 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=767
+   768 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=768
+   770 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=776
+   770 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=774
+   774 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=774
+   776 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=776
+   778 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=782
+   778 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=784
+   778 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=784
+   782 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=782
+   784 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=784
+   784 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=784
+   786 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=790
+   786 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=789
+   789 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=789
+   790 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=790
+   793 @send from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=15 at=797
+   794 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=798
+   794 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=800
+   794 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=797
+   797 @recv from=3 to=1 cmd=request view=0 op=0 commit=0 client=0 request=15 at=797
+   797 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=797
+   798 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=798
+   800 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=800
+   802 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=806
+   802 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=808
+   806 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=806
+   808 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=808
+   810 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=815
+   810 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=818
+   815 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=815
+   818 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=818
+   818 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=821
+   818 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=825
+   821 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=821
+   825 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=825
+   826 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=832
+   826 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=829
+   829 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=829
+   832 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=832
+   833 @send from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=15 at=836
+   834 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=837
+   834 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=842
+   836 @recv from=3 to=2 cmd=request view=0 op=0 commit=0 client=0 request=15 at=836
+   837 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=837
+   842 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=842
+   842 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=845
+   842 @lost from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=842
+   845 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=845
+   850 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=856
+   850 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=856
+   856 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=856
+   856 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=856
+   858 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=865
+   858 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=865
+   865 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=865
+   865 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=865
+   866 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=874
+   866 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=870
+   870 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=870
+   873 @send from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=15 at=877
+   874 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=874
+   874 @send from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=879
+   874 @send from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=879
+   877 @recv from=3 to=0 cmd=request view=0 op=0 commit=0 client=0 request=15 at=877
+   877 @write replica=0 kind=append view=0 op=15 at=883
+   877 @send from=0 to=1 cmd=prepare view=0 op=15 commit=14 client=0 request=15 at=884
+   877 @send from=0 to=2 cmd=prepare view=0 op=15 commit=14 client=0 request=15 at=882
+   879 @recv from=0 to=1 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=879
+   879 @recv from=0 to=2 cmd=commit view=0 op=14 commit=14 client=0 request=0 at=879
+   882 @recv from=0 to=2 cmd=prepare view=0 op=15 commit=14 client=0 request=15 at=882
+   882 @write replica=2 kind=append view=0 op=15 at=892
+   882 @send from=0 to=1 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=887
+   882 @send from=0 to=2 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=890
+   883 @durable replica=0 kind=append view=0 op=15
+   884 @recv from=0 to=1 cmd=prepare view=0 op=15 commit=14 client=0 request=15 at=884
+   884 @write replica=1 kind=append view=0 op=15 at=888
+   887 @recv from=0 to=1 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=887
+   888 @durable replica=1 kind=append view=0 op=15
+   888 @send from=1 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=893
+   890 @recv from=0 to=2 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=890
+   890 @send from=0 to=1 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=893
+   890 @send from=0 to=2 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=898
+   892 @durable replica=2 kind=append view=0 op=15
+   892 @send from=2 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=896
+   893 @recv from=1 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=893
+   893 @commit replica=0 op=15 checksum=c16bb3a2497e0f08 client=0 request=15 view=0 transfer=1>2:30 result=ok
+   893  0   / ...    0V  15/_15C   0LV  15Wo  0W!
+   893 @send from=0 to=3 cmd=reply view=0 op=15 commit=0 client=0 request=15 at=899
+   893 @send from=0 to=3 cmd=reply view=0 op=15 commit=0 client=0 request=15 at=897
+   893 @recv from=0 to=1 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=893
+   893 @send from=1 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=896
+   896 @recv from=2 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=896
+   896 @recv from=1 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=896
+   897 @recv from=0 to=3 cmd=reply view=0 op=15 commit=0 client=0 request=15 at=897
+   897    liveness mode: core=00111
+   898 @recv from=0 to=2 cmd=commit view=0 op=15 commit=14 client=0 request=0 at=898
+   898 @send from=2 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=901
+   898 @lost from=0 to=1 cmd=commit view=0 op=15 commit=15 client=0 request=0 at=898
+   898 @send from=0 to=2 cmd=commit view=0 op=15 commit=15 client=0 request=0 at=902
+   899 @recv from=0 to=3 cmd=reply view=0 op=15 commit=0 client=0 request=15 at=899
+   901 @recv from=2 to=0 cmd=prepare_ok view=0 op=15 commit=0 client=0 request=0 at=901
+   902 @recv from=0 to=2 cmd=commit view=0 op=15 commit=15 client=0 request=0 at=902
+   902 @commit replica=2 op=15 checksum=c16bb3a2497e0f08 client=0 request=15 view=0 transfer=1>2:30 result=ok
+   902  2   \ ...    0V  15/_15C   0LV  15Wo  0W!
+   906 @send from=0 to=1 cmd=commit view=0 op=15 commit=15 client=0 request=0 at=910
+   906 @send from=0 to=2 cmd=commit view=0 op=15 commit=15 client=0 request=0 at=912
+   910 @recv from=0 to=1 cmd=commit view=0 op=15 commit=15 client=0 request=0 at=910
+   910 @commit replica=1 op=15 checksum=c16bb3a2497e0f08 client=0 request=15 view=0 transfer=1>2:30 result=ok
+   910  1   \ ...    0V  15/_15C   0LV  15Wo  0W!
+   910  0 = / ...    0V  15/_15C   0LV  15Wo  0W!
+   910  1 = \ ...    0V  15/_15C   0LV  15Wo  0W!
+   910  2 = \ ...    0V  15/_15C   0LV  15Wo  0W!
+seed=0 ticks=910 commits=15 trace=459c3b0299936c2f PASS

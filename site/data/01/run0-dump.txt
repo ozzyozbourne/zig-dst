@@ -1,0 +1,4 @@
+  dump seed=0 step=0 roll_a=2 a=924233 roll_b=91 b=343514 got=633873 want=633873
+  dump seed=0 step=1 roll_a=42 a=274594 roll_b=99 b=4294967283 got=2147620938 want=2147620938
+  dump seed=0 step=2 roll_a=40 a=912755 roll_b=75 b=66328 got=489541 want=489541
+seed=0 steps=3 trace=842142446d687ff3 PASS

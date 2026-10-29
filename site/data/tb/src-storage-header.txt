@@ -1,0 +1,25 @@
+//! In-memory storage, with simulated faults and latency.
+//!
+//!
+//! Fault Injection
+//!
+//! Storage injects faults that a fully-connected cluster can (i.e. should be able to) recover from.
+//! Each zone can tolerate a different pattern of faults.
+//!
+//! - superblock:
+//!   - One read/write fault is permitted per area (section, free set, …).
+//!   - An additional fault is permitted at the target of a pending write during a crash.
+//!
+//! - wal_headers, wal_prepares:
+//!   - Read/write faults are distributed between replicas according to ClusterFaultAtlas, to ensure
+//!     that at least one replica will have a valid copy to help others repair.
+//!     (See: generate_faulty_wal_areas()).
+//!   - When a replica crashes, it may fault the WAL outside of ClusterFaultAtlas.
+//!   - When replica_count=1, its WAL can only be corrupted by a crash, never a read/write.
+//!     (When replica_count=1, there are no other replicas to assist with repair).
+//!
+//! - grid:
+//!   - Similarly to prepares and headers, ClusterFaultAtlas ensures that at least one replica will
+//!     have a block.
+//!   - When replica_count≤2, grid faults are disabled.
+//!

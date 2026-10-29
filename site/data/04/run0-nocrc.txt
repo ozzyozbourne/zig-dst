@@ -1,0 +1,6 @@
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 11, in-flight 4); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 16, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+tick  140: crash #4: cache sectors applied=1 dropped=4; recovered 46 records (acked 45, in-flight 2); stop: unexpected seq (never written, or header sector lost)
+  INVARIANT VIOLATED: garbage: recovered seq=46 key=1 len=102 was never written by the client
+seed=0 crashes=4 acked=45 trace=826972d8c8dd33cc FAIL

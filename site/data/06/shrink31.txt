@@ -1,0 +1,11 @@
+shrink: seed=31 recorded 1000 ops, initial_cap=35
+  op 384: count_mismatch: got=0 want=33
+  truncate after failing op -> 385 ops
+  round 1: delete -> 35 ops, simplified 36 args
+  round 2: delete -> 33 ops, simplified 0 args
+  round 3: delete -> 33 ops, simplified 0 args
+minimal reproduction (33 ops, 455 replays):
+  q = RingQueue.init(32)
+  push(0) x32
+  resize(32)   <- count_mismatch: got=0 want=32
+seed=31 shrunk trace=98ce1d6defe82a39 FAIL

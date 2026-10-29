@@ -1,0 +1,7 @@
+ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 1 (tick 1071)
+FAIL at seed=0 (election_safety) after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug-no-quorum
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s

@@ -1,0 +1,3 @@
+  step 25 t=15612ms: clock +1638ms (on_deadline)
+  step 27 t=17250ms: evict kept key 14, deadline 17250ms
+seed=1 steps=28 simulated=17250ms trace=b51d0a68fc5da3f4 FAIL

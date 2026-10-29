@@ -1,0 +1,22 @@
+// src/tigerbeetle/main.zig (production)
+17:const IO = vsr.io.IO;
+19:const TimeOS = stdx.TimeOS;
+21:pub const Storage = vsr.storage.StorageType(IO);
+22:const AOF = vsr.aof.AOFType(IO);
+24:const MessageBus = vsr.message_bus.MessageBusType(IO);
+30:pub const Replica = vsr.ReplicaType(StateMachine, MessageBus, Storage, AOF);
+// src/testing/cluster.zig (simulation)
+16:const IO = @import("io.zig").IO;
+18:const AOF = @import("../aof.zig").AOFType(IO);
+19:const TimeSim = stdx.TimeSim;
+63:        pub const Network = @import("cluster/network.zig").Network;
+65:        pub const Storage = @import("storage.zig").Storage;
+69:        pub const MessageBus = @import("cluster/message_bus.zig").MessageBus;
+71:        pub const Replica = vsr.ReplicaType(StateMachine, MessageBus, Storage, AOF);
+// src/vsr/replica.zig
+144:pub fn ReplicaType(
+145-    comptime StateMachine: type,
+146-    comptime MessageBus: type,
+147-    comptime Storage: type,
+148-    comptime AOF: type,
+149-) type {

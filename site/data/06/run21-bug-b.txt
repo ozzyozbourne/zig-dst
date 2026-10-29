@@ -1,0 +1,6 @@
+seed=21 initial_cap=43 weights: push=85 pop=3 peek=0 clear=0 resize=1
+  op 46: queue became full (count=cap=43)
+  op 65: queue became full (count=cap=43)
+  op 69: resize 43 -> 64 while FULL (count=43)
+  op 69: count_mismatch: got=0 want=43
+seed=21 max_count=43 trace=b3e7bd86bc13f598 FAIL

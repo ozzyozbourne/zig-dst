@@ -1,0 +1,5 @@
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 18, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  INVARIANT VIOLATED: durability: acked put seq=17 key=1 was lost (18 acked, 16 recovered)
+seed=0 crashes=3 acked=18 trace=05849ac5c0fa49b0 FAIL

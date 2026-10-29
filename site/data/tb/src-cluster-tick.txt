@@ -1,0 +1,76 @@
+        pub fn tick(cluster: *Cluster) void {
+            // Interleave storage and network steps, to allow for faster-than-a-tick IO.
+            while (true) {
+                var advanced = false;
+                advanced = cluster.network.step() or advanced;
+
+                for (cluster.clients, cluster.client_eviction_reasons) |*client, eviction_reason| {
+                    if (client.* != null and eviction_reason != null) {
+                        client.*.?.deinit(cluster.allocator);
+                        client.* = null;
+                    }
+                }
+
+                for (
+                    cluster.storages,
+                    cluster.replica_health,
+                    cluster.replica_upgrades,
+                    0..,
+                ) |*storage, *health, *upgrade, i| {
+                    if (health.* == .up and health.*.up.paused) continue;
+                    // Upgrades immediately follow storage.step(), since upgrades occur at
+                    // checkpoint completion. (Downgrades are triggered separately – see
+                    // replica_restart()).
+                    advanced = storage.step() or advanced;
+                    if (upgrade.*) |_| cluster.replica_release_execute(@intCast(i));
+                    assert(upgrade.* == null);
+                }
+
+                if (!advanced) break;
+            }
+
+            cluster.network.tick();
+
+            for (cluster.clients, cluster.client_times) |*client_maybe, *time_sim| {
+                time_sim.tick();
+                if (client_maybe.*) |*client| client.tick();
+            }
+
+            for (
+                cluster.storages,
+                cluster.replicas,
+                cluster.aof_ios,
+                cluster.replica_times,
+                cluster.replica_health,
+                0..,
+            ) |*storage, *replica, *aof_io, *time_sim, *health, replica_index| {
+                // Time keeps ticking even if a replica is down or paused.
+                time_sim.tick();
+
+                storage.tick();
+                switch (health.*) {
+                    .reformatting => {
+                        cluster.tick_reformat(@intCast(replica_index));
+                    },
+                    .up => |up| if (!up.paused) {
+                        replica.tick();
+                        aof_io.run() catch |err| {
+                            std.debug.panic("{}: io.run() failed: error={}", .{
+                                replica.replica,
+                                err,
+                            });
+                        };
+
+                        // For performance, don't run every tick.
+                        if (cluster.prng.chance(ratio(1, 100))) {
+                            JournalChecker.check(replica);
+                        }
+
+                        cluster.state_checker.check_state(replica.replica) catch |err| {
+                            fatal(.correctness, "state checker error: {}", .{err});
+                        };
+                    },
+                    .down => {},
+                }
+            }
+        }

@@ -208,6 +208,12 @@ $ /tmp/dst05 run 0
 seed=0 ticks=578 trace=1e84e7c45a1d42c1 PASS
 ```
 
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--packets`: print every send (delay, ready_at, queue depth), loss, replay, delivery and capacity drop.
+
 ## Exercises
 
 1. **Liveness bug.** Make the server *ignore* a duplicate of the latest request instead of

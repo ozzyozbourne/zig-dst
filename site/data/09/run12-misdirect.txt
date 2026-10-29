@@ -1,0 +1,103 @@
+  faults: read=19% write=12% misdirect=3% rot=3%
+  atlas replica 0: xxx.x.x.xxxxxxxxxx..x.x.xxxxxxx.
+  atlas replica 1: xxxx.xxxx.x..x..x.xxxx.xxx..x..x
+  atlas replica 2: ...xxx.x.x.xx.xx.xxx.xxx..xx.xxx
+  t= 10 fault_write_flip replica=1 block= 1 e7
+  t= 18 scrub_repair     replica=1 block= 1 0
+  t= 18 repair           replica=1 block= 1 2
+  t= 21 fault_read_flip  replica=1 block= 1 84
+  t= 21 repair           replica=1 block= 1 2
+  t= 23 fault_read_flip  replica=0 block= 1 80
+  t= 23 repair           replica=0 block= 1 1
+  t= 24 fault_write_flip replica=2 block= 3 188
+  t= 30 fault_read_flip  replica=1 block= 3 d8
+  t= 30 repair           replica=1 block= 3 0
+  t= 37 fault_read_flip  replica=1 block= 3 134
+  t= 37 repair           replica=1 block= 3 0
+  t= 39 fault_read_flip  replica=2 block= 3 55
+  t= 39 scrub_repair     replica=2 block= 3 0
+  t= 39 repair           replica=2 block= 3 0
+  t= 44 fault_write_flip replica=1 block= 8 86
+  t= 55 fault_rot        replica=1 block= 8 1d5
+  t= 57 fault_read_flip  replica=0 block= 2 1a1
+  t= 57 repair           replica=0 block= 2 1
+  t= 59 fault_write_flip replica=1 block=13 30
+  t= 60 fault_read_flip  replica=0 block= 6 1b2
+  t= 60 scrub_repair     replica=0 block= 6 0
+  t= 60 fault_write_flip replica=0 block= 6 40
+  t= 60 repair           replica=0 block= 6 1
+  t= 63 repair           replica=1 block=13 2
+  t= 68 repair           replica=1 block= 8 2
+  t= 75 fault_read_flip  replica=2 block= 7 117
+  t= 75 scrub_repair     replica=2 block= 7 0
+  t= 75 repair           replica=2 block= 7 0
+  t= 78 fault_read_flip  replica=2 block=11 1fc
+  t= 78 repair           replica=2 block=11 0
+  t= 82 fault_read_flip  replica=0 block= 2 de
+  t= 82 fault_read_flip  replica=1 block= 2 a1
+  t= 82 repair           replica=0 block= 2 2
+  t= 87 fault_read_flip  replica=1 block= 6 1ad
+  t= 87 repair           replica=1 block= 6 2
+  t= 92 fault_write_flip replica=1 block=21 14d
+  t= 97 fault_read_flip  replica=2 block=21 e3
+  t= 97 repair           replica=2 block=21 0
+  t= 99 fault_read_flip  replica=1 block=16 aa
+  t= 99 repair           replica=1 block=16 2
+  t= 99 scrub_repair     replica=0 block= 6 0
+  t= 99 repair           replica=0 block= 6 1
+  t= 99 scrub_repair     replica=1 block=21 0
+  t= 99 repair           replica=1 block=21 2
+  t= 99 checkpoint       replica=0 block=22 bceafff412a5f2ea
+  t=104 fault_read_flip  replica=0 block=14 10b
+  t=104 fault_write_flip replica=0 block=14 11e
+  t=104 repair           replica=0 block=14 1
+  t=106 fault_read_flip  replica=0 block=12 3b
+  t=106 repair           replica=0 block=12 1
+  t=113 fault_read_flip  replica=2 block= 3 169
+  t=113 repair           replica=2 block= 3 0
+  t=114 fault_read_flip  replica=0 block=12 df
+  t=114 scrub_repair     replica=0 block=12 0
+  t=114 repair           replica=0 block=12 1
+  t=118 fault_write_flip replica=2 block=26 192
+  t=120 fault_read_flip  replica=0 block= 8 192
+  t=120 repair           replica=0 block= 8 1
+  t=125 fault_read_flip  replica=2 block=22 1f4
+  t=125 repair           replica=2 block=22 0
+  t=126 repair           replica=2 block=26 0
+  t=132 scrub_repair     replica=0 block=14 0
+  t=132 repair           replica=0 block=14 1
+  t=134 fault_read_flip  replica=1 block= 1 128
+  t=134 repair           replica=1 block= 1 2
+  t=138 fault_read_flip  replica=2 block=14 ee
+  t=138 scrub_repair     replica=2 block=14 0
+  t=138 repair           replica=2 block=14 0
+  t=151 fault_read_flip  replica=0 block=30 b5
+  t=151 repair           replica=0 block=30 1
+  t=170 fault_read_flip  replica=2 block= 3 16f
+  t=170 repair           replica=2 block= 3 0
+  t=171 fault_read_flip  replica=1 block=23 89
+  t=171 repair           replica=1 block=23 2
+  t=171 fault_read_flip  replica=1 block=18 18f
+  t=171 scrub_repair     replica=1 block=18 0
+  t=171 repair           replica=1 block=18 2
+  t=174 fault_read_flip  replica=2 block=18 12f
+  t=174 scrub_repair     replica=2 block=18 0
+  t=174 repair           replica=2 block=18 0
+  t=178 fault_read_flip  replica=1 block=16 12a
+  t=178 repair           replica=1 block=16 2
+  t=181 fault_read_flip  replica=0 block= 0 e5
+  t=181 repair           replica=0 block= 0 1
+  t=189 fault_read_flip  replica=0 block=28 e
+  t=189 fault_misdirect  replica=0 block=28 1e
+  t=189 repair           replica=0 block=28 1
+  t=193 fault_read_flip  replica=1 block=19 55
+  t=193 repair           replica=1 block=19 2
+  t=194 fault_read_flip  replica=1 block=10 b
+  t=194 repair           replica=1 block=10 2
+  t=194 fault_rot        replica=2 block=18 b9
+  t=199 scrub_repair     replica=2 block=18 0
+  t=199 repair           replica=2 block=18 0
+  t=199 checkpoint       replica=0 block=32 e335ab49eb2baa06
+  storage checker: replica 0 hash=e335ab49eb2baa06 replica 1 hash=41d67d9650c81939
+  t=199 FAIL StorageMismatch: replica=1 block=30
+seed=12 trace=77500907cc862d43 FAIL StorageMismatch

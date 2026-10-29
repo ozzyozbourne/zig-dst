@@ -1,0 +1,31 @@
+    fn tick_crash(simulator: *Simulator) void {
+        for (simulator.cluster.replicas) |*replica| {
+            simulator.replica_crash_stability[replica.replica] -|= 1;
+            if (simulator.replica_crash_stability[replica.replica] > 0) continue;
+
+            switch (simulator.cluster.replica_health[replica.replica]) {
+                .up => |up| {
+                    if (!up.paused) simulator.tick_crash_up(replica);
+                },
+                .down => simulator.tick_crash_down(replica),
+                .reformatting => {},
+            }
+        }
+    }
+    fn tick_crash_up(simulator: *Simulator, replica: *Cluster.Replica) void {
+        const replica_storage = &simulator.cluster.storages[replica.replica];
+        const replica_writes = replica_storage.writes.count();
+
+        var crash_probability = simulator.options.replica_crash_probability;
+        if (replica_writes > 0) crash_probability.numerator *= 10;
+
+        const crash_random = simulator.prng.chance(crash_probability);
+
+        if (!crash_random) return;
+
+        log.debug("{}: crash replica", .{replica.replica});
+        simulator.cluster.replica_crash(replica.replica);
+
+        simulator.replica_crash_stability[replica.replica] =
+            simulator.options.replica_crash_stability;
+    }

@@ -1,0 +1,41 @@
+        fn submit_packet_finish(self: *PacketSimulator, path: Path, link_packet: LinkPacket) void {
+            assert(link_packet.ready_at.ns <= self.tick_instant().ns);
+            const command = self.packet_command(link_packet.packet);
+            if (self.links[self.path_index(path)].should_drop(link_packet.packet, command)) {
+                log.warn(
+                    "dropped packet (different partitions): from={} to={}: " ++ packet_fmt,
+                    .{
+                        path.source,
+                        path.target,
+                        if (@typeInfo(Packet) == .pointer)
+                            link_packet.packet.header
+                        else
+                            link_packet.packet,
+                    },
+                );
+                return;
+            }
+
+            if (self.should_drop()) {
+                log.warn("dropped packet from={} to={}: " ++ packet_fmt, .{
+                    path.source,
+                    path.target,
+                    if (@typeInfo(Packet) == .pointer)
+                        link_packet.packet.header
+                    else
+                        link_packet.packet,
+                });
+                return;
+            }
+
+            if (self.should_replay()) {
+                self.submit_packet(
+                    self.packet_clone(link_packet.packet),
+                    path,
+                );
+                log.debug("replayed packet from={} to={}", .{ path.source, path.target });
+            }
+
+            log.debug("delivering packet from={} to={}", .{ path.source, path.target });
+            self.packet_deliver(link_packet.packet, path);
+        }

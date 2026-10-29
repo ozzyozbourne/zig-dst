@@ -50,6 +50,13 @@ seed=0 steps=3 trace=842142446d687ff3 PASS
 Note that `run 0` without `--bug` takes a different number of steps. The buggy run stops
 at the first failure, but both runs see the same inputs up to that point.
 
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--dump`: print every bucket roll and each step's a, b, got and want.
+- `--uniform`: use a uniform u32 generator instead of the biased one (exercise 1).
+
 ## Exercises
 1. Replace `gen_value` with a uniform `random.int(u32)`. How often do seeds fail now?
    Then make the edge bucket 0.01%. How large a sweep do you need to find the bug?

@@ -27,7 +27,7 @@
 //!   repair:      a backup that notices a gap asks the primary with get_view; it gets start_view.
 //!
 //! Usage:
-//!   zig run main.zig -- run   <seed>  [--bug-commit-early] [--bug-view-change-log]
+//!   zig run main.zig -- run   <seed>  [--bug-commit-early] [--bug-view-change-log] [--events]
 //!   zig run main.zig -- sweep <count> [--bug-commit-early] [--bug-view-change-log]
 const std = @import("std");
 
@@ -45,6 +45,9 @@ const ticks_max_convergence = 5_000; // Liveness phase: the core must converge w
 
 var bug_commit_early = false;
 var bug_view_change_log = false;
+/// `run <seed> --events`: also print one `@` line per packet send/drop/delivery, WAL write, and
+/// commit (with checksums). Print-only: it consumes no randomness and is not hashed into the trace.
+var trace_events = false;
 
 // ------------------------------------------------------------------------------------------------
 // Swarm options: the seed first picks HOW hostile this run is, then runs it. One seed may be a
@@ -65,12 +68,26 @@ fn chance(random: std.Random, r: Ratio) bool {
 const PartitionMode = enum { isolate_single, uniform_split };
 
 const Options = struct {
-    replica_count: u8, client_count: u8, requests_per_client: u32, request_idle_max: u32,
-    one_way_delay_min: u32, one_way_delay_max: u32, packet_loss: Ratio, packet_duplicate: Ratio,
-    partition_mode: PartitionMode, partition_symmetric: bool, partition: Ratio, unpartition: Ratio,
-    partition_stability: u32, unpartition_stability: u32,
-    write_latency_min: u32, write_latency_max: u32,
-    crash: Ratio, crash_stability: u32, restart: Ratio, restart_stability: u32,
+    replica_count: u8,
+    client_count: u8,
+    requests_per_client: u32,
+    request_idle_max: u32,
+    one_way_delay_min: u32,
+    one_way_delay_max: u32,
+    packet_loss: Ratio,
+    packet_duplicate: Ratio,
+    partition_mode: PartitionMode,
+    partition_symmetric: bool,
+    partition: Ratio,
+    unpartition: Ratio,
+    partition_stability: u32,
+    unpartition_stability: u32,
+    write_latency_min: u32,
+    write_latency_max: u32,
+    crash: Ratio,
+    crash_stability: u32,
+    restart: Ratio,
+    restart_stability: u32,
 };
 
 fn options_swarm(random: std.Random) Options {
@@ -126,15 +143,13 @@ fn print_options(seed: u64, o: Options) void {
         \\
         \\
     , .{
-        seed,                    o.replica_count,         o.client_count,
-        o.requests_per_client,   o.request_idle_max,      o.one_way_delay_min,
-        o.one_way_delay_max,     o.packet_loss,           o.packet_duplicate,
-        @tagName(o.partition_mode),
-        if (o.partition_symmetric) "symmetric" else "asymmetric",
-        o.partition,             o.unpartition,           o.partition_stability,
-        o.unpartition_stability, o.write_latency_min,     o.write_latency_max,
-        o.crash,                 o.crash_stability,       o.restart,
-        o.restart_stability,
+        seed,                       o.replica_count,                                          o.client_count,
+        o.requests_per_client,      o.request_idle_max,                                       o.one_way_delay_min,
+        o.one_way_delay_max,        o.packet_loss,                                            o.packet_duplicate,
+        @tagName(o.partition_mode), if (o.partition_symmetric) "symmetric" else "asymmetric", o.partition,
+        o.unpartition,              o.partition_stability,                                    o.unpartition_stability,
+        o.write_latency_min,        o.write_latency_max,                                      o.crash,
+        o.crash_stability,          o.restart,                                                o.restart_stability,
     });
 }
 
@@ -194,7 +209,7 @@ const StateMachine = struct {
     fn hash(sm: *const StateMachine) u64 {
         var h = std.hash.Wyhash.init(0);
         for (sm.balances) |b| hash_ints(&h, .{b});
-        for (sm.sessions) |s| hash_ints(&h, .{ s.request, s.op, @intFromEnum(s.result) });
+        for (sm.sessions) |s| hash_ints(&h, .{ s.request, s.op, @backingInt(s.result) });
         return h.final();
     }
 
@@ -209,18 +224,29 @@ const StateMachine = struct {
 // Messages and the packet simulator.
 
 const Command = enum(u8) {
-    request, prepare, prepare_ok, commit, // normal protocol
-    start_view_change, do_view_change, start_view, get_view, // view change and repair
+    request,
+    prepare,
+    prepare_ok,
+    commit, // normal protocol
+    start_view_change,
+    do_view_change,
+    start_view,
+    get_view, // view change and repair
     reply,
 };
 
 const Message = struct {
     command: Command,
     from: u8, // Node index: replicas are 0..replica_count, clients follow.
-    view: u32 = 0, op: u32 = 0, commit: u32 = 0, log_view: u32 = 0,
+    view: u32 = 0,
+    op: u32 = 0,
+    commit: u32 = 0,
+    log_view: u32 = 0,
     log: u32 = 0, // Index into Simulator.snapshots (do_view_change, start_view).
     entry: Entry = std.mem.zeroes(Entry), // prepare
-    client: u8 = 0, request: u32 = 0, result: Result = .ok, // request, reply
+    client: u8 = 0,
+    request: u32 = 0,
+    result: Result = .ok, // request, reply
     transfer: Transfer = .{ .from = 0, .to = 0, .amount = 0 },
 };
 
@@ -243,7 +269,8 @@ const Write = struct {
 };
 
 const Storage = struct {
-    view: u32 = 0, log_view: u32 = 0,
+    view: u32 = 0,
+    log_view: u32 = 0,
     log: std.ArrayList(Entry) = .empty, // durable WAL
     pending: std.ArrayList(Write) = .empty, // unsynced writes
 };
@@ -273,8 +300,11 @@ const Replica = struct {
 };
 
 const Client = struct {
-    request_next: u32 = 1, inflight: ?Message = null, view_guess: u32 = 0,
-    timeout: u32 = 0, idle: u32 = 0,
+    request_next: u32 = 1,
+    inflight: ?Message = null,
+    view_guess: u32 = 0,
+    timeout: u32 = 0,
+    idle: u32 = 0,
 };
 
 /// The canonical history (state checker): the first commit of op N by ANY replica defines op N.
@@ -347,9 +377,18 @@ const Simulator = struct {
         const st = &sim.storages[r];
         const role: u8 = if (!rep.up) '#' else if (sim.primary_index(rep.view) == r) '/' else '\\';
         std.debug.print("{d:>6} {d:>2} {c} {c} {s}  {d:>3}V {d:>3}/{d:_>3}C {d:>3}LV {d:>3}Wo {d:>2}W!\n", .{
-            sim.now,           r,                  event,                   role,
-            statuses[0..sim.n()], rep.view,       rep.commit,              rep.log.items.len,
-            rep.log_view,      st.log.items.len,   st.pending.items.len,
+            sim.now,              r,                event,                role,
+            statuses[0..sim.n()], rep.view,         rep.commit,           rep.log.items.len,
+            rep.log_view,         st.log.items.len, st.pending.items.len,
+        });
+    }
+
+    /// `--events` only (see trace_events): prints, never hashes, never draws randomness.
+    fn event_message(sim: *const Simulator, kind: []const u8, to: u8, m: Message, at: u64) void {
+        if (!sim.verbose or !trace_events) return;
+        const client, const request = if (m.command == .prepare) .{ m.entry.client, m.entry.request } else .{ m.client, m.request };
+        std.debug.print("{d:>6} @{s} from={d} to={d} cmd={s} view={d} op={d} commit={d} client={d} request={d} at={d}\n", .{
+            sim.now, kind, m.from, to, @tagName(m.command), m.view, m.op, m.commit, client, request, at,
         });
     }
 
@@ -359,15 +398,17 @@ const Simulator = struct {
         var m = message;
         m.from = from;
         if (from == to) {
+            sim.event_message("send", to, m, sim.now + 1);
             sim.packets.append(sim.gpa, .{ .deliver_at = sim.now + 1, .to = to, .message = m }) catch oom();
             return;
         }
         const o = &sim.options;
-        if (sim.partitioned[from][to]) return;
-        if (chance(sim.random, o.packet_loss)) return;
+        if (sim.partitioned[from][to]) return sim.event_message("cut", to, m, sim.now);
+        if (chance(sim.random, o.packet_loss)) return sim.event_message("lost", to, m, sim.now);
         const copies: u32 = if (chance(sim.random, o.packet_duplicate)) 2 else 1;
         for (0..copies) |_| {
             const delay = sim.random.intRangeAtMost(u32, o.one_way_delay_min, o.one_way_delay_max);
+            sim.event_message("send", to, m, sim.now + delay);
             sim.packets.append(sim.gpa, .{ .deliver_at = sim.now + delay, .to = to, .message = m }) catch oom();
         }
     }
@@ -391,7 +432,9 @@ const Simulator = struct {
         for (sim.due.items) |p| {
             if (sim.failure != null) return;
             const m = p.message;
-            hash_ints(&sim.trace, .{ sim.now, p.to, m.from, @intFromEnum(m.command), m.view, m.op, m.commit });
+            hash_ints(&sim.trace, .{ sim.now, p.to, m.from, @backingInt(m.command), m.view, m.op, m.commit });
+            const down = p.to < sim.n() and !sim.replicas[p.to].up;
+            sim.event_message(if (down) "drop" else "recv", p.to, m, sim.now);
             if (p.to < sim.n()) {
                 if (sim.replicas[p.to].up) sim.on_message(p.to, m);
             } else sim.client_on_reply(p.to - sim.n(), m);
@@ -407,12 +450,14 @@ const Simulator = struct {
         x.done_at = @max(last, sim.now) +
             sim.random.intRangeAtMost(u32, sim.options.write_latency_min, sim.options.write_latency_max);
         queue.append(sim.gpa, x) catch oom();
+        if (sim.verbose and trace_events) std.debug.print("{d:>6} @write replica={d} kind={s} view={d} op={d} at={d}\n", .{ sim.now, r, @tagName(x.kind), x.view, x.op, x.done_at });
     }
 
     fn tick_storage(sim: *Simulator, r: u8) void {
         const st = &sim.storages[r];
         while (st.pending.items.len > 0 and st.pending.items[0].done_at <= sim.now) {
             const w = st.pending.orderedRemove(0);
+            if (sim.verbose and trace_events) std.debug.print("{d:>6} @durable replica={d} kind={s} view={d} op={d}\n", .{ sim.now, r, @tagName(w.kind), w.view, w.op });
             switch (w.kind) {
                 .append => {
                     std.debug.assert(st.log.items.len + 1 == w.entry.op); // FIFO keeps the WAL dense.
@@ -453,8 +498,13 @@ const Simulator = struct {
                 if (p == r) {
                     sim.record_dvc(r, r, dvc);
                 } else sim.send(r, p, .{
-                    .command = .do_view_change, .from = r, .view = rep.view, .log_view = dvc.log_view,
-                    .op = dvc.op,                 .commit = dvc.commit, .log = dvc.log,
+                    .command = .do_view_change,
+                    .from = r,
+                    .view = rep.view,
+                    .log_view = dvc.log_view,
+                    .op = dvc.op,
+                    .commit = dvc.commit,
+                    .log = dvc.log,
                 });
             },
         }
@@ -494,8 +544,12 @@ const Simulator = struct {
 
         const len: u32 = @intCast(rep.log.items.len);
         var e: Entry = .{
-            .op = len + 1, .view = rep.view, .client = m.client, .request = m.request,
-            .transfer = m.transfer, .parent = if (len > 0) rep.log.items[len - 1].checksum else 0,
+            .op = len + 1,
+            .view = rep.view,
+            .client = m.client,
+            .request = m.request,
+            .transfer = m.transfer,
+            .parent = if (len > 0) rep.log.items[len - 1].checksum else 0,
             .checksum = 0,
         };
         e.checksum = e.compute_checksum();
@@ -560,6 +614,9 @@ const Simulator = struct {
         const e = rep.log.items[rep.commit];
         const result = rep.sm.apply(e);
         rep.commit += 1;
+        if (sim.verbose and trace_events) std.debug.print("{d:>6} @commit replica={d} op={d} checksum={x:0>16} client={d} request={d} view={d} transfer={d}>{d}:{d} result={s}\n", .{
+            sim.now, r, e.op, e.checksum, e.client, e.request, e.view, e.transfer.from, e.transfer.to, e.transfer.amount, @tagName(result),
+        });
         sim.check_commit(r, e, result);
         sim.log_replica(r, ' ');
         if (sim.is_primary(r)) sim.send_reply(r, e.client);
@@ -569,8 +626,13 @@ const Simulator = struct {
         const rep = &sim.replicas[r];
         const s = rep.sm.sessions[client];
         sim.send(r, sim.n() + client, .{
-            .command = .reply, .from = r, .view = rep.view, .client = client,
-            .request = s.request, .op = s.op, .result = s.result,
+            .command = .reply,
+            .from = r,
+            .view = rep.view,
+            .client = client,
+            .request = s.request,
+            .op = s.op,
+            .result = s.result,
         });
     }
 
@@ -624,7 +686,10 @@ const Simulator = struct {
         rep.svc_votes |= @as(u8, 1) << @intCast(m.from); // A DVC implies an SVC vote.
         sim.check_svc_quorum(r);
         if (sim.primary_index(rep.view) == r) sim.record_dvc(r, m.from, .{
-            .log_view = m.log_view, .op = m.op, .commit = m.commit, .log = m.log,
+            .log_view = m.log_view,
+            .op = m.op,
+            .commit = m.commit,
+            .log = m.log,
         });
     }
 
@@ -699,8 +764,12 @@ const Simulator = struct {
         const rep = &sim.replicas[r];
         if (!sim.is_primary(r)) return;
         sim.send(r, m.from, .{
-            .command = .start_view, .from = r, .view = rep.view, .op = @intCast(rep.log.items.len),
-            .commit = rep.commit, .log = sim.snapshot(r),
+            .command = .start_view,
+            .from = r,
+            .view = rep.view,
+            .op = @intCast(rep.log.items.len),
+            .commit = rep.commit,
+            .log = sim.snapshot(r),
         });
     }
 
@@ -818,7 +887,10 @@ const Simulator = struct {
             const from = sim.random.uintLessThan(u8, accounts);
             const to = (from + 1 + sim.random.uintLessThan(u8, accounts - 1)) % accounts;
             const m: Message = .{
-                .command = .request, .from = sim.n() + c, .client = c, .request = cl.request_next,
+                .command = .request,
+                .from = sim.n() + c,
+                .client = c,
+                .request = cl.request_next,
                 .transfer = .{ .from = from, .to = to, .amount = sim.random.intRangeAtMost(u32, 1, 80) },
             };
             cl.inflight = m;
@@ -1014,6 +1086,7 @@ pub fn main(init: std.process.Init) !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--bug-commit-early")) bug_commit_early = true;
         if (std.mem.eql(u8, arg, "--bug-view-change-log")) bug_view_change_log = true;
+        if (std.mem.eql(u8, arg, "--events")) trace_events = true;
     }
     const flags = if (bug_commit_early and bug_view_change_log)
         " --bug-commit-early --bug-view-change-log"

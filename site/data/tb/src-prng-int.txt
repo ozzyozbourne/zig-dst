@@ -1,0 +1,33 @@
+pub fn int_inclusive(prng: *PRNG, Int: anytype, max: Int) Int {
+    comptime assert(@typeInfo(Int).int.signedness == .unsigned);
+    if (max == std.math.maxInt(Int)) {
+        return prng.int(Int);
+    }
+
+    comptime assert(@typeInfo(Int).int.signedness == .unsigned);
+    const bits = @typeInfo(Int).int.bits;
+    const less_than = max + 1;
+
+    // adapted from:
+    //   http://www.pcg-random.org/posts/bounded-rands.html
+    //   "Lemire's (with an extra tweak from Zig)"
+    var x = prng.int(Int);
+    var m = math.mulWide(Int, x, less_than);
+    var l: Int = @truncate(m);
+    if (l < less_than) {
+        var t = -%less_than;
+
+        if (t >= less_than) {
+            t -= less_than;
+            if (t >= less_than) {
+                t %= less_than;
+            }
+        }
+        while (l < t) {
+            x = prng.int(Int);
+            m = math.mulWide(Int, x, less_than);
+            l = @truncate(m);
+        }
+    }
+    return @intCast(m >> bits);
+}

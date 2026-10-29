@@ -1,0 +1,154 @@
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    1] pkt: send seq=1 3->0 request c2 r1 delay=1 ready_at=2 queued=1
+  [    2] pkt: deliver seq=1 3->0 request c2 r1
+  [    2] server: apply c2 r1 amount=219 (no dedup)
+  [    2] pkt: send seq=2 0->3 reply c2 r1 delay=1 ready_at=3 queued=1
+  [    3] pkt: deliver seq=2 0->3 reply c2 r1
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] pkt: send seq=3 3->0 request c2 r2 delay=1 ready_at=5 queued=1
+  [    4] client 3: send r1 transfer(244)
+  [    4] pkt: send seq=4 4->0 request c3 r1 delay=1 ready_at=5 queued=1
+  [    5] pkt: deliver seq=3 3->0 request c2 r2
+  [    5] server: apply c2 r2 amount=898 (no dedup)
+  [    5] pkt: send seq=5 0->3 reply c2 r2 delay=2 ready_at=7 queued=1
+  [    5] pkt: deliver seq=4 4->0 request c3 r1
+  [    5] server: apply c3 r1 amount=244 (no dedup)
+  [    5] pkt: send seq=6 0->4 reply c3 r1 delay=2 ready_at=7 queued=1
+  [    7] pkt: deliver seq=5 0->3 reply c2 r2
+  [    7] client 2: reply r2 balance=1117
+  [    7] pkt: deliver seq=6 0->4 reply c3 r1
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    8] pkt: send seq=7 4->0 request c3 r2 delay=1 ready_at=9 queued=1
+  [    9] pkt: deliver seq=7 4->0 request c3 r2
+  [    9] server: apply c3 r2 amount=844 (no dedup)
+  [    9] pkt: send seq=8 0->4 reply c3 r2 delay=3 ready_at=12 queued=1
+  [    9] client 2: send r3 transfer(329)
+  [    9] pkt: send seq=9 3->0 request c2 r3 delay=1 ready_at=10 queued=1
+  [   10] pkt: deliver seq=9 3->0 request c2 r3
+  [   10] server: apply c2 r3 amount=329 (no dedup)
+  [   10] pkt: send seq=10 0->3 reply c2 r3 delay=2 ready_at=12 queued=1
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] pkt: deliver seq=10 0->3 reply c2 r3
+  [   12] client 2: reply r3 balance=2534
+  [   12] pkt: deliver seq=8 0->4 reply c3 r2
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   13] pkt: send seq=11 2->0 request c1 r1 delay=1 ready_at=14 queued=1
+  [   14] pkt: deliver seq=11 2->0 request c1 r1
+  [   14] server: apply c1 r1 amount=730 (no dedup)
+  [   14] pkt: send seq=12 0->2 reply c1 r1 delay=5 ready_at=19 queued=1
+  [   14] client 3: send r3 transfer(13)
+  [   14] pkt: send seq=13 4->0 request c3 r3 delay=4 ready_at=18 queued=1
+  [   16] client 0: send r1 transfer(801)
+  [   16] pkt: send seq=14 1->0 request c0 r1 delay=1 ready_at=17 queued=1
+  [   17] pkt: replay seq=14 1->0 request c0 r1
+  [   17] pkt: send seq=15 1->0 request c0 r1 delay=1 ready_at=18 queued=1
+  [   17] pkt: deliver seq=14 1->0 request c0 r1
+  [   17] server: apply c0 r1 amount=801 (no dedup)
+  [   17] pkt: send seq=16 0->1 reply c0 r1 delay=1 ready_at=18 queued=1
+  [   18] pkt: deliver seq=16 0->1 reply c0 r1
+  [   18] client 0: reply r1 balance=4065
+  [   18] pkt: lost seq=15 1->0 request c0 r1
+  [   18] pkt: deliver seq=13 4->0 request c3 r3
+  [   18] server: apply c3 r3 amount=13 (no dedup)
+  [   18] pkt: send seq=17 0->4 reply c3 r3 delay=5 ready_at=23 queued=1
+  [   18] client 2: send r4 transfer(555)
+  [   18] pkt: send seq=18 3->0 request c2 r4 delay=7 ready_at=25 queued=1
+  [   19] pkt: deliver seq=12 0->2 reply c1 r1
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] pkt: replay seq=17 0->4 reply c3 r3
+  [   23] pkt: send seq=19 0->4 reply c3 r3 delay=2 ready_at=25 queued=1
+  [   23] pkt: deliver seq=17 0->4 reply c3 r3
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   23] pkt: send seq=20 2->0 request c1 r2 delay=4 ready_at=27 queued=1
+  [   25] pkt: replay seq=19 0->4 reply c3 r3
+  [   25] pkt: send seq=21 0->4 reply c3 r3 delay=1 ready_at=26 queued=1
+  [   25] pkt: deliver seq=19 0->4 reply c3 r3
+  [   25] pkt: deliver seq=18 3->0 request c2 r4
+  [   25] server: apply c2 r4 amount=555 (no dedup)
+  [   25] pkt: send seq=22 0->3 reply c2 r4 delay=1 ready_at=26 queued=1
+  [   26] pkt: deliver seq=22 0->3 reply c2 r4
+  [   26] client 2: reply r4 balance=4633
+  [   26] pkt: deliver seq=21 0->4 reply c3 r3
+  [   29] client 2: send r5 transfer(856)
+  [   29] pkt: send seq=23 3->0 request c2 r5 delay=2 ready_at=31 queued=1
+  [   29] client 3: send r4 transfer(436)
+  [   29] pkt: send seq=24 4->0 request c3 r4 delay=2 ready_at=31 queued=1
+  [   31] pkt: deliver seq=23 3->0 request c2 r5
+  [   31] server: apply c2 r5 amount=856 (no dedup)
+  [   31] pkt: send seq=25 0->3 reply c2 r5 delay=1 ready_at=32 queued=1
+  [   31] pkt: deliver seq=24 4->0 request c3 r4
+  [   31] server: apply c3 r4 amount=436 (no dedup)
+  [   31] pkt: send seq=26 0->4 reply c3 r4 delay=1 ready_at=32 queued=1
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] pkt: lost seq=25 0->3 reply c2 r5
+  [   32] pkt: deliver seq=26 0->4 reply c3 r4
+  [   32] client 3: reply r4 balance=5925
+  [   32] pkt: deliver seq=20 2->0 request c1 r2
+  [   32] server: apply c1 r2 amount=860 (no dedup)
+  [   32] pkt: send seq=27 0->2 reply c1 r2 delay=1 ready_at=33 queued=1
+  [   32] client 0: send r2 transfer(455)
+  [   32] pkt: send seq=28 1->0 request c0 r2 delay=2 ready_at=34 queued=1
+  [   33] pkt: deliver seq=27 0->2 reply c1 r2
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   34] pkt: send seq=29 4->0 request c3 r5 delay=2 ready_at=36 queued=1
+  [   36] pkt: deliver seq=29 4->0 request c3 r5
+  [   36] server: apply c3 r5 amount=533 (no dedup)
+  [   36] pkt: send seq=30 0->4 reply c3 r5 delay=2 ready_at=38 queued=1
+  [   37] client 1: send r3 transfer(246)
+  [   37] pkt: send seq=31 2->0 request c1 r3 delay=2 ready_at=39 queued=1
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] pkt: deliver seq=30 0->4 reply c3 r5
+  [   38] client 3: reply r5 balance=7318
+  [   39] pkt: deliver seq=31 2->0 request c1 r3
+  [   39] server: apply c1 r3 amount=246 (no dedup)
+  [   39] pkt: send seq=32 0->2 reply c1 r3 delay=1 ready_at=40 queued=1
+  [   40] pkt: replay seq=32 0->2 reply c1 r3
+  [   40] pkt: send seq=33 0->2 reply c1 r3 delay=1 ready_at=41 queued=1
+  [   40] pkt: deliver seq=32 0->2 reply c1 r3
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   40] pkt: send seq=34 3->0 request c2 r5 delay=10 ready_at=50 queued=1
+  [   41] pkt: replay seq=33 0->2 reply c1 r3
+  [   41] pkt: send seq=35 0->2 reply c1 r3 delay=1 ready_at=42 queued=1
+  [   41] pkt: deliver seq=33 0->2 reply c1 r3
+  [   41] client 3: send r6 transfer(203)
+  [   41] pkt: send seq=36 4->0 request c3 r6 delay=1 ready_at=42 queued=1
+  [   42] pkt: deliver seq=35 0->2 reply c1 r3
+  [   42] pkt: replay seq=28 1->0 request c0 r2
+  [   42] pkt: send seq=37 1->0 request c0 r2 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=28 1->0 request c0 r2
+  [   42] server: apply c0 r2 amount=455 (no dedup)
+  [   42] pkt: send seq=38 0->1 reply c0 r2 delay=3 ready_at=45 queued=1
+  [   42] pkt: replay seq=36 4->0 request c3 r6
+  [   42] pkt: send seq=39 4->0 request c3 r6 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=36 4->0 request c3 r6
+  [   42] server: apply c3 r6 amount=203 (no dedup)
+  [   42] pkt: send seq=40 0->4 reply c3 r6 delay=3 ready_at=45 queued=1
+  [   43] pkt: replay seq=37 1->0 request c0 r2
+  [   43] pkt: send seq=41 1->0 request c0 r2 delay=1 ready_at=44 queued=1
+  [   43] pkt: deliver seq=37 1->0 request c0 r2
+  [   43] server: apply c0 r2 amount=455 (no dedup)
+  [   43] INVARIANT VIOLATED: server balance=8677, sum of distinct requests=8222
+seed=0 ticks=43 trace=d88bc34622415f6f FAIL

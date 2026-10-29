@@ -1,0 +1,19 @@
+$ ./zig/zig version
+0.16.0
+$ /home/user/tools/zig-0.17.0/zig version
+0.17.0
+$ /home/user/tools/zig-0.17.0/zig build
+build.zig:65:9: error: unsupported zig version: expected 0.16.0, found 0.17.0
+        @compileError(std.fmt.comptimePrint(
+        ^~~~~~~~~~~~~
+referenced by:
+    root: /home/user/tools/zig-0.17.0/lib/compiler/configurer.zig:16:26
+    main: /home/user/tools/zig-0.17.0/lib/compiler/configurer.zig:138:30
+    5 reference(s) hidden; use '-freference-trace=7' to see all references
+build.zig:148:7: error: no field named 'reference_trace' in struct 'Build'
+    b.reference_trace = 10;
+      ^~~~~~~~~~~~~~~
+/home/user/tools/zig-0.17.0/lib/std/Build.zig:1:1: note: struct declared here
+const Build = @This();
+^~~~~
+exit code: 1

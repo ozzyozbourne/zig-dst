@@ -1,0 +1,42 @@
+### Columns
+
+1. Replica index.
+2. Event:
+    - `!`: crash
+    - `^`: recover
+    - ` `: commit
+    - `$`: sync
+    - `X`: reformat
+    - `[`: checkpoint start
+    - `]`: checkpoint done
+3. Role (according to the replica itself):
+    - `/`: primary
+    - `\`: backup
+    - `|`: standby
+    - `~`: syncing
+    - `#`: (crashed)
+    - `F`: (reformatting)
+4. Status:
+    - The column (e.g. `.   ` vs `   .`) corresponds to the replica index. (This can help identify events' replicas at a quick glance.)
+    - The symbol indicates the `replica.status`.
+    - `.`: `normal`
+    - `v`: `view_change`
+    - `r`: `recovering`
+    - `h`: `recovering_head`
+    - `s`: `sync`
+5. View: e.g. `74V` indicates `replica.view=74`.
+6. Checkpoint and Commit: e.g. `83/_90/_98C` indicates that:
+   - the highest checkpointed op at the replica is `83` (`replica.op_checkpoint()=83`),
+   - on top of that checkpoint, the replica applied ops up to and including `90` (`replica.commit_min=90`),
+   - replica knows that ops at least up to `98` are committed in the cluster (`replica.commit_max=98`).
+7. Journal op: e.g. `87:150Jo` indicates that the minimum op in the journal is `87` and the maximum is `150`.
+8. Journal faulty/dirty: `0/1Jd` indicates that the journal has 0 faulty headers and 1 dirty headers.
+9. WAL prepare ops: e.g. `85:149Wo` indicates that the op of the oldest prepare in the WAL is `85` and the op of the newest prepare in the WAL is `149`.
+10. Syncing ops: e.g. `<0:123>` indicates that `vsr_state.sync_op_min=0` and `vsr_state.sync_op_max=123`.
+11. Release version: e.g. `v1:2` indicates that the replica is running release version `1`, and that its maximum available release is `2`.
+12. Grid blocks acquired: e.g. `167Ga` indicates that the grid has `167` blocks currently in use.
+13. Grid blocks queued `grid.read_remote_queue`: e.g. `0G!` indicates that there are `0` reads awaiting remote fulfillment.
+14. Grid blocks queued `grid_blocks_missing`: e.g. `0G?` indicates that there are `0` blocks awaiting remote repair.
+15. Pipeline prepares (primary-only): e.g. `1/4Pp` indicates that the primary's pipeline has 2 prepares queued, out of a capacity of 4.
+16. Pipeline requests (primary-only): e.g. `0/3Pq` indicates that the primary's pipeline has 0 requests queued, out of a capacity of 3.
+

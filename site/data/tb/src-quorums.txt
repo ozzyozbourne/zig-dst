@@ -1,0 +1,20 @@
+pub fn quorums(replica_count: u8) struct {
+    replication: u8,
+    view_change: u8,
+    nack_prepare: u8,
+    majority: u8,
+    upgrade: u8,
+} {
+    assert(replica_count > 0);
+
+    assert(constants.quorum_replication_max >= 2);
+    // For replica_count=2, set quorum_replication=2 even though =1 would intersect.
+    // This improves durability of small clusters.
+    const quorum_replication = if (replica_count == 2) 2 else @min(
+        constants.quorum_replication_max,
+        stdx.div_ceil(replica_count, 2),
+    );
+    assert(quorum_replication <= replica_count);
+    assert(quorum_replication >= 2 or quorum_replication == replica_count);
+
+    // For replica_count=2, set quorum_view_change=2 even though =1 would intersect.

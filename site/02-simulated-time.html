@@ -1,0 +1,1977 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>02 · Simulated time — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .slots { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: .8rem; }
+  .slots th, .slots td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+  .slots th { color: var(--muted); font-weight: 600; font-size: .72rem; text-transform: uppercase; }
+  .slots tr.dead td { color: var(--dim); }
+  .slots tr.zombie td { color: var(--bug); background: rgba(255,92,122,.1); font-weight: 700; }
+  .slots tr.edge td { outline: 1px solid var(--yellow); }
+  .steplog { max-height: 330px; overflow: auto; position: relative; }
+  .steplog .tl-row { opacity: .4; cursor: pointer; }
+  .steplog .tl-row.seen { opacity: 1; }
+  .steplog .tl-row.cur .ev { outline: 2px solid var(--yellow); }
+  .explain { font-family: var(--mono); font-size: .85rem; color: #cfd8ee; background: #0a101b; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-height: 46px; margin-top: 10px; }
+  .clockface { font-family: var(--mono); font-size: 2.1rem; font-weight: 700; color: var(--accent2); line-height: 1.15; }
+  .clockface small { font-size: .9rem; color: var(--muted); font-weight: 400; display: block; }
+  .seedgrid { display: grid; grid-template-columns: repeat(50, 1fr); gap: 2px; }
+  .seedgrid i { aspect-ratio: 1; border-radius: 2px; background: #1d3a2c; }
+  .seedgrid i.f { background: var(--bug); }
+  .same { color: var(--ok); font-family: var(--mono); font-weight: 700; }
+  .mini-row { display: grid; grid-template-columns: 70px 1fr 110px 110px; gap: 10px; align-items: center; font-family: var(--mono); font-size: .8rem; padding: 3px 0; border-bottom: 1px dashed #1c2740; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--line); }
+  .pill.live { color: var(--ok); border-color: #1f5c3b; } .pill.dead { color: var(--dim); } .pill.wrong { color: var(--bug); border-color: var(--bug); font-weight: 700; }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag easy">Easy</span><span class="tag">Example 02</span><span class="tag">Time interface · TimeSim</span></div>
+    <h1>Simulated time</h1>
+    <p class="lede"><strong>Never read the real clock.</strong> The TTL cache under test asks a <code>Time</code> interface what time it is.
+      In production that interface wraps the OS clock. In the simulator it wraps <code>TimeSim</code>, a counter that moves only when
+      the seeded simulator says so. Waiting 12 hours costs one addition, every replay sees the same timestamps, and the simulator can
+      land time <em>exactly</em> on a deadline. That is where the planted <code>&gt;</code>-instead-of-<code>&gt;=</code> bug lives.
+      Every number below comes from real runs of <code>examples/02-simulated-time/main.zig</code> (Zig 0.17, ReleaseSafe).</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>One interface, two clocks</h2>
+    <p>The cache never calls the OS. It calls <code>self.time.monotonic_ms()</code>, a type-erased context plus a vtable, the same
+      shape as TigerBeetle's <code>stdx.Time</code>. The <em>same</em> <code>TtlCache</code> code runs against either clock. The
+      seed drives every decision in the simulator: which operation runs, which key, which TTL, and how far time jumps.</p>
+    <div class="viz"><div id="arch"></div>
+      <div class="legend"><span><i class="sw" style="background:var(--accent2)"></i>simulated (driven by the seed)</span><span><i class="sw" style="background:var(--warn)"></i>real code under test</span><span><i class="sw" style="background:var(--violet)"></i>oracle / invariants</span><span><i class="sw" style="background:var(--dim)"></i>production only (not used in the simulator)</span></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>Replay of the failing seed: <code>run 1 --bug</code></h2>
+    <p>This replay is parsed from the opt-in <code>--dump</code> output: one line per simulator step, with the cache's internal
+      <code>entries[]</code> array after the step. Each bar is an entry, running from its <code>put</code> to its deadline. The top lane
+      shows clock advances, coloured by kind. Press play, or drag the slider to step 27. There the clock sits <em>exactly</em> on key
+      14's deadline, and the buggy <code>evict_expired()</code> keeps the entry.</p>
+    <div class="viz">
+      <div id="tl"></div>
+      <div id="player"></div>
+      <div class="legend" id="tlLegend"></div>
+      <div class="explain" id="explain"></div>
+      <div class="grid g2" style="margin-top:12px">
+        <div><h4 style="margin:0 0 6px">cache.entries[0..len] after this step <span class="src">(slot order, swap-remove)</span></h4><table class="slots" id="slots"></table>
+          <div class="clockface" id="clock" style="margin-top:14px"></div></div>
+        <div><h4 style="margin:0 0 6px">simulator steps</h4><div class="steplog tl" id="steplog"></div></div>
+      </div>
+    </div>
+    <div id="runLog"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>The bug: one millisecond per entry</h2>
+    <div class="grid g2">
+      <div><h4>Buggy (<code>--bug</code>)</h4>
+<pre class="code"><span class="c">/// The boundary rule: an entry with deadline D is dead</span>
+<span class="c">/// at every instant t &gt;= D.</span>
+<span class="kw">fn</span> <span class="fn">expired</span>(entry: Entry, now_ms: <span class="kw">u64</span>) <span class="kw">bool</span> {
+<span class="bad">    <span class="kw">if</span> (bug_enabled) <span class="kw">return</span> now_ms &gt; entry.deadline_ms; <span class="c">// BUG</span></span>
+    ...</pre></div>
+      <div><h4>Correct</h4>
+<pre class="code"><span class="kw">fn</span> <span class="fn">expired</span>(entry: Entry, now_ms: <span class="kw">u64</span>) <span class="kw">bool</span> {
+    ...
+<span class="good">    <span class="kw">return</span> now_ms &gt;= entry.deadline_ms;</span>
+}
+<span class="c">// Oracle (Model), written differently on purpose:</span>
+<span class="kw">fn</span> <span class="fn">live</span>(slot: Slot, now_ms: <span class="kw">u64</span>) <span class="kw">bool</span> {
+    <span class="kw">return</span> now_ms - slot.put_at_ms &lt; slot.ttl_ms;
+}</pre></div>
+    </div>
+    <p>Key 14's entry around its deadline, with the values taken from the replay above. The two versions disagree at exactly one tick:</p>
+    <div class="viz"><div id="edge"></div></div>
+    <p>The get oracle catches the same bug when <code>get</code> runs at the boundary instead of <code>evict_expired</code>. Seed
+      43 first makes two multi-hour jumps, then lands on a deadline:</p>
+    <div id="run43"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>How the simulator moves the clock</h2>
+    <pre class="code"><span class="kw">const</span> Advance = <span class="kw">enum</span> { small, medium, jump, on_deadline, before_deadline };
+<span class="c">// roll &lt; 30: look at the MODEL, pick a live entry, land exactly on its deadline (roll &lt; 20) or one tick before it.</span>
+<span class="kw">if</span> (deadline &gt; now_ms + <span class="n">1</span>) {
+    <span class="kw">if</span> (roll &lt; <span class="n">20</span>) <span class="kw">return</span> .{ .on_deadline, deadline - now_ms };
+    <span class="kw">return</span> .{ .before_deadline, deadline - <span class="n">1</span> - now_ms };
+}
+<span class="kw">return switch</span> (roll % <span class="n">10</span>) {   <span class="c">// otherwise: blind random advances</span>
+    <span class="n">0</span>...<span class="n">4</span> =&gt; .{ .small, random.<span class="fn">intRangeAtMost</span>(<span class="kw">u64</span>, <span class="n">1</span>, <span class="n">10</span>) },
+    <span class="n">5</span>...<span class="n">8</span> =&gt; .{ .medium, random.<span class="fn">intRangeAtMost</span>(<span class="kw">u64</span>, <span class="n">1</span>, <span class="n">5</span> * ms_per_s) },
+    <span class="kw">else</span> =&gt; .{ .jump, random.<span class="fn">intRangeAtMost</span>(<span class="kw">u64</span>, ms_per_hour, <span class="n">12</span> * ms_per_hour) },
+};</pre>
+    <div class="grid g2">
+      <div class="viz" style="margin:0"><h4 style="margin:0 0 6px">How many advances of each kind</h4><div id="kindCount"></div>
+        <h4 style="margin:12px 0 6px">Share of all simulated time (log scale)</h4><div id="kindTime"></div><div class="cap" id="kindCap"></div></div>
+      <div class="viz" style="margin:0"><h4 style="margin:0 0 6px">Size of each advance, by kind</h4><div id="sizeHist"></div><div class="cap">Histogram over power-of-two buckets: each point counts the advances of 2ᵏ … 2ᵏ⁺¹−1 ms. Same 2000 seeds.</div></div>
+    </div>
+    <h3>Does deadline targeting matter? Real loop over seeds 0–999 with <code>--bug</code></h3>
+    <p>The opt-in <code>--no-target</code> flag turns off <code>on_deadline</code> and <code>before_deadline</code>, leaving only
+      blind random advances. Each square below is one seed. Red means the bug was caught.</p>
+    <div class="grid g2">
+      <div class="viz" style="margin:0"><h4 style="margin:0 0 8px">with deadline targeting (shipped) — <span id="gT"></span></h4><div class="seedgrid" id="gridT"></div></div>
+      <div class="viz" style="margin:0"><h4 style="margin:0 0 8px">random advances only (<code>--no-target</code>) — <span id="gN"></span></h4><div class="seedgrid" id="gridN"></div></div>
+    </div>
+    <div class="viz"><h4 style="margin:0 0 6px">Which invariant fired, and the kind of the last clock advance before the failure</h4><div id="caughtBy"></div>
+      <div class="cap">The 10% of TTLs that are exactly 1 ms, plus the 1–10 ms <code>small</code> steps, explain why random-only runs still catch it now and then. Real time offers neither.</div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Time compression</h2>
+    <p>The program never times itself, because that would mean reading the wall clock. The capture script wraps each sweep in the
+      shell's <code>time</code> instead. Press the button: the counter replays the 100,000-seed sweep at its real measured speed.</p>
+    <div class="viz">
+      <div class="controls"><button class="primary" id="tcGo">▶ replay the sweep in real time</button><span class="out" id="tcOut"></span></div>
+      <div class="grid g2"><div><div class="clockface" id="tcReal"></div></div><div><div class="clockface" id="tcSim" style="color:var(--violet)"></div></div></div>
+      <div id="tcBar" style="margin-top:12px"></div>
+    </div>
+    <div class="viz"><table class="data" id="tcTable"></table></div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Why a sleep()-based test misses the boundary</h2>
+    <p>The capture script ran this test on the orb: <code>put</code> at t0 with a 5 ms TTL, <code>time.sleep(5 ms)</code>, then
+      <code>get</code> at t1. It repeated the test 300 times and read the monotonic clock in nanoseconds. The chart shows how far each
+      <code>get</code> landed past the deadline.</p>
+    <div class="viz"><div id="sleepHist"></div><div class="cap" id="sleepCap"></div></div>
+    <div class="grid g3" id="sleepStats"></div>
+    <div class="callout warn"><strong>Missing the boundary, or hitting it by luck, are both bad.</strong>
+      With a nanosecond clock, as in TigerBeetle's <code>Instant</code>, the bug window is 1 ns wide, and no run lands in it. With a
+      millisecond clock, whether <code>get</code> falls into the deadline's millisecond depends on where inside a millisecond
+      <code>put</code> happened and how late the scheduler woke the thread. The result is a test that fails on some runs and passes on
+      others, and never reproduces on demand. The usual "fix" is <code>sleep(ttl + 10ms)</code>, which never tests the boundary
+      again. A 6-hour TTL would need a 6-hour test. The simulator's <code>on_deadline</code> advance lands on the boundary
+      deterministically, and seed 1 replays it every time.</div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Determinism: same seed, same timestamps, same trace</h2>
+    <p>Each step folds <code>[op, key, now_ms, x]</code> into a Wyhash. The capture ran <code>run 1 --bug</code> twice, as separate processes:</p>
+    <div class="grid g2"><div id="replayA"></div><div id="replayB"></div></div>
+    <div class="callout ok" id="sameNote"></div>
+    <p>Without the bug, the same seed passes and runs on through two more multi-hour jumps:</p>
+    <div id="run1ok"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>Drag time yourself: a mini TTL cache</h2>
+    <div class="callout info"><strong>JavaScript re-implementation, for illustration only.</strong> A seed (via
+      <code>DST.Rand</code>, not Zig's PRNG) puts a few keys with random TTLs. Drag "now". Each row shows what the correct
+      <code>&gt;=</code> rule and the buggy <code>&gt;</code> rule say. They disagree only when the slider sits exactly on a deadline.
+      "Jump to next deadline" does what the simulator's <code>on_deadline</code> advance does.</div>
+    <div class="viz">
+      <div class="controls">seed <input type="number" id="mSeed" value="7" min="0" style="width:90px"><button id="mNew">new workload</button>
+        <button class="primary" id="mJump">⏭ jump to next deadline</button><button id="mStep">+1 ms</button><span class="out" id="mNow"></span></div>
+      <div class="controls"><input type="range" id="mRange" min="0" max="100" value="0"></div>
+      <div id="mRows"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>How TigerBeetle does the same thing</h2>
+    <div class="grid g2">
+      <div class="card"><h4><a class="file" href="https://github.com/tigerbeetle/tigerbeetle/blob/0450c32b2/src/stdx/time.zig#L17-L25">src/stdx/time.zig</a> · <code>Time</code></h4>
+<pre class="code"><span class="kw">pub const</span> Time = <span class="kw">struct</span> {
+    context: *<span class="kw">anyopaque</span>,
+    vtable: *<span class="kw">const</span> VTable,
+
+    <span class="kw">const</span> VTable = <span class="kw">struct</span> {
+        monotonic: *<span class="kw">const fn</span> (*<span class="kw">anyopaque</span>) Instant,
+        realtime: *<span class="kw">const fn</span> (*<span class="kw">anyopaque</span>) InstantUnix,
+    };</pre>
+        <p>The same shape as this example's <code>Time</code>. <code>TimeOS</code> (line 42) is the production clock. It panics
+          if the OS monotonic clock ever goes backwards (<code>monotonic_guard</code>). <code>src/tigerbeetle/main.zig</code> (line
+          113) builds <code>var time_os: TimeOS = .{};</code> and passes <code>time_os.interface()</code> in.</p></div>
+      <div class="card"><h4><a class="file" href="https://github.com/tigerbeetle/tigerbeetle/blob/0450c32b2/src/stdx/time.zig#L315-L317">src/stdx/time.zig</a> · <code>TimeSim.tick</code></h4>
+<pre class="code"><span class="kw">pub fn</span> <span class="fn">tick</span>(self: *TimeSim) <span class="kw">void</span> {
+    self.ticks += <span class="n">1</span>;
+    self.monotonic.ns = self.ticks * self.tick_duration.ns;
+    ...</pre>
+        <p>Simulated time is a tick counter, exactly like <code>TimeSim.advance</code> here. TigerBeetle's version also models
+          wall-clock drift with <code>OffsetType</code> <code>linear</code>, <code>periodic</code>, <code>step</code> and
+          <code>non_ideal</code>, which <code>src/vsr/clock.zig</code>'s synchronization must survive.</p></div>
+      <div class="card"><h4><a class="file" href="https://github.com/tigerbeetle/tigerbeetle/blob/0450c32b2/src/vsr.zig#L759-L770">src/vsr.zig</a> · <code>Timeout.fired</code></h4>
+<pre class="code"><span class="kw">pub fn</span> <span class="fn">fired</span>(self: *<span class="kw">const</span> Timeout) <span class="kw">bool</span> {
+<span class="good">    <span class="kw">if</span> (self.ticking <span class="kw">and</span> self.ticks &gt;= self.after_dynamic.?) {</span>
+        log.<span class="fn">debug</span>(<span class="s">"{}: {s} fired"</span>, .{ self.id, self.name });
+        <span class="kw">if</span> (self.ticks &gt; self.after_dynamic.?) {
+            log.<span class="fn">err</span>(<span class="s">"{}: {s} is firing every tick"</span>, .{ self.id, self.name });
+            <span class="fn">@panic</span>(<span class="s">"timeout was not reset correctly"</span>);
+        }
+        <span class="kw">return true</span>;</pre>
+        <p>Protocol timeouts count <strong>ticks</strong> and fire on <code>&gt;=</code>, the same boundary this example protects. The
+          <code>&gt;</code> check panics if a timeout was not reset at the exact tick it fired.</p></div>
+      <div class="card"><h4><a class="file" href="https://github.com/tigerbeetle/tigerbeetle/blob/0450c32b2/src/testing/cluster.zig#L559-L573">src/testing/cluster.zig</a> · <code>Cluster.tick</code></h4>
+<pre class="code"><span class="kw">for</span> (cluster.clients, cluster.client_times) |*client_maybe, *time_sim| {
+    time_sim.<span class="fn">tick</span>();
+    <span class="kw">if</span> (client_maybe.*) |*client| client.<span class="fn">tick</span>();
+}
+...
+    <span class="c">// Time keeps ticking even if a replica is down or paused.</span>
+    time_sim.<span class="fn">tick</span>();</pre>
+        <p>The VOPR gives every replica and client its own <code>TimeSim</code> (<code>replica_times</code>, line 259). Simulated
+          time advances in lockstep with the simulation loop.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">10</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/02-simulated-time</span>
+<span class="p">$ time zig run main.zig -- sweep 100000</span>        <span class="d"># correct cache: ~300 simulated years in under a second (ReleaseSafe)</span>
+<span class="p">$ zig run main.zig -- sweep 100000 --bug</span>       <span class="d"># stops at seed 1 and prints the replay command</span>
+<span class="p">$ zig run main.zig -- run 1 --bug</span>              <span class="d"># the replay: same timestamps, same trace hash</span>
+<span class="p">$ zig run main.zig -- run 1 --bug --dump</span>       <span class="d"># opt-in: every step + cache contents (feeds section 02)</span>
+<span class="p">$ zig run main.zig -- sweep 1000 --bug --no-target</span>  <span class="d"># opt-in: random clock advances only</span></pre>
+    <div class="grid g2"><div id="tSweep"></div><div id="tSweepBug"></div></div>
+  </section>
+</main>
+<script type="text/plain" id="log-sweep" data-src="data/02/sweep.txt">
+PASS: 100000 seeds, simulated 9498765621 s (2638546 h) of clock time
+
+real	0m0.767s
+user	0m0.762s
+sys	0m0.004s
+</script>
+<script type="text/plain" id="log-sweep-10k" data-src="data/02/sweep-10k.txt">
+PASS: 10000 seeds, simulated 948002214 s (263333 h) of clock time
+
+real	0m0.076s
+user	0m0.076s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-1k" data-src="data/02/sweep-1k.txt">
+PASS: 1000 seeds, simulated 93789618 s (26052 h) of clock time
+
+real	0m0.008s
+user	0m0.008s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/02/sweep-bug.txt">
+FAIL at seed=1 after 2 seeds. Replay with:
+  zig run main.zig -- run 1 --bug
+
+real	0m0.001s
+user	0m0.000s
+sys	0m0.001s
+</script>
+<script type="text/plain" id="log-run1-bug-a" data-src="data/02/run1-bug-a.txt">
+  step 25 t=15612ms: clock +1638ms (on_deadline)
+  step 27 t=17250ms: evict kept key 14, deadline 17250ms
+seed=1 steps=28 simulated=17250ms trace=b51d0a68fc5da3f4 FAIL
+</script>
+<script type="text/plain" id="log-run1-bug-b" data-src="data/02/run1-bug-b.txt">
+  step 25 t=15612ms: clock +1638ms (on_deadline)
+  step 27 t=17250ms: evict kept key 14, deadline 17250ms
+seed=1 steps=28 simulated=17250ms trace=b51d0a68fc5da3f4 FAIL
+</script>
+<script type="text/plain" id="log-run1" data-src="data/02/run1.txt">
+  step 25 t=15612ms: clock +1638ms (on_deadline)
+  step 49 t=20836ms: clock +1503877ms (on_deadline)
+  step 58 t=1531462ms: clock +1944016ms (on_deadline)
+  step 64 t=3478116ms: clock +19171267ms (jump)
+  step 129 t=22677827ms: clock +36033632ms (jump)
+seed=1 steps=136 simulated=58711466ms trace=d10281fe943c1bd9 PASS
+</script>
+<script type="text/plain" id="log-run1-bug-dump" data-src="data/02/run1-bug-dump.txt">
+  D seed=1 step=0 op=1 key=8 t=0 x=1974 cache=8:1974,
+  D seed=1 step=1 op=5 key=2 t=0 x=1718 cache=8:1974,
+  D seed=1 step=2 op=1 key=13 t=1718 x=946 cache=8:1974,13:2664,
+  D seed=1 step=3 op=1 key=9 t=1718 x=1 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=4 op=2 key=14 t=1718 x=18446744073709551615 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=5 op=2 key=7 t=1718 x=18446744073709551615 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=6 op=5 key=9 t=1718 x=3248 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=7 op=5 key=7 t=4966 x=3672 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=8 op=2 key=15 t=8638 x=18446744073709551615 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=9 op=4 key=12 t=8638 x=9 cache=8:1974,13:2664,9:1719,
+  D seed=1 step=10 op=1 key=8 t=8647 x=119 cache=8:8766,13:2664,9:1719,
+  D seed=1 step=11 op=1 key=5 t=8647 x=1 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=12 op=2 key=12 t=8647 x=18446744073709551615 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=13 op=2 key=6 t=8647 x=18446744073709551615 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=14 op=5 key=13 t=8647 x=4221 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=15 op=2 key=1 t=12868 x=18446744073709551615 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=16 op=5 key=7 t=12868 x=2740 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=17 op=2 key=1 t=15608 x=18446744073709551615 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=18 op=4 key=4 t=15608 x=2 cache=8:8766,13:2664,9:1719,5:8648,
+  D seed=1 step=19 op=1 key=5 t=15610 x=231 cache=8:8766,13:2664,9:1719,5:15841,
+  D seed=1 step=20 op=2 key=13 t=15610 x=18446744073709551615 cache=8:8766,5:15841,9:1719,
+  D seed=1 step=21 op=4 key=7 t=15610 x=2 cache=8:8766,5:15841,9:1719,
+  D seed=1 step=22 op=1 key=14 t=15612 x=1638 cache=8:8766,5:15841,9:1719,14:17250,
+  D seed=1 step=23 op=2 key=5 t=15612 x=3566263833 cache=8:8766,5:15841,9:1719,14:17250,
+  D seed=1 step=24 op=1 key=10 t=15612 x=1509101 cache=8:8766,5:15841,9:1719,14:17250,10:1524713,
+  step 25 t=15612ms: clock +1638ms (on_deadline)
+  D seed=1 step=25 op=7 key=3 t=15612 x=1638 cache=8:8766,5:15841,9:1719,14:17250,10:1524713,
+  D seed=1 step=26 op=1 key=7 t=17250 x=644 cache=8:8766,5:15841,9:1719,14:17250,10:1524713,7:17894,
+  step 27 t=17250ms: evict kept key 14, deadline 17250ms
+  D seed=1 step=27 op=3 key=11 t=17250 x=3 cache=7:17894,10:1524713,14:17250,
+seed=1 steps=28 simulated=17250ms trace=b51d0a68fc5da3f4 FAIL
+</script>
+<script type="text/plain" id="log-run43-bug" data-src="data/02/run43-bug.txt">
+  step 24 t=5665ms: clock +17971879ms (jump)
+  step 26 t=17977544ms: clock +36561947ms (jump)
+  step 93 t=54552913ms: clock +305ms (on_deadline)
+  step 99 t=54553218ms: get(8) = 856363089, want null (deadline 54553218ms)
+seed=43 steps=100 simulated=54553218ms trace=3895ccdfbbf7c6f1 FAIL
+</script>
+<script type="text/plain" id="tsv-ops" data-src="data/02/ops.tsv">
+1 90818 0
+2 106164 0
+3 30045 0
+4 35510 195276
+5 28796 72139922
+6 7070 165741828051
+7 2424 15017659842
+8 1217 8243934783
+</script>
+<script type="text/plain" id="tsv-advances" data-src="data/02/advances.tsv">
+5 7 696
+5 8 1457
+5 9 2935
+6 21 92
+6 22 734
+6 23 1551
+6 24 2987
+6 25 1706
+8 10 314
+8 12 1
+8 13 1
+8 15 2
+8 16 7
+8 17 15
+8 18 35
+8 19 66
+7 1 1
+7 10 616
+7 2 1
+7 12 1
+7 3 6
+7 13 2
+7 4 10
+7 5 18
+7 14 3
+7 15 5
+7 6 40
+7 16 11
+7 7 105
+7 8 183
+7 17 35
+7 18 58
+7 9 356
+7 19 103
+8 0 1
+8 1 1
+8 2 1
+8 3 5
+8 4 2
+8 5 18
+8 6 21
+8 7 48
+8 8 102
+8 9 149
+5 10 5976
+4 0 3509
+5 11 11723
+4 1 7023
+5 12 5273
+4 2 14401
+4 3 10577
+8 20 100
+8 21 152
+8 22 4
+8 23 18
+8 24 52
+8 25 67
+8 26 35
+7 20 239
+7 21 290
+7 22 20
+5 0 4
+7 23 46
+5 1 7
+7 24 81
+5 2 18
+7 25 140
+7 26 54
+5 3 48
+5 4 102
+5 5 184
+5 6 373
+</script>
+<script type="text/plain" id="tsv-per-seed" data-src="data/02/per-seed.tsv">
+PASS 107 87799165 - - PASS 107 129189396 - - 0
+FAIL 28 17250 evict 7 PASS 136 60466730 - - 1
+FAIL 85 23600592 evict 7 FAIL 66 63318721 get 4 2
+FAIL 68 78124231 evict 7 PASS 194 87073896 - - 3
+FAIL 133 75554023 evict 7 PASS 167 125175844 - - 4
+FAIL 83 35735171 evict 7 PASS 240 65351800 - - 5
+PASS 242 118927159 - - PASS 242 97251972 - - 6
+PASS 83 78531257 - - PASS 83 52157861 - - 7
+FAIL 204 6112481 evict 4 FAIL 200 13926632 evict 4 8
+PASS 75 62604802 - - PASS 75 63651876 - - 9
+FAIL 62 8098 evict 7 PASS 240 112593560 - - 10
+PASS 133 54786184 - - PASS 133 54781862 - - 11
+FAIL 48 7808 evict 4 FAIL 49 10934 evict 4 12
+PASS 188 198117156 - - PASS 188 145750529 - - 13
+FAIL 151 94507840 evict 7 PASS 173 60669407 - - 14
+PASS 114 164342128 - - PASS 114 104708954 - - 15
+PASS 83 96091721 - - PASS 83 128245645 - - 16
+FAIL 89 204912992 evict 7 PASS 226 238158350 - - 17
+FAIL 38 16059341 evict 7 PASS 239 161600688 - - 18
+FAIL 72 6714423 evict 7 FAIL 72 3772143 evict 4 19
+FAIL 44 6276 evict 4 PASS 109 33440926 - - 20
+PASS 147 84829077 - - PASS 147 91969380 - - 21
+FAIL 173 95740509 evict 7 PASS 246 101859276 - - 22
+PASS 56 25251776 - - PASS 56 25253763 - - 23
+PASS 73 125912036 - - PASS 73 124894205 - - 24
+PASS 145 92560647 - - PASS 145 98859140 - - 25
+PASS 112 25689863 - - PASS 112 19621430 - - 26
+PASS 62 72764940 - - PASS 62 56608252 - - 27
+PASS 105 68410666 - - PASS 105 111008648 - - 28
+PASS 59 35149183 - - PASS 59 35145470 - - 29
+PASS 177 134446369 - - PASS 177 90359709 - - 30
+PASS 190 145443244 - - PASS 190 109462463 - - 31
+FAIL 182 9251967 evict 7 PASS 245 19692608 - - 32
+FAIL 22 861 evict 7 PASS 123 44520 - - 33
+PASS 212 116200810 - - PASS 212 113414700 - - 34
+FAIL 14 2761879 evict 7 PASS 168 21782729 - - 35
+PASS 177 121488274 - - PASS 177 122168555 - - 36
+FAIL 147 68836756 evict 7 PASS 194 97205084 - - 37
+FAIL 13 38483914 evict 4 FAIL 13 38483914 evict 4 38
+FAIL 32 14 evict 4 PASS 191 183265873 - - 39
+FAIL 58 54978026 evict 7 PASS 81 70837071 - - 40
+PASS 165 54335127 - - PASS 165 54337174 - - 41
+PASS 103 52764824 - - PASS 103 103748238 - - 42
+FAIL 100 54553218 get 7 PASS 136 158455919 - - 43
+PASS 64 13661548 - - PASS 64 13661559 - - 44
+FAIL 111 83718490 evict 7 PASS 168 169298547 - - 45
+FAIL 39 23316681 evict 7 PASS 169 102163720 - - 46
+PASS 65 61991536 - - PASS 65 61991533 - - 47
+PASS 105 38399852 - - PASS 105 49106116 - - 48
+PASS 247 123194655 - - PASS 247 112451969 - - 49
+FAIL 12 3267 get 4 PASS 64 16173891 - - 50
+PASS 58 25217952 - - PASS 58 25217954 - - 51
+PASS 167 70269282 - - PASS 167 94869658 - - 52
+FAIL 175 138085210 get 7 PASS 179 137255806 - - 53
+FAIL 145 95639312 evict 4 FAIL 143 88125373 evict 4 54
+FAIL 25 57088123 evict 7 PASS 164 181067872 - - 55
+PASS 106 71579602 - - PASS 106 124444024 - - 56
+PASS 115 67903879 - - PASS 115 67905738 - - 57
+FAIL 178 145800639 evict 7 PASS 191 147517639 - - 58
+PASS 246 160701370 - - PASS 246 101177492 - - 59
+PASS 151 70102535 - - PASS 151 68004056 - - 60
+PASS 117 57992773 - - PASS 117 59303630 - - 61
+FAIL 28 201814 evict 7 PASS 57 12745639 - - 62
+PASS 174 110755916 - - PASS 174 36621576 - - 63
+FAIL 43 4094 evict 7 PASS 58 5106 - - 64
+FAIL 34 43528448 evict 7 PASS 153 114528196 - - 65
+PASS 138 101835836 - - PASS 138 82967470 - - 66
+PASS 95 50901563 - - PASS 95 36607572 - - 67
+PASS 63 27152 - - PASS 63 29150 - - 68
+PASS 222 215519016 - - PASS 222 164079969 - - 69
+FAIL 195 43203172 evict 7 PASS 244 67142314 - - 70
+FAIL 49 62463285 evict 7 PASS 118 192288701 - - 71
+FAIL 51 69998633 get 7 PASS 178 177998220 - - 72
+FAIL 75 12764 get 7 PASS 149 104695686 - - 73
+PASS 97 26695150 - - PASS 97 26688949 - - 74
+FAIL 55 1775 get 7 PASS 128 64040852 - - 75
+FAIL 20 3391 evict 7 PASS 205 79407563 - - 76
+PASS 170 144204337 - - PASS 170 144200115 - - 77
+PASS 138 169675164 - - PASS 138 169671498 - - 78
+PASS 100 45865004 - - PASS 100 46112186 - - 79
+FAIL 25 9 evict 4 PASS 165 90763897 - - 80
+FAIL 41 90649614 get 7 PASS 113 52124647 - - 81
+PASS 235 63420936 - - PASS 235 74513179 - - 82
+PASS 198 209346183 - - PASS 198 150188399 - - 83
+PASS 152 91101393 - - PASS 152 78086422 - - 84
+FAIL 81 22355772 evict 7 PASS 112 101407654 - - 85
+PASS 98 18240804 - - PASS 98 18244844 - - 86
+PASS 89 80760273 - - PASS 89 80765003 - - 87
+PASS 141 29731850 - - PASS 141 26343252 - - 88
+FAIL 9 1070 evict 7 PASS 180 25801810 - - 89
+PASS 91 53178187 - - PASS 91 23778800 - - 90
+FAIL 135 73119821 evict 4 PASS 170 105434290 - - 91
+FAIL 21 53333264 evict 7 PASS 137 122033577 - - 92
+PASS 120 34560289 - - PASS 120 45846184 - - 93
+PASS 234 299324140 - - FAIL 24 30516148 evict 4 94
+PASS 64 81804264 - - PASS 64 106876027 - - 95
+PASS 64 7293495 - - PASS 64 7291070 - - 96
+PASS 116 49697115 - - PASS 116 59264387 - - 97
+FAIL 116 136997340 get 7 PASS 211 177270531 - - 98
+PASS 182 325606869 - - PASS 182 317848843 - - 99
+FAIL 52 59907204 get 7 PASS 208 173035999 - - 100
+FAIL 48 9850 evict 4 FAIL 50 7627480 evict 4 101
+FAIL 73 55162532 evict 7 PASS 199 114530537 - - 102
+FAIL 36 9127 get 7 PASS 69 14317 - - 103
+PASS 72 14210081 - - PASS 72 45806270 - - 104
+FAIL 19 1626 evict 7 PASS 187 41366108 - - 105
+PASS 73 59714801 - - PASS 73 62463722 - - 106
+PASS 133 152102008 - - PASS 133 82914032 - - 107
+PASS 228 102713694 - - PASS 228 118098550 - - 108
+PASS 240 218372296 - - PASS 240 174334574 - - 109
+FAIL 191 91416483 evict 7 PASS 191 110608702 - - 110
+PASS 167 23097891 - - PASS 167 23098030 - - 111
+PASS 235 196451525 - - PASS 235 213804606 - - 112
+PASS 128 51458480 - - PASS 128 65288654 - - 113
+FAIL 33 10256 evict 7 PASS 71 8280 - - 114
+PASS 140 101512684 - - FAIL 91 41810479 evict 4 115
+PASS 157 48474600 - - PASS 157 48478596 - - 116
+PASS 67 40152985 - - PASS 67 11055215 - - 117
+PASS 134 77652755 - - PASS 134 77651269 - - 118
+PASS 133 122098321 - - PASS 133 72975433 - - 119
+PASS 162 68863207 - - PASS 162 131288376 - - 120
+FAIL 36 37404695 evict 5 PASS 203 44319466 - - 121
+PASS 108 26951448 - - PASS 108 25830970 - - 122
+FAIL 226 212235632 evict 4 PASS 243 119078088 - - 123
+PASS 62 16833579 - - PASS 62 16833283 - - 124
+PASS 108 105177840 - - PASS 108 65608842 - - 125
+PASS 102 119035500 - - PASS 102 119035251 - - 126
+PASS 153 156790352 - - PASS 153 103302551 - - 127
+FAIL 101 105534455 evict 7 PASS 122 48437884 - - 128
+PASS 190 61995304 - - PASS 190 26049372 - - 129
+PASS 134 73064366 - - PASS 134 87961232 - - 130
+PASS 62 64524886 - - PASS 62 63239728 - - 131
+FAIL 93 22152451 get 4 PASS 198 85786010 - - 132
+PASS 125 136595347 - - PASS 125 96169674 - - 133
+PASS 200 215829341 - - PASS 200 151968157 - - 134
+FAIL 18 1509869 evict 7 PASS 140 68072942 - - 135
+PASS 172 120364289 - - PASS 172 135283424 - - 136
+FAIL 40 38281123 evict 7 PASS 146 77002987 - - 137
+FAIL 88 1267702 evict 7 PASS 211 59154813 - - 138
+PASS 133 74018816 - - PASS 133 71110710 - - 139
+FAIL 156 5339438 evict 4 FAIL 160 42840788 evict 4 140
+PASS 104 30257612 - - PASS 104 29078491 - - 141
+PASS 152 134359339 - - PASS 152 143517453 - - 142
+PASS 166 95061042 - - PASS 166 93339502 - - 143
+PASS 124 72460372 - - PASS 124 85424310 - - 144
+FAIL 168 103092035 evict 4 FAIL 170 125426483 evict 4 145
+PASS 186 37036015 - - PASS 186 28241685 - - 146
+PASS 83 40657581 - - PASS 83 8709369 - - 147
+PASS 191 66435722 - - PASS 191 83817635 - - 148
+PASS 101 17219097 - - PASS 101 14093428 - - 149
+PASS 92 14490582 - - PASS 92 14491344 - - 150
+PASS 244 214982125 - - PASS 244 173798855 - - 151
+PASS 162 111621779 - - PASS 162 109235792 - - 152
+PASS 211 121409551 - - PASS 211 120781567 - - 153
+PASS 106 86824738 - - PASS 106 31361585 - - 154
+PASS 91 33397346 - - PASS 91 75466577 - - 155
+PASS 59 25814 - - PASS 59 16152 - - 156
+PASS 73 77946590 - - PASS 73 108153777 - - 157
+FAIL 18 306371 evict 7 PASS 196 143746753 - - 158
+FAIL 118 61594913 get 7 PASS 205 154677605 - - 159
+PASS 159 182824513 - - PASS 159 147451537 - - 160
+FAIL 22 1389 evict 7 PASS 213 92054670 - - 161
+PASS 95 47446125 - - PASS 95 85032911 - - 162
+PASS 99 82452110 - - PASS 99 89705938 - - 163
+FAIL 49 98735924 evict 7 PASS 150 177076412 - - 164
+FAIL 34 11027 evict 7 PASS 242 134268816 - - 165
+PASS 66 64652693 - - PASS 66 60338839 - - 166
+PASS 158 56159459 - - PASS 158 124043118 - - 167
+FAIL 55 183343370 evict 7 PASS 162 242515642 - - 168
+PASS 52 23438964 - - PASS 52 13051998 - - 169
+FAIL 95 86103448 evict 7 PASS 225 157066526 - - 170
+FAIL 215 61911369 evict 7 PASS 234 73793083 - - 171
+PASS 201 259676087 - - PASS 201 253151852 - - 172
+PASS 78 58525391 - - PASS 78 51021024 - - 173
+PASS 63 33725168 - - PASS 63 26288207 - - 174
+FAIL 64 5138 get 7 PASS 102 97955912 - - 175
+FAIL 200 114294248 evict 7 PASS 245 117752935 - - 176
+PASS 102 72101420 - - PASS 102 28693103 - - 177
+PASS 221 112773618 - - PASS 221 124410375 - - 178
+PASS 92 87123145 - - PASS 92 6924367 - - 179
+PASS 87 93780827 - - PASS 87 79015341 - - 180
+PASS 135 59351091 - - PASS 135 82991792 - - 181
+FAIL 100 34366053 evict 7 PASS 137 37769253 - - 182
+PASS 192 96463973 - - PASS 192 115319161 - - 183
+FAIL 39 3193202 evict 7 PASS 101 19125 - - 184
+FAIL 34 1731 get 7 PASS 59 5756376 - - 185
+PASS 177 225641153 - - PASS 177 182933188 - - 186
+PASS 75 12919 - - PASS 75 12448 - - 187
+PASS 106 56812305 - - PASS 106 68579294 - - 188
+PASS 52 31910696 - - PASS 52 31914620 - - 189
+PASS 127 111425459 - - PASS 127 33797674 - - 190
+FAIL 9 157 evict 7 PASS 154 113299141 - - 191
+FAIL 145 59448670 get 7 PASS 151 59028205 - - 192
+FAIL 69 11048 evict 7 PASS 106 15399059 - - 193
+PASS 147 93535363 - - PASS 147 104104180 - - 194
+PASS 118 52791024 - - PASS 118 31883304 - - 195
+PASS 202 140183907 - - PASS 202 105858888 - - 196
+FAIL 145 962818 evict 7 PASS 172 15262 - - 197
+FAIL 63 18290384 evict 4 FAIL 65 36496414 evict 4 198
+PASS 217 77400615 - - PASS 217 36158173 - - 199
+PASS 110 114026692 - - PASS 110 59942352 - - 200
+PASS 69 11534 - - PASS 69 10148 - - 201
+PASS 63 63320075 - - PASS 63 53914678 - - 202
+PASS 118 83646103 - - PASS 118 80860768 - - 203
+FAIL 61 80469334 get 7 PASS 81 78077863 - - 204
+PASS 55 39767418 - - PASS 55 38054528 - - 205
+FAIL 56 41742081 evict 7 PASS 160 128243170 - - 206
+PASS 100 116604066 - - PASS 100 100402588 - - 207
+PASS 213 53035116 - - PASS 213 78439442 - - 208
+PASS 142 29111 - - PASS 142 39705 - - 209
+PASS 78 32462513 - - PASS 78 12115406 - - 210
+PASS 188 197674759 - - PASS 188 147118317 - - 211
+PASS 59 37064190 - - PASS 59 37064190 - - 212
+FAIL 93 40248222 evict 7 PASS 223 83560244 - - 213
+PASS 212 189047835 - - PASS 212 192558035 - - 214
+PASS 51 78547726 - - PASS 51 78544647 - - 215
+PASS 198 62302247 - - PASS 198 103582174 - - 216
+PASS 214 100892595 - - PASS 214 141588433 - - 217
+PASS 146 99041545 - - PASS 146 114433056 - - 218
+PASS 237 158376056 - - PASS 237 135302367 - - 219
+PASS 50 4666 - - PASS 50 5813 - - 220
+PASS 188 143477217 - - PASS 188 142339089 - - 221
+FAIL 81 49033457 evict 7 FAIL 160 151452354 evict 4 222
+PASS 131 40970760 - - PASS 131 13161249 - - 223
+PASS 200 146387887 - - PASS 200 133732934 - - 224
+PASS 78 14027794 - - PASS 78 12222608 - - 225
+FAIL 137 144521365 evict 4 FAIL 139 147968090 evict 4 226
+FAIL 54 16032071 evict 7 PASS 191 204673230 - - 227
+FAIL 146 95809740 evict 7 PASS 242 108260715 - - 228
+FAIL 83 79898388 get 7 PASS 169 83650180 - - 229
+PASS 100 60376296 - - PASS 100 60374038 - - 230
+FAIL 89 18783924 evict 7 PASS 203 68598070 - - 231
+FAIL 86 7034120 get 7 PASS 150 125102824 - - 232
+FAIL 127 115992030 evict 7 PASS 161 163275640 - - 233
+FAIL 35 1597 evict 7 FAIL 108 44067702 evict 4 234
+FAIL 132 101212969 get 7 PASS 203 111234246 - - 235
+PASS 179 81277939 - - PASS 179 81660347 - - 236
+PASS 143 109624381 - - PASS 143 124647281 - - 237
+FAIL 66 18377 evict 7 PASS 196 23147871 - - 238
+PASS 166 93924844 - - PASS 166 76133178 - - 239
+FAIL 51 82901480 evict 7 PASS 227 85972251 - - 240
+PASS 239 171356259 - - PASS 239 116915779 - - 241
+FAIL 34 1279 evict 7 PASS 111 104897738 - - 242
+PASS 79 54250804 - - PASS 79 60526413 - - 243
+FAIL 79 75308682 evict 7 PASS 153 99587863 - - 244
+PASS 51 20293 - - PASS 51 12300 - - 245
+PASS 104 38987522 - - PASS 104 24548235 - - 246
+FAIL 114 83356971 evict 7 PASS 121 140783560 - - 247
+PASS 235 141004002 - - PASS 235 167626191 - - 248
+FAIL 160 135536822 evict 7 PASS 197 152876845 - - 249
+PASS 210 94916757 - - PASS 210 181771134 - - 250
+PASS 127 112960514 - - PASS 127 78390033 - - 251
+FAIL 145 56781178 evict 7 PASS 162 79635189 - - 252
+PASS 79 56087397 - - FAIL 26 9646 evict 4 253
+PASS 151 84502989 - - PASS 151 131521466 - - 254
+FAIL 100 79348912 evict 7 PASS 243 87717147 - - 255
+FAIL 46 58574929 evict 7 PASS 219 96616656 - - 256
+PASS 119 45742249 - - PASS 119 23272823 - - 257
+PASS 236 152820794 - - PASS 236 107140624 - - 258
+FAIL 26 16464114 get 7 PASS 133 49330406 - - 259
+PASS 180 146506050 - - PASS 180 73228340 - - 260
+PASS 190 118005151 - - PASS 190 54313591 - - 261
+PASS 232 95753054 - - FAIL 213 105515106 get 4 262
+FAIL 37 3974525 evict 4 FAIL 37 3974525 evict 4 263
+FAIL 45 16896259 get 4 FAIL 45 16897155 get 4 264
+FAIL 13 328 evict 7 PASS 224 199803064 - - 265
+FAIL 19 2482007 evict 7 PASS 170 92804348 - - 266
+FAIL 40 40328367 evict 7 PASS 243 101181453 - - 267
+FAIL 30 3592235 evict 7 PASS 249 68176636 - - 268
+PASS 127 132994977 - - PASS 127 139721636 - - 269
+PASS 90 38515568 - - PASS 90 38512264 - - 270
+PASS 156 41566009 - - PASS 156 22253306 - - 271
+PASS 204 141901626 - - PASS 204 117273240 - - 272
+PASS 58 93225347 - - PASS 58 58429718 - - 273
+FAIL 58 16912040 evict 7 PASS 229 50599375 - - 274
+FAIL 15 952 evict 7 PASS 65 35455125 - - 275
+PASS 92 11576099 - - PASS 92 95358258 - - 276
+FAIL 64 73239205 evict 7 FAIL 101 42965388 evict 4 277
+FAIL 93 38566871 get 7 PASS 211 108330656 - - 278
+PASS 83 19775127 - - PASS 83 7407505 - - 279
+FAIL 95 24623317 evict 7 PASS 112 95562282 - - 280
+FAIL 58 66540627 evict 4 FAIL 59 66543687 evict 4 281
+PASS 237 151040643 - - PASS 237 159172438 - - 282
+FAIL 106 17931035 get 7 PASS 200 97271424 - - 283
+PASS 197 70921407 - - PASS 197 99820189 - - 284
+FAIL 19 8311518 get 7 PASS 161 14754784 - - 285
+FAIL 97 61467316 get 7 PASS 102 61241445 - - 286
+FAIL 96 83470008 evict 7 FAIL 62 22669417 evict 4 287
+PASS 70 91961313 - - PASS 70 68746732 - - 288
+PASS 53 60583101 - - PASS 53 14197 - - 289
+PASS 173 115153866 - - PASS 173 103912631 - - 290
+FAIL 54 34641021 evict 7 FAIL 47 53356160 get 4 291
+PASS 120 158065135 - - PASS 120 42461985 - - 292
+PASS 200 193502159 - - PASS 200 193501777 - - 293
+PASS 66 44416158 - - PASS 66 44415121 - - 294
+FAIL 98 2499515 evict 7 PASS 176 11715219 - - 295
+FAIL 80 4741494 evict 7 PASS 232 42157365 - - 296
+PASS 201 73322862 - - PASS 201 113861007 - - 297
+FAIL 38 2299848 evict 7 PASS 207 126298229 - - 298
+FAIL 140 98090125 evict 7 PASS 147 32564205 - - 299
+PASS 85 23128437 - - PASS 85 64625226 - - 300
+PASS 199 100684042 - - FAIL 124 125129506 evict 4 301
+PASS 159 51537825 - - PASS 159 51529381 - - 302
+PASS 202 210696892 - - PASS 202 174891297 - - 303
+PASS 115 140278734 - - PASS 115 174214581 - - 304
+PASS 219 200106243 - - PASS 219 99509188 - - 305
+FAIL 38 6919 evict 7 PASS 98 87576594 - - 306
+PASS 214 109552195 - - PASS 214 72583395 - - 307
+PASS 96 20046 - - PASS 96 19143 - - 308
+PASS 145 64962721 - - PASS 145 16452818 - - 309
+PASS 66 163640354 - - PASS 66 148998307 - - 310
+PASS 156 140511015 - - PASS 156 159431011 - - 311
+FAIL 28 213217 get 7 PASS 125 190286572 - - 312
+FAIL 132 89616344 evict 7 PASS 141 89620076 - - 313
+PASS 164 121313672 - - PASS 164 81213280 - - 314
+PASS 185 102562238 - - FAIL 96 106228261 get 4 315
+PASS 186 119726967 - - PASS 186 67090100 - - 316
+FAIL 45 15907339 evict 4 FAIL 44 47318217 evict 4 317
+PASS 207 104531524 - - PASS 207 101302248 - - 318
+PASS 164 37986534 - - PASS 164 37066095 - - 319
+PASS 51 26815410 - - PASS 51 57832118 - - 320
+PASS 182 57393081 - - PASS 182 57400155 - - 321
+PASS 59 17934 - - PASS 59 18092 - - 322
+PASS 105 109505941 - - PASS 105 76542029 - - 323
+PASS 182 144663716 - - PASS 182 138733844 - - 324
+FAIL 122 19007830 evict 7 PASS 235 86941752 - - 325
+FAIL 105 92849635 evict 7 PASS 187 159645566 - - 326
+PASS 238 111910240 - - PASS 238 57348207 - - 327
+PASS 248 94834735 - - PASS 248 62128857 - - 328
+PASS 83 17574635 - - PASS 83 38777310 - - 329
+PASS 94 81778371 - - PASS 94 77018399 - - 330
+PASS 60 65676284 - - PASS 60 58448619 - - 331
+PASS 82 11021261 - - PASS 82 11018777 - - 332
+PASS 113 31225392 - - PASS 113 47116 - - 333
+PASS 118 99496622 - - PASS 118 76795223 - - 334
+PASS 100 33954485 - - PASS 100 40908274 - - 335
+FAIL 34 6195 evict 7 PASS 226 58929144 - - 336
+PASS 138 92239198 - - PASS 138 85819177 - - 337
+PASS 130 25915933 - - PASS 130 141877281 - - 338
+PASS 225 25101825 - - PASS 225 25105888 - - 339
+PASS 132 158651773 - - PASS 132 146079977 - - 340
+FAIL 22 17323840 evict 7 PASS 97 15588003 - - 341
+FAIL 74 105628097 evict 7 PASS 101 77219834 - - 342
+FAIL 72 22504 evict 7 PASS 75 21155 - - 343
+PASS 159 167585554 - - PASS 159 97960560 - - 344
+PASS 51 20309107 - - PASS 51 48751400 - - 345
+PASS 176 146878905 - - PASS 176 142747446 - - 346
+PASS 102 70476036 - - PASS 102 38092694 - - 347
+PASS 112 46581474 - - FAIL 102 73123488 evict 4 348
+PASS 193 140914771 - - PASS 193 137396503 - - 349
+PASS 149 101145002 - - FAIL 119 85473143 get 4 350
+PASS 73 40679536 - - PASS 73 81462349 - - 351
+PASS 138 1110969 - - PASS 138 33287 - - 352
+PASS 51 41596400 - - PASS 51 51310237 - - 353
+PASS 226 59486502 - - PASS 226 53327410 - - 354
+FAIL 163 55897865 get 7 PASS 195 85442157 - - 355
+PASS 135 15080232 - - PASS 135 46601347 - - 356
+FAIL 20 1347 evict 7 PASS 118 23356886 - - 357
+FAIL 52 38031590 get 7 PASS 52 35015714 - - 358
+PASS 89 77816720 - - PASS 89 72093945 - - 359
+FAIL 96 14984 evict 7 PASS 156 39448338 - - 360
+FAIL 21 62969452 evict 7 PASS 140 173085369 - - 361
+FAIL 77 113206246 evict 4 PASS 81 112923926 - - 362
+PASS 190 139439909 - - PASS 190 111328171 - - 363
+FAIL 124 47417364 evict 7 PASS 244 141419117 - - 364
+PASS 123 148608860 - - PASS 123 149269659 - - 365
+PASS 82 72232360 - - PASS 82 62773162 - - 366
+PASS 102 21618 - - PASS 102 22155192 - - 367
+PASS 163 131137161 - - PASS 163 134152920 - - 368
+PASS 54 13447 - - PASS 54 10543 - - 369
+FAIL 48 17294416 evict 7 PASS 133 72281463 - - 370
+FAIL 53 63698823 evict 7 PASS 78 22483241 - - 371
+PASS 73 37934888 - - PASS 73 37932091 - - 372
+PASS 99 167374562 - - PASS 99 167378855 - - 373
+FAIL 18 3902 evict 7 PASS 120 87227993 - - 374
+FAIL 190 25799517 evict 7 PASS 234 48710336 - - 375
+PASS 128 22033029 - - PASS 128 34547712 - - 376
+PASS 112 19267705 - - PASS 112 19275496 - - 377
+PASS 105 53014400 - - PASS 105 53012667 - - 378
+PASS 109 18592356 - - PASS 109 76202583 - - 379
+PASS 233 121515833 - - PASS 233 118264058 - - 380
+PASS 76 107064028 - - PASS 76 95503289 - - 381
+PASS 105 67180273 - - PASS 105 95656299 - - 382
+PASS 116 59443639 - - PASS 116 120775110 - - 383
+PASS 85 26003 - - PASS 85 31194 - - 384
+PASS 198 123381413 - - PASS 198 133920088 - - 385
+PASS 93 185875119 - - PASS 93 158751398 - - 386
+PASS 100 2114190 - - PASS 100 24740 - - 387
+PASS 81 18398505 - - PASS 81 68320791 - - 388
+FAIL 226 148152609 get 7 PASS 241 145373526 - - 389
+PASS 142 117183628 - - PASS 142 126114189 - - 390
+PASS 249 186911081 - - PASS 249 104821212 - - 391
+FAIL 51 11807927 evict 7 PASS 75 21306346 - - 392
+PASS 76 2785001 - - PASS 76 24651 - - 393
+FAIL 50 40602835 evict 7 PASS 156 131904054 - - 394
+PASS 71 20409138 - - PASS 71 5312176 - - 395
+FAIL 113 119399943 evict 7 PASS 163 96905513 - - 396
+FAIL 92 104684070 get 7 PASS 103 41723479 - - 397
+FAIL 183 170013522 evict 7 PASS 208 87316212 - - 398
+FAIL 116 40964800 evict 7 FAIL 79 22711 evict 4 399
+PASS 54 10894468 - - PASS 54 10889462 - - 400
+PASS 140 125893445 - - PASS 140 107025728 - - 401
+FAIL 22 35455194 get 7 PASS 102 84801582 - - 402
+FAIL 116 54869088 evict 7 PASS 149 84925109 - - 403
+PASS 221 173835847 - - PASS 221 176587976 - - 404
+PASS 171 115846456 - - PASS 171 100200200 - - 405
+FAIL 48 4438 evict 7 PASS 75 27884127 - - 406
+FAIL 107 106500364 evict 7 PASS 118 18438485 - - 407
+PASS 240 190691896 - - PASS 240 235362677 - - 408
+PASS 195 142814933 - - PASS 195 136124841 - - 409
+FAIL 69 24883 get 7 FAIL 69 37220963 get 4 410
+FAIL 164 185793341 evict 7 PASS 183 190894891 - - 411
+FAIL 76 75432674 evict 7 PASS 174 35630049 - - 412
+PASS 74 55580285 - - PASS 74 55576669 - - 413
+PASS 223 6548079 - - PASS 223 49676655 - - 414
+FAIL 183 152812986 get 7 PASS 205 125655699 - - 415
+PASS 181 166564343 - - PASS 181 173384065 - - 416
+FAIL 75 6586 evict 7 PASS 146 72950163 - - 417
+PASS 107 122073752 - - PASS 107 122600455 - - 418
+PASS 53 6358 - - PASS 53 8199 - - 419
+PASS 145 101738902 - - PASS 145 18923279 - - 420
+FAIL 31 14096156 evict 7 PASS 149 98812149 - - 421
+PASS 147 58927585 - - PASS 147 34868675 - - 422
+FAIL 169 107207851 evict 7 PASS 172 107216174 - - 423
+PASS 235 173256061 - - PASS 235 157543695 - - 424
+FAIL 128 144682411 evict 7 PASS 228 93763413 - - 425
+PASS 91 99909417 - - PASS 91 138455402 - - 426
+FAIL 50 9077 evict 7 PASS 83 13376 - - 427
+PASS 51 7954 - - PASS 51 4944 - - 428
+PASS 246 239891235 - - PASS 246 142864404 - - 429
+PASS 110 47967549 - - PASS 110 9566384 - - 430
+FAIL 14 1304847 evict 7 PASS 198 87259070 - - 431
+FAIL 13 1 evict 4 FAIL 13 1 evict 4 432
+FAIL 183 132395195 evict 4 PASS 196 126754283 - - 433
+FAIL 85 22372469 evict 7 PASS 211 121408251 - - 434
+PASS 57 41163366 - - PASS 57 32313609 - - 435
+PASS 183 103521397 - - PASS 183 66021983 - - 436
+PASS 170 120942170 - - PASS 170 68804383 - - 437
+PASS 115 153977544 - - PASS 115 138983504 - - 438
+PASS 94 44713183 - - PASS 94 40681494 - - 439
+PASS 101 63124847 - - PASS 101 62298898 - - 440
+PASS 129 147024863 - - PASS 129 89422352 - - 441
+FAIL 36 25535174 evict 7 PASS 222 103902339 - - 442
+FAIL 80 35372760 get 4 FAIL 81 35372760 get 4 443
+PASS 141 95039182 - - PASS 141 66231995 - - 444
+FAIL 51 35114528 get 7 PASS 171 117738649 - - 445
+PASS 59 13848659 - - PASS 59 41191425 - - 446
+FAIL 14 1297 evict 7 PASS 179 121281726 - - 447
+PASS 201 160841152 - - PASS 201 169425668 - - 448
+FAIL 86 15961234 evict 7 PASS 223 78695457 - - 449
+PASS 60 22248711 - - PASS 60 22246682 - - 450
+PASS 65 7080308 - - PASS 65 10026225 - - 451
+FAIL 153 31937450 get 7 PASS 158 49583473 - - 452
+PASS 234 106792274 - - PASS 234 167829910 - - 453
+PASS 138 67298866 - - PASS 138 78238631 - - 454
+PASS 75 56282353 - - PASS 75 48544125 - - 455
+PASS 157 43772443 - - PASS 157 41107638 - - 456
+PASS 223 150276031 - - FAIL 218 158892728 get 4 457
+PASS 169 60771671 - - PASS 169 46961360 - - 458
+PASS 63 82753052 - - PASS 63 97751097 - - 459
+PASS 132 108445220 - - PASS 132 109845534 - - 460
+PASS 151 139264545 - - PASS 151 134927697 - - 461
+PASS 239 113749543 - - PASS 239 110242553 - - 462
+FAIL 120 143988667 get 7 PASS 150 73748015 - - 463
+PASS 196 224172277 - - FAIL 84 18688 evict 4 464
+PASS 90 33700553 - - PASS 90 33703548 - - 465
+PASS 166 93768225 - - PASS 166 89064326 - - 466
+PASS 227 156634494 - - PASS 227 157065949 - - 467
+PASS 222 184287111 - - PASS 222 181465776 - - 468
+FAIL 148 107113028 evict 7 PASS 208 141694874 - - 469
+PASS 180 40256536 - - PASS 180 51578335 - - 470
+PASS 178 110549107 - - PASS 178 67923299 - - 471
+FAIL 144 100920803 evict 7 PASS 175 194079520 - - 472
+FAIL 98 68575840 evict 7 PASS 144 142361559 - - 473
+PASS 120 166385161 - - PASS 120 110812697 - - 474
+PASS 109 137156580 - - PASS 109 75617569 - - 475
+FAIL 35 16659 evict 4 FAIL 36 15467 evict 4 476
+PASS 187 204722919 - - PASS 187 114097048 - - 477
+PASS 161 45527782 - - PASS 161 104339030 - - 478
+FAIL 20 5141 evict 7 PASS 137 25717915 - - 479
+PASS 156 83116880 - - PASS 156 53349643 - - 480
+PASS 207 24247696 - - PASS 207 24257867 - - 481
+PASS 95 66134863 - - PASS 95 62128648 - - 482
+FAIL 89 58447789 get 7 PASS 106 60616018 - - 483
+FAIL 45 8962 get 7 PASS 65 42586165 - - 484
+PASS 84 64866781 - - PASS 84 53715687 - - 485
+FAIL 44 5161 evict 7 PASS 213 52375818 - - 486
+FAIL 43 61481154 evict 7 PASS 83 65827158 - - 487
+PASS 209 150789898 - - PASS 209 174351338 - - 488
+PASS 126 59528757 - - PASS 126 56721194 - - 489
+FAIL 160 134512959 evict 4 FAIL 161 183088891 evict 4 490
+PASS 157 67192730 - - PASS 157 134574302 - - 491
+FAIL 43 3051159 get 7 PASS 81 21563384 - - 492
+PASS 192 36341426 - - PASS 192 64577586 - - 493
+PASS 56 15277261 - - PASS 56 11933009 - - 494
+PASS 195 28461294 - - PASS 195 80844681 - - 495
+PASS 74 37150240 - - PASS 74 30023 - - 496
+PASS 63 14129 - - PASS 63 14135 - - 497
+FAIL 67 2686406 evict 7 PASS 167 83381728 - - 498
+PASS 94 116517895 - - PASS 94 57673998 - - 499
+FAIL 5 1 evict 4 FAIL 5 1 evict 4 500
+PASS 131 44179896 - - PASS 131 36101717 - - 501
+PASS 69 2057951 - - PASS 69 19495 - - 502
+FAIL 42 12317 evict 7 PASS 217 157591757 - - 503
+PASS 92 85054878 - - PASS 92 85056203 - - 504
+PASS 54 68045275 - - PASS 54 49087017 - - 505
+FAIL 159 117831405 evict 7 PASS 219 63767595 - - 506
+FAIL 152 121850075 evict 4 FAIL 156 103714358 evict 4 507
+FAIL 42 28659819 evict 4 FAIL 43 32533635 evict 4 508
+PASS 56 16519 - - PASS 56 10063610 - - 509
+PASS 155 34356077 - - PASS 155 38418789 - - 510
+PASS 236 282998218 - - PASS 236 266808839 - - 511
+PASS 231 33075264 - - PASS 231 33077871 - - 512
+PASS 236 180906489 - - PASS 236 152650257 - - 513
+PASS 151 77695352 - - PASS 151 84518277 - - 514
+PASS 126 56062685 - - FAIL 76 14963406 evict 4 515
+PASS 146 143811809 - - PASS 146 141752102 - - 516
+PASS 57 11692 - - PASS 57 7733175 - - 517
+PASS 142 39043699 - - PASS 142 67405914 - - 518
+PASS 232 132433836 - - PASS 232 233649880 - - 519
+PASS 201 140085245 - - PASS 201 172585735 - - 520
+FAIL 88 68832898 evict 7 PASS 155 68848891 - - 521
+PASS 193 82017799 - - PASS 193 55428912 - - 522
+FAIL 23 42652723 evict 7 PASS 154 104527267 - - 523
+FAIL 112 16300640 evict 7 PASS 162 36892345 - - 524
+FAIL 120 94037364 evict 7 PASS 130 120349065 - - 525
+FAIL 57 159233567 evict 7 PASS 204 200025681 - - 526
+FAIL 87 2715577 get 7 PASS 116 35082957 - - 527
+PASS 132 59193018 - - PASS 132 82516421 - - 528
+FAIL 44 16764 evict 4 FAIL 48 35950355 evict 4 529
+PASS 175 106868173 - - PASS 175 106880028 - - 530
+PASS 120 73173427 - - PASS 120 94211621 - - 531
+PASS 120 67957066 - - PASS 120 67957258 - - 532
+FAIL 59 79478489 evict 7 PASS 136 119686386 - - 533
+PASS 219 194363712 - - PASS 219 191662215 - - 534
+PASS 243 133320932 - - PASS 243 126275331 - - 535
+FAIL 66 5929378 get 7 PASS 155 47542 - - 536
+PASS 109 84569447 - - PASS 109 52688492 - - 537
+PASS 64 32760172 - - PASS 64 62598937 - - 538
+PASS 206 210090434 - - PASS 206 193139159 - - 539
+FAIL 72 107335991 evict 7 PASS 115 106183543 - - 540
+PASS 182 132864297 - - PASS 182 149573525 - - 541
+PASS 163 103507616 - - PASS 163 94148051 - - 542
+PASS 151 7953055 - - PASS 151 11488752 - - 543
+FAIL 75 10685 evict 7 PASS 144 38563538 - - 544
+PASS 101 74022380 - - PASS 101 111660236 - - 545
+PASS 123 106517741 - - PASS 123 52496465 - - 546
+FAIL 49 79441576 evict 7 PASS 127 60342406 - - 547
+FAIL 160 82895868 evict 7 PASS 242 62292964 - - 548
+PASS 136 68557996 - - FAIL 105 68542571 evict 4 549
+PASS 194 79472283 - - PASS 194 54386551 - - 550
+PASS 72 120613289 - - PASS 72 120618866 - - 551
+PASS 56 56996594 - - PASS 56 18325155 - - 552
+PASS 124 68294411 - - PASS 124 60372130 - - 553
+FAIL 17 13501 get 7 PASS 205 187171965 - - 554
+PASS 61 20113 - - PASS 61 16833 - - 555
+PASS 182 114400451 - - PASS 182 53804066 - - 556
+FAIL 24 12323 evict 7 PASS 208 129504589 - - 557
+PASS 52 87819873 - - PASS 52 92167135 - - 558
+FAIL 119 70901712 evict 4 FAIL 122 83340836 evict 4 559
+FAIL 41 7223 evict 7 PASS 193 100495392 - - 560
+FAIL 49 58008876 evict 7 PASS 204 113350411 - - 561
+FAIL 172 75773959 evict 7 PASS 244 169763576 - - 562
+FAIL 46 37408014 evict 4 FAIL 47 34915948 evict 4 563
+FAIL 82 31539709 get 7 PASS 151 123305643 - - 564
+PASS 240 235087648 - - PASS 240 276661319 - - 565
+FAIL 96 149694654 evict 7 FAIL 127 97476389 evict 4 566
+PASS 126 54398845 - - PASS 126 141533303 - - 567
+PASS 126 39277896 - - PASS 126 39397031 - - 568
+PASS 245 55694735 - - PASS 245 36584676 - - 569
+PASS 125 83612312 - - PASS 125 90278907 - - 570
+FAIL 93 75946842 evict 7 PASS 236 271922177 - - 571
+PASS 94 36034459 - - PASS 94 36396591 - - 572
+PASS 64 68357686 - - PASS 64 68360203 - - 573
+PASS 199 190852448 - - PASS 199 138732138 - - 574
+PASS 130 107520218 - - PASS 130 98101756 - - 575
+PASS 70 82399761 - - PASS 70 28950 - - 576
+FAIL 75 86021488 evict 7 PASS 177 113215206 - - 577
+FAIL 54 68134549 evict 7 PASS 70 80554078 - - 578
+FAIL 42 27320905 evict 7 PASS 88 33889 - - 579
+PASS 112 28055090 - - PASS 112 52997050 - - 580
+PASS 108 211138317 - - PASS 108 235740144 - - 581
+PASS 195 40508096 - - PASS 195 25272357 - - 582
+FAIL 49 5299947 get 7 PASS 51 4809161 - - 583
+PASS 141 33116284 - - PASS 141 33117598 - - 584
+PASS 176 150577129 - - PASS 176 163024287 - - 585
+FAIL 122 52492913 evict 7 PASS 151 110026262 - - 586
+FAIL 16 37760540 evict 4 FAIL 17 37760539 evict 4 587
+PASS 52 81604366 - - PASS 52 81603906 - - 588
+PASS 67 4939 - - PASS 67 5124 - - 589
+FAIL 77 14445 get 4 FAIL 78 14435 get 4 590
+PASS 136 95125542 - - PASS 136 53768270 - - 591
+PASS 130 95155496 - - PASS 130 89543219 - - 592
+PASS 184 159166663 - - PASS 184 110117704 - - 593
+FAIL 132 76085913 evict 7 PASS 226 96135658 - - 594
+PASS 113 23692849 - - PASS 113 20960632 - - 595
+FAIL 192 161071493 evict 7 PASS 204 213369948 - - 596
+PASS 75 83611066 - - PASS 75 83609313 - - 597
+PASS 160 73591411 - - PASS 160 88868252 - - 598
+PASS 70 36361329 - - PASS 70 66403207 - - 599
+PASS 212 127307439 - - PASS 212 108377827 - - 600
+PASS 237 131337757 - - PASS 237 148916336 - - 601
+FAIL 176 153891829 evict 7 PASS 183 130238167 - - 602
+PASS 140 13761853 - - PASS 140 33317604 - - 603
+PASS 132 248681503 - - PASS 132 178633546 - - 604
+PASS 165 87264966 - - PASS 165 67301979 - - 605
+PASS 164 60409893 - - FAIL 30 10 evict 4 606
+PASS 55 3355441 - - PASS 55 40463939 - - 607
+PASS 158 118820840 - - PASS 158 32531285 - - 608
+PASS 65 33523429 - - PASS 65 16339945 - - 609
+PASS 144 93735002 - - PASS 144 70121139 - - 610
+PASS 223 100388191 - - PASS 223 67619517 - - 611
+PASS 85 22097 - - PASS 85 25443 - - 612
+PASS 103 105799075 - - PASS 103 98450626 - - 613
+PASS 167 102875714 - - PASS 167 107879450 - - 614
+PASS 154 55529472 - - PASS 154 55525601 - - 615
+PASS 124 57820632 - - PASS 124 71399130 - - 616
+PASS 222 221768111 - - PASS 222 181523841 - - 617
+PASS 190 50508407 - - PASS 190 18623664 - - 618
+PASS 52 58453029 - - PASS 52 57893947 - - 619
+PASS 152 64120765 - - PASS 152 79099814 - - 620
+FAIL 79 35494424 evict 4 FAIL 76 55555706 evict 4 621
+FAIL 181 68837771 evict 7 PASS 249 89750788 - - 622
+PASS 94 32754922 - - PASS 94 81751778 - - 623
+FAIL 139 55603413 evict 7 PASS 154 55601165 - - 624
+FAIL 31 16032 get 7 PASS 134 63649326 - - 625
+PASS 159 167718017 - - PASS 159 250890910 - - 626
+FAIL 170 124376816 evict 7 PASS 183 96551883 - - 627
+PASS 147 111542932 - - PASS 147 84896639 - - 628
+PASS 245 143327268 - - PASS 245 96374765 - - 629
+PASS 111 68338268 - - PASS 111 53996293 - - 630
+FAIL 138 124920510 evict 7 PASS 201 153908812 - - 631
+PASS 129 54762087 - - PASS 129 75668188 - - 632
+FAIL 29 53484558 get 7 PASS 173 109925027 - - 633
+PASS 90 103434021 - - PASS 90 103432604 - - 634
+FAIL 61 53725692 evict 7 PASS 69 36122852 - - 635
+PASS 110 237630729 - - PASS 110 219629158 - - 636
+FAIL 163 105296494 evict 7 PASS 179 179302583 - - 637
+FAIL 108 35781686 evict 7 FAIL 19 14 evict 4 638
+PASS 85 68815379 - - PASS 85 57256587 - - 639
+FAIL 21 3064 get 4 PASS 84 35847991 - - 640
+FAIL 159 33103832 evict 7 PASS 213 10109356 - - 641
+PASS 214 35785685 - - PASS 214 56407144 - - 642
+FAIL 98 66054655 evict 7 PASS 237 83462945 - - 643
+PASS 217 207030105 - - PASS 217 211753413 - - 644
+PASS 59 12409 - - PASS 59 6171 - - 645
+FAIL 195 65554912 evict 7 PASS 210 25525325 - - 646
+PASS 197 202826484 - - PASS 197 198751932 - - 647
+FAIL 219 58948396 evict 7 PASS 245 90198464 - - 648
+PASS 55 23724899 - - PASS 55 35554875 - - 649
+FAIL 209 58678271 evict 7 PASS 225 61357456 - - 650
+PASS 169 129558840 - - PASS 169 83520868 - - 651
+PASS 136 113581498 - - PASS 136 105208394 - - 652
+PASS 155 147637341 - - PASS 155 186579301 - - 653
+PASS 76 34640917 - - PASS 76 30680951 - - 654
+PASS 161 157732577 - - PASS 161 111978323 - - 655
+PASS 172 26395924 - - PASS 172 14565573 - - 656
+FAIL 95 87862135 evict 7 PASS 104 108970786 - - 657
+PASS 239 77384297 - - PASS 239 147478096 - - 658
+PASS 100 102427854 - - PASS 100 77347102 - - 659
+FAIL 63 35229061 evict 4 PASS 130 174827361 - - 660
+PASS 98 85212661 - - PASS 98 105164027 - - 661
+PASS 196 75327908 - - PASS 196 64428911 - - 662
+PASS 133 180147988 - - PASS 133 161616239 - - 663
+PASS 220 49124549 - - PASS 220 70315664 - - 664
+PASS 193 90451736 - - PASS 193 107170026 - - 665
+PASS 135 59118612 - - PASS 135 56161698 - - 666
+PASS 54 33020223 - - PASS 54 81581774 - - 667
+FAIL 91 22384653 evict 7 PASS 225 41351525 - - 668
+PASS 226 29707984 - - PASS 226 33819066 - - 669
+PASS 122 67799402 - - PASS 122 65611503 - - 670
+PASS 169 147651725 - - PASS 169 118435879 - - 671
+FAIL 125 160733485 evict 7 PASS 193 149822979 - - 672
+PASS 197 174799292 - - PASS 197 191264151 - - 673
+PASS 137 163913463 - - PASS 137 98049710 - - 674
+PASS 221 104147867 - - PASS 221 64436878 - - 675
+PASS 128 167939014 - - PASS 128 139629615 - - 676
+PASS 127 1846228 - - PASS 127 23139 - - 677
+PASS 138 157726444 - - PASS 138 184818694 - - 678
+PASS 127 50283515 - - PASS 127 50291450 - - 679
+FAIL 111 77898436 get 7 PASS 175 82638963 - - 680
+FAIL 84 33955014 get 7 PASS 167 154051741 - - 681
+PASS 186 37775793 - - PASS 186 37759746 - - 682
+PASS 135 140486233 - - PASS 135 80082817 - - 683
+PASS 148 64232305 - - PASS 148 90908989 - - 684
+PASS 110 62443950 - - PASS 110 68508962 - - 685
+PASS 238 297399544 - - PASS 238 158442684 - - 686
+PASS 99 40632364 - - PASS 99 40006449 - - 687
+FAIL 27 28622435 evict 7 PASS 64 37133951 - - 688
+FAIL 49 64194321 evict 7 PASS 76 73724589 - - 689
+FAIL 160 143387688 evict 7 PASS 223 240914991 - - 690
+PASS 153 33756264 - - PASS 153 73973139 - - 691
+PASS 91 114497779 - - PASS 91 114487070 - - 692
+PASS 181 60114726 - - PASS 181 23924917 - - 693
+PASS 50 13723 - - PASS 50 15589006 - - 694
+PASS 157 61428088 - - PASS 157 119405030 - - 695
+FAIL 173 72806385 evict 7 PASS 217 112473317 - - 696
+PASS 140 122787617 - - PASS 140 136327024 - - 697
+FAIL 89 61238104 evict 7 PASS 212 102654754 - - 698
+PASS 58 1095699 - - PASS 58 15840922 - - 699
+PASS 55 14269 - - PASS 55 10212 - - 700
+PASS 53 18682359 - - PASS 53 22032 - - 701
+PASS 152 59204243 - - PASS 152 75792483 - - 702
+FAIL 70 68334338 evict 7 PASS 216 130830886 - - 703
+PASS 117 21823669 - - PASS 117 55762287 - - 704
+PASS 234 98322349 - - PASS 234 92892494 - - 705
+PASS 187 185033327 - - PASS 187 129726079 - - 706
+PASS 127 137734539 - - PASS 127 47432522 - - 707
+PASS 91 38526640 - - PASS 91 38533297 - - 708
+FAIL 161 99799753 evict 7 PASS 224 73460975 - - 709
+PASS 76 45306835 - - PASS 76 32135 - - 710
+FAIL 101 76013508 evict 7 PASS 191 113880353 - - 711
+FAIL 17 938 evict 7 PASS 110 30737599 - - 712
+FAIL 52 18249 evict 7 PASS 115 71540443 - - 713
+PASS 52 33281028 - - PASS 52 33284400 - - 714
+FAIL 195 184928181 evict 7 PASS 227 133398203 - - 715
+FAIL 11 280 evict 7 PASS 216 112827507 - - 716
+FAIL 177 79499554 get 7 PASS 219 50203227 - - 717
+PASS 100 59470330 - - PASS 100 111678768 - - 718
+PASS 226 148862750 - - PASS 226 123854571 - - 719
+FAIL 156 36908143 get 4 FAIL 157 82018371 get 4 720
+PASS 216 265436320 - - PASS 216 156272951 - - 721
+PASS 65 41568121 - - PASS 65 48113092 - - 722
+FAIL 61 19346757 evict 7 PASS 169 17472174 - - 723
+PASS 119 70176948 - - PASS 119 11152130 - - 724
+PASS 225 49836710 - - PASS 225 81367760 - - 725
+FAIL 45 6601 evict 7 PASS 71 16260 - - 726
+PASS 117 47060751 - - PASS 117 78225825 - - 727
+PASS 74 10724513 - - PASS 74 50542096 - - 728
+PASS 143 167718659 - - PASS 143 160395163 - - 729
+FAIL 31 78496607 evict 7 PASS 106 80552695 - - 730
+PASS 184 45609135 - - PASS 184 15695006 - - 731
+PASS 55 23713 - - PASS 55 26425 - - 732
+FAIL 91 82798382 get 7 PASS 243 202225166 - - 733
+FAIL 34 1026032 evict 7 FAIL 95 51322678 get 4 734
+PASS 128 140614626 - - PASS 128 131119773 - - 735
+FAIL 38 2431347 evict 7 FAIL 64 23058084 evict 4 736
+PASS 135 59991818 - - PASS 135 59991241 - - 737
+PASS 59 9719 - - PASS 59 7516 - - 738
+PASS 107 72762858 - - PASS 107 72761327 - - 739
+FAIL 104 99166827 evict 7 PASS 143 152096475 - - 740
+PASS 164 4507151 - - PASS 164 33864705 - - 741
+PASS 105 94866474 - - PASS 105 85780698 - - 742
+PASS 157 35435470 - - PASS 157 41753614 - - 743
+PASS 194 98893708 - - PASS 194 82050001 - - 744
+FAIL 23 3405579 evict 7 PASS 212 211881537 - - 745
+FAIL 196 94971593 evict 7 PASS 249 54472465 - - 746
+FAIL 62 103878651 evict 7 PASS 232 275138294 - - 747
+PASS 233 108331746 - - PASS 233 90511363 - - 748
+PASS 117 49654073 - - PASS 117 34928268 - - 749
+PASS 59 5446160 - - PASS 59 12213 - - 750
+PASS 190 167971177 - - PASS 190 158750678 - - 751
+PASS 163 94373273 - - PASS 163 79405588 - - 752
+FAIL 147 24632322 evict 7 PASS 204 45448353 - - 753
+PASS 138 67840168 - - PASS 138 79626104 - - 754
+PASS 193 217606061 - - PASS 193 201596490 - - 755
+PASS 195 91872710 - - PASS 195 147711701 - - 756
+PASS 117 83767808 - - PASS 117 82812867 - - 757
+PASS 125 197508689 - - PASS 125 108067407 - - 758
+PASS 60 85857195 - - PASS 60 85851473 - - 759
+PASS 100 58042928 - - PASS 100 42435025 - - 760
+PASS 182 147738278 - - PASS 182 183075209 - - 761
+PASS 68 35940548 - - PASS 68 35939902 - - 762
+FAIL 133 137103152 get 7 PASS 215 151592095 - - 763
+FAIL 43 11092749 evict 7 PASS 194 75393626 - - 764
+FAIL 169 66300164 get 7 FAIL 202 125290885 evict 4 765
+FAIL 24 5224 evict 7 PASS 208 108234127 - - 766
+FAIL 31 1958398 evict 7 PASS 143 73011779 - - 767
+PASS 57 110266144 - - PASS 57 115307660 - - 768
+PASS 219 146742810 - - PASS 219 136544899 - - 769
+PASS 204 169226917 - - PASS 204 112140859 - - 770
+FAIL 40 59045783 evict 4 PASS 74 48767005 - - 771
+PASS 213 106573222 - - PASS 213 118654135 - - 772
+PASS 249 135040465 - - PASS 249 114056431 - - 773
+PASS 154 67265375 - - PASS 154 36728930 - - 774
+PASS 150 115867758 - - FAIL 62 8777 evict 4 775
+PASS 201 233329552 - - PASS 201 120111394 - - 776
+FAIL 10 27 evict 7 PASS 196 103079823 - - 777
+FAIL 94 121163965 evict 7 PASS 222 189774856 - - 778
+PASS 109 48424111 - - PASS 109 48429039 - - 779
+PASS 65 14732981 - - PASS 65 75195272 - - 780
+FAIL 32 15587 evict 7 PASS 55 6968127 - - 781
+PASS 100 55316214 - - PASS 100 21583434 - - 782
+FAIL 84 26986312 get 7 PASS 98 79870866 - - 783
+PASS 239 188916135 - - PASS 239 144789508 - - 784
+FAIL 33 13390126 evict 7 PASS 108 102731918 - - 785
+PASS 110 34650775 - - PASS 110 45331296 - - 786
+FAIL 68 1507414 evict 7 PASS 99 21925509 - - 787
+FAIL 135 48955042 evict 4 FAIL 138 95137825 evict 4 788
+FAIL 36 25346254 evict 4 PASS 188 76579769 - - 789
+PASS 67 53544714 - - PASS 67 53544714 - - 790
+FAIL 13 2890 get 7 PASS 218 170968324 - - 791
+PASS 149 160327887 - - PASS 149 111700363 - - 792
+FAIL 57 40435627 evict 7 PASS 152 77984726 - - 793
+PASS 145 41884756 - - PASS 145 41887589 - - 794
+PASS 166 77077590 - - PASS 166 106646648 - - 795
+PASS 94 41137503 - - PASS 94 56752643 - - 796
+FAIL 46 70396046 evict 7 PASS 110 17673238 - - 797
+PASS 64 8994467 - - PASS 64 22674397 - - 798
+FAIL 152 42701228 evict 4 FAIL 156 53191303 evict 4 799
+PASS 200 74640830 - - PASS 200 26621271 - - 800
+PASS 51 21856655 - - PASS 51 33974914 - - 801
+FAIL 22 500234 evict 7 PASS 85 67254441 - - 802
+PASS 59 18038958 - - PASS 59 18040328 - - 803
+PASS 133 120109377 - - PASS 133 54994234 - - 804
+PASS 207 55424140 - - FAIL 54 10581 evict 4 805
+PASS 153 59603072 - - PASS 153 90268983 - - 806
+FAIL 115 102539496 get 4 PASS 117 66732001 - - 807
+FAIL 148 82361702 get 7 PASS 182 99086742 - - 808
+FAIL 75 3087455 get 7 PASS 181 39545877 - - 809
+PASS 96 74750634 - - PASS 96 36567086 - - 810
+PASS 243 113237840 - - PASS 243 118751883 - - 811
+PASS 174 60801883 - - PASS 174 51180947 - - 812
+PASS 142 64166652 - - PASS 142 87103212 - - 813
+PASS 55 13904 - - PASS 55 17524 - - 814
+PASS 233 119584533 - - PASS 233 146614704 - - 815
+PASS 231 118869916 - - PASS 231 101215194 - - 816
+PASS 75 24716888 - - PASS 75 24724722 - - 817
+PASS 126 57283232 - - PASS 126 55751948 - - 818
+PASS 59 24879 - - PASS 59 21110 - - 819
+PASS 193 115593533 - - PASS 193 107617475 - - 820
+FAIL 166 55151860 evict 7 FAIL 169 25642045 evict 4 821
+PASS 133 57633020 - - PASS 133 57634957 - - 822
+FAIL 82 46860914 evict 7 PASS 136 21460245 - - 823
+PASS 143 6882868 - - PASS 143 9230056 - - 824
+FAIL 63 3444732 evict 7 PASS 135 13048554 - - 825
+PASS 210 88942303 - - PASS 210 166565758 - - 826
+PASS 120 211792662 - - PASS 120 150660800 - - 827
+FAIL 112 8717558 get 7 PASS 231 57042557 - - 828
+PASS 248 95069999 - - PASS 248 84742677 - - 829
+FAIL 137 190970352 evict 4 FAIL 80 105983483 evict 4 830
+FAIL 35 2777 evict 7 PASS 193 102864534 - - 831
+PASS 50 107851370 - - PASS 50 135639073 - - 832
+PASS 225 120983815 - - PASS 225 125105522 - - 833
+FAIL 58 2424250 evict 7 PASS 245 89579324 - - 834
+PASS 193 68069920 - - PASS 193 67225975 - - 835
+FAIL 47 100066591 evict 7 PASS 188 117954570 - - 836
+PASS 241 93488218 - - PASS 241 92469312 - - 837
+PASS 225 162104144 - - PASS 225 91982857 - - 838
+FAIL 38 64725064 evict 7 PASS 55 76346834 - - 839
+PASS 71 3532037 - - PASS 71 30464 - - 840
+FAIL 149 68778572 evict 4 FAIL 149 56481884 evict 4 841
+PASS 123 105129749 - - PASS 123 87671741 - - 842
+FAIL 129 49763175 evict 7 PASS 161 49760297 - - 843
+FAIL 62 14543342 evict 7 PASS 101 28060 - - 844
+PASS 116 153651827 - - PASS 116 141223082 - - 845
+PASS 196 161568112 - - PASS 196 133106982 - - 846
+PASS 132 106216954 - - PASS 132 126368914 - - 847
+PASS 190 38465945 - - PASS 190 66678784 - - 848
+FAIL 221 112099293 evict 7 PASS 245 115587169 - - 849
+FAIL 150 54369952 evict 7 PASS 249 93296121 - - 850
+PASS 129 106360058 - - PASS 129 98062084 - - 851
+PASS 111 109668771 - - PASS 111 142955264 - - 852
+PASS 51 42116486 - - PASS 51 66548406 - - 853
+FAIL 37 68072960 evict 4 FAIL 40 11276446 evict 4 854
+PASS 93 87329902 - - PASS 93 60600311 - - 855
+FAIL 74 2154071 evict 7 PASS 176 44001 - - 856
+PASS 152 123989769 - - PASS 152 103412638 - - 857
+PASS 247 224534838 - - PASS 247 233418046 - - 858
+PASS 219 183116939 - - PASS 219 184367543 - - 859
+PASS 178 95914957 - - PASS 178 76291630 - - 860
+PASS 101 130605251 - - PASS 101 158462643 - - 861
+PASS 105 147815199 - - PASS 105 67290735 - - 862
+FAIL 58 20926527 evict 7 PASS 138 43910501 - - 863
+PASS 99 37595157 - - PASS 99 37591160 - - 864
+PASS 145 174414002 - - PASS 145 150415663 - - 865
+PASS 168 196678177 - - PASS 168 91561910 - - 866
+PASS 51 38461384 - - PASS 51 14371 - - 867
+PASS 101 8493847 - - PASS 101 8488733 - - 868
+PASS 215 133630965 - - PASS 215 123247568 - - 869
+PASS 155 180753882 - - PASS 155 176435729 - - 870
+PASS 105 93371455 - - PASS 105 74230770 - - 871
+FAIL 78 29991438 evict 4 FAIL 81 16270369 evict 4 872
+PASS 163 56182780 - - PASS 163 69098624 - - 873
+FAIL 45 6287 evict 7 PASS 237 92204823 - - 874
+FAIL 129 29756593 evict 7 PASS 184 64447976 - - 875
+FAIL 91 95125651 evict 7 PASS 128 95130126 - - 876
+PASS 115 71112339 - - PASS 115 72838650 - - 877
+PASS 103 96392914 - - PASS 103 96400046 - - 878
+PASS 212 133636032 - - PASS 212 119484938 - - 879
+FAIL 158 61500356 get 7 PASS 189 50782038 - - 880
+PASS 143 94983058 - - PASS 143 93284606 - - 881
+PASS 170 142934428 - - PASS 170 165078534 - - 882
+PASS 124 60378580 - - PASS 124 149579082 - - 883
+PASS 61 35219334 - - PASS 61 35220911 - - 884
+PASS 186 33307714 - - PASS 186 27832077 - - 885
+PASS 130 68813421 - - PASS 130 46108820 - - 886
+FAIL 120 163781433 evict 7 PASS 173 151999412 - - 887
+PASS 207 99395610 - - PASS 207 159866437 - - 888
+FAIL 158 50602 evict 7 PASS 247 38466219 - - 889
+FAIL 100 36640234 evict 7 PASS 127 47043099 - - 890
+PASS 91 78124327 - - PASS 91 121111205 - - 891
+FAIL 82 3581106 evict 7 PASS 224 79890292 - - 892
+FAIL 114 104685389 get 7 PASS 186 151153648 - - 893
+PASS 97 54083951 - - PASS 97 32928055 - - 894
+FAIL 54 12459031 evict 7 PASS 240 69484343 - - 895
+PASS 61 30164169 - - PASS 61 27768399 - - 896
+FAIL 96 17985659 evict 4 PASS 150 73253335 - - 897
+PASS 145 129371905 - - PASS 145 104745470 - - 898
+PASS 55 67169021 - - PASS 55 18499640 - - 899
+FAIL 7 1034 evict 7 PASS 90 31123699 - - 900
+FAIL 81 33051976 get 7 PASS 85 83055108 - - 901
+PASS 66 19491937 - - PASS 66 19493966 - - 902
+FAIL 37 3432688 evict 7 PASS 217 143319410 - - 903
+PASS 147 229120096 - - PASS 147 247543625 - - 904
+FAIL 201 85559207 evict 7 PASS 220 95329469 - - 905
+PASS 199 187743315 - - PASS 199 186744942 - - 906
+PASS 101 60412607 - - PASS 101 44452586 - - 907
+PASS 219 177971445 - - PASS 219 144558168 - - 908
+PASS 135 77188294 - - PASS 135 52877061 - - 909
+PASS 133 77398012 - - PASS 133 27691316 - - 910
+PASS 86 19836919 - - PASS 86 11400001 - - 911
+PASS 139 97332614 - - PASS 139 95304265 - - 912
+PASS 151 44274481 - - PASS 151 79073592 - - 913
+PASS 185 82468385 - - PASS 185 116206974 - - 914
+PASS 133 138603472 - - PASS 133 80998265 - - 915
+PASS 150 140585028 - - PASS 150 89923431 - - 916
+FAIL 45 42137557 evict 7 PASS 193 151043337 - - 917
+PASS 74 51256999 - - PASS 74 13021 - - 918
+FAIL 135 70172547 evict 7 PASS 245 161888975 - - 919
+FAIL 41 10315 evict 7 PASS 52 14777 - - 920
+PASS 234 271162457 - - PASS 234 202777758 - - 921
+FAIL 42 4445 evict 4 PASS 179 34938569 - - 922
+PASS 186 148454045 - - PASS 186 168166176 - - 923
+PASS 75 24927 - - PASS 75 12490 - - 924
+FAIL 54 67637712 evict 7 PASS 245 141527531 - - 925
+FAIL 33 2974484 evict 7 PASS 179 40522631 - - 926
+PASS 69 32508207 - - PASS 69 32498948 - - 927
+FAIL 26 25051627 evict 7 FAIL 89 14964588 evict 4 928
+PASS 197 133311217 - - PASS 197 91996198 - - 929
+PASS 167 108121277 - - PASS 167 147825079 - - 930
+PASS 67 68940448 - - PASS 67 40368368 - - 931
+FAIL 55 114895368 evict 7 PASS 82 98367121 - - 932
+PASS 163 105526475 - - PASS 163 115001808 - - 933
+PASS 98 60978582 - - PASS 98 60977510 - - 934
+PASS 193 128779575 - - PASS 193 149005858 - - 935
+PASS 73 39389016 - - PASS 73 39402091 - - 936
+PASS 189 180577522 - - PASS 189 132554841 - - 937
+PASS 236 139862514 - - PASS 236 150595663 - - 938
+FAIL 35 37806270 evict 4 PASS 65 56055030 - - 939
+PASS 208 237918863 - - PASS 208 239714393 - - 940
+FAIL 114 13131938 get 7 PASS 126 13145075 - - 941
+FAIL 93 43289386 evict 7 PASS 117 51687939 - - 942
+PASS 106 86918366 - - PASS 106 114624808 - - 943
+PASS 107 148463124 - - PASS 107 127856748 - - 944
+FAIL 106 55830553 get 7 PASS 154 98311419 - - 945
+PASS 225 144620386 - - PASS 225 123857164 - - 946
+PASS 142 138346212 - - PASS 142 146004353 - - 947
+PASS 57 107522634 - - PASS 57 57481918 - - 948
+PASS 184 74058384 - - PASS 184 124853267 - - 949
+PASS 155 142111378 - - FAIL 54 5898 get 4 950
+FAIL 26 44629837 evict 7 PASS 123 15060592 - - 951
+PASS 213 71070001 - - PASS 213 62132541 - - 952
+PASS 125 190395233 - - PASS 125 226191007 - - 953
+FAIL 80 33705539 evict 7 FAIL 232 145073261 evict 4 954
+PASS 81 72225475 - - PASS 81 50732896 - - 955
+PASS 235 91302956 - - PASS 235 87980676 - - 956
+PASS 232 99632901 - - PASS 232 88458203 - - 957
+PASS 188 130588329 - - PASS 188 170032540 - - 958
+PASS 149 111096400 - - PASS 149 121311085 - - 959
+FAIL 87 59434272 evict 7 PASS 209 78827310 - - 960
+FAIL 152 103760010 evict 7 PASS 158 55870281 - - 961
+FAIL 84 69520456 evict 7 PASS 125 88967711 - - 962
+FAIL 54 7910922 evict 7 PASS 241 39569185 - - 963
+FAIL 55 13149032 get 7 PASS 126 13163826 - - 964
+PASS 148 97668533 - - PASS 148 103228869 - - 965
+FAIL 33 36457 evict 7 PASS 190 117719972 - - 966
+PASS 180 214447987 - - PASS 180 136321426 - - 967
+PASS 80 103073054 - - PASS 80 17249 - - 968
+FAIL 177 115700740 get 7 PASS 181 73980574 - - 969
+PASS 126 20506632 - - PASS 126 7739219 - - 970
+PASS 171 109809859 - - PASS 171 22458379 - - 971
+PASS 58 13722639 - - PASS 58 13726220 - - 972
+PASS 142 36554503 - - PASS 142 87331002 - - 973
+PASS 203 144917758 - - PASS 203 160098808 - - 974
+PASS 104 41709657 - - PASS 104 6382218 - - 975
+FAIL 107 97808865 evict 7 PASS 113 88349563 - - 976
+PASS 118 99934487 - - PASS 118 82725938 - - 977
+PASS 111 131512791 - - PASS 111 124540077 - - 978
+PASS 104 106112571 - - PASS 104 95515247 - - 979
+PASS 100 51131379 - - PASS 100 39116640 - - 980
+PASS 53 5524791 - - PASS 53 5526939 - - 981
+PASS 215 105772789 - - PASS 215 81306085 - - 982
+PASS 92 62715405 - - PASS 92 104302819 - - 983
+FAIL 96 86148058 evict 7 PASS 171 81072037 - - 984
+PASS 76 92059179 - - PASS 76 112068375 - - 985
+FAIL 64 259993 evict 7 PASS 231 173199877 - - 986
+PASS 168 139706113 - - PASS 168 172372903 - - 987
+PASS 115 142398822 - - PASS 115 81430237 - - 988
+FAIL 104 1456967 evict 7 FAIL 110 24648 evict 4 989
+PASS 119 58396766 - - PASS 119 58391656 - - 990
+FAIL 33 38015355 get 4 FAIL 33 38018715 get 4 991
+FAIL 54 20390553 evict 7 PASS 92 25170483 - - 992
+PASS 193 63057389 - - PASS 193 63792160 - - 993
+PASS 83 14458 - - PASS 83 9765 - - 994
+PASS 112 23415840 - - PASS 112 36247388 - - 995
+FAIL 157 38687838 evict 7 FAIL 166 68697238 evict 4 996
+PASS 154 209041913 - - PASS 154 151648920 - - 997
+FAIL 141 83385256 evict 4 PASS 245 170063998 - - 998
+FAIL 136 34678161 evict 4 FAIL 141 18892253 evict 4 999
+</script>
+<script type="text/plain" id="tsv-sleep" data-src="data/02/sleep-test.tsv">
+ttl_ns 5000000
+7485718730254 7485726065747
+7485726075838 7485738289670
+7485738298920 7485743978276
+7485743989760 7485749090250
+7485749094938 7485754205406
+7485754208906 7485760511077
+7485760519761 7485765771925
+7485765783822 7485771552902
+7485771562254 7485776963552
+7485776970415 7485782729138
+7485782745829 7485788187487
+7485788193375 7485793343781
+7485793354989 7485799674393
+7485799684737 7485804841411
+7485804850808 7485810203657
+7485810211870 7485815971019
+7485815979012 7485821667247
+7485821677475 7485827665917
+7485827676437 7485832874783
+7485832889381 7485838783090
+7485838790186 7485844894003
+7485844903634 7485850277099
+7485850285103 7485856068237
+7485856076273 7485861234096
+7485861243344 7485867359026
+7485867367968 7485872626179
+7485872635904 7485877745404
+7485877752634 7485882881195
+7485882889053 7485888726388
+7485888734124 7485894051915
+7485894059854 7485899195186
+7485899202584 7485904309840
+7485904319466 7485909585955
+7485909594579 7485914728018
+7485914733664 7485921044786
+7485921052214 7485926629100
+7485926636507 7485931842470
+7485931851621 7485937138971
+7485937149314 7485942302509
+7485942310317 7485948098870
+7485948107660 7485953207480
+7485953209491 7485958815422
+7485958833358 7485964805598
+7485964814538 7485970162995
+7485970171130 7485975287455
+7485975297526 7485980423493
+7485980432660 7485985807058
+7485985819884 7485990973354
+7485990982572 7485996991882
+7485997023505 7486002430979
+7486002441420 7486008271268
+7486008280043 7486013524980
+7486013532880 7486019511969
+7486019522590 7486025138786
+7486025148431 7486030684881
+7486030698655 7486036713588
+7486036723953 7486042054155
+7486042063281 7486047597487
+7486047608350 7486052795879
+7486052806946 7486058059598
+7486058066851 7486064369004
+7486064377482 7486069540240
+7486069549493 7486075841728
+7486075849898 7486081117002
+7486081124784 7486086595524
+7486086601858 7486092189598
+7486092197668 7486097349243
+7486097358196 7486103040313
+7486103049360 7486108232178
+7486108239884 7486113610355
+7486113618315 7486119197846
+7486119204973 7486124317979
+7486124330441 7486129534482
+7486129543003 7486134757149
+7486134778081 7486139962957
+7486139972236 7486145704124
+7486145713585 7486150833113
+7486150837672 7486157134823
+7486157143293 7486162707573
+7486162715273 7486167758084
+7486167765524 7486172888498
+7486172895660 7486178200798
+7486178209716 7486184395935
+7486184404054 7486189842253
+7486189852578 7486195186861
+7486195195370 7486200566528
+7486200574751 7486205854943
+7486205861973 7486211237199
+7486211246004 7486216441520
+7486216450159 7486221601595
+7486221610144 7486227217995
+7486227228990 7486232271777
+7486232281688 7486237566788
+7486237575157 7486243041366
+7486243051460 7486248933706
+7486248941179 7486254665000
+7486254675226 7486261129210
+7486261139986 7486266724022
+7486266734555 7486272829604
+7486272838468 7486278199857
+7486278212096 7486284043353
+7486284051370 7486289221837
+7486289232007 7486295446866
+7486295457443 7486301510036
+7486301519553 7486306848432
+7486306859149 7486312063490
+7486312086438 7486317381216
+7486317389337 7486323045090
+7486323053220 7486328933491
+7486328940080 7486334226059
+7486334233266 7486340403369
+7486340411261 7486346401939
+7486346411137 7486351662287
+7486351672043 7486356854557
+7486356866431 7486362241746
+7486362250663 7486368203497
+7486368217549 7486373387158
+7486373396427 7486378606473
+7486378618142 7486384365710
+7486384377107 7486389923508
+7486389932225 7486395638491
+7486395647318 7486400827379
+7486400835571 7486406322225
+7486406331178 7486412174293
+7486412182323 7486417343511
+7486417353913 7486423116712
+7486423128398 7486429300791
+7486429313241 7486434745325
+7486434756120 7486439926442
+7486439937168 7486445201129
+7486445211624 7486450673478
+7486450680925 7486456591250
+7486456601035 7486461887393
+7486461905419 7486467888944
+7486467904790 7486473433441
+7486473443867 7486479253573
+7486479262700 7486484314802
+7486484325471 7486489523242
+7486489539361 7486495258158
+7486495268601 7486501042573
+7486501050738 7486506591696
+7486506602556 7486512066777
+7486512076288 7486517235875
+7486517245214 7486522423586
+7486522433725 7486528746005
+7486528754216 7486534262520
+7486534269944 7486540137826
+7486540145919 7486545288849
+7486545298183 7486550498706
+7486550510568 7486555940113
+7486555948833 7486561113716
+7486561124007 7486566269384
+7486566280478 7486572320127
+7486572329369 7486577597161
+7486577604975 7486583338073
+7486583345659 7486588988825
+7486589019809 7486594225971
+7486594236808 7486599396615
+7486599407242 7486604550929
+7486604562606 7486609737124
+7486609747617 7486616072046
+7486616080229 7486621298312
+7486621306901 7486626861584
+7486626870253 7486633837499
+7486633849102 7486639445162
+7486639454871 7486644819219
+7486644830424 7486650160077
+7486650169878 7486655318331
+7486655328339 7486660452137
+7486660459546 7486665788531
+7486665806337 7486671231575
+7486671244519 7486676648058
+7486676656293 7486682098475
+7486682106787 7486687510574
+7486687524621 7486692655657
+7486692663137 7486697793835
+7486697799902 7486702965061
+7486702972991 7486708154542
+7486708164165 7486713479899
+7486713496512 7486718828213
+7486718836286 7486724579317
+7486724588431 7486729717855
+7486729726280 7486734918383
+7486734926488 7486740644674
+7486740653121 7486745800130
+7486745808130 7486750927552
+7486750934533 7486756965160
+7486756974463 7486762133759
+7486762141362 7486767885645
+7486767893866 7486773079699
+7486773090946 7486778577105
+7486778587754 7486783719837
+7486783732984 7486788916288
+7486788926697 7486794479372
+7486794489530 7486800415376
+7486800423366 7486805782938
+7486805791344 7486811431630
+7486811439737 7486816606376
+7486816614778 7486821829199
+7486821840611 7486827993681
+7486828064028 7486833220605
+7486833230871 7486838893498
+7486838912925 7486844962924
+7486844971533 7486850362851
+7486850370365 7486856581508
+7486856589671 7486861797145
+7486861807884 7486867533362
+7486867542554 7486872736021
+7486872748003 7486877919889
+7486877928447 7486883724723
+7486883733542 7486888954149
+7486888962911 7486894349936
+7486894356567 7486899569688
+7486899577290 7486904795748
+7486904804601 7486909918291
+7486909929282 7486915104711
+7486915113662 7486920452144
+7486920460254 7486925702370
+7486925712554 7486931322474
+7486931332106 7486936481957
+7486936490501 7486941814641
+7486941823905 7486947691589
+7486947702638 7486952942663
+7486952950690 7486958533450
+7486958550642 7486964850342
+7486964860668 7486970398211
+7486970408450 7486976235790
+7486976244124 7486981429396
+7486981441856 7486986721116
+7486986731031 7486992321036
+7486992332817 7486997494883
+7486997504096 7487002634155
+7487002642913 7487008965740
+7487008990267 7487014445177
+7487014454699 7487020073758
+7487020082914 7487025215284
+7487025223716 7487030677044
+7487030687911 7487035996180
+7487036068450 7487041337576
+7487041349062 7487047089476
+7487047103990 7487052219729
+7487052228891 7487057448504
+7487057456793 7487063026243
+7487063036283 7487068952821
+7487068961967 7487074378635
+7487074389113 7487080643698
+7487080652547 7487086901550
+7487086913116 7487092098765
+7487092109181 7487097290046
+7487097305024 7487102885036
+7487102894873 7487108850901
+7487108860068 7487114323951
+7487114332332 7487119777504
+7487119786753 7487125044630
+7487125057021 7487131234913
+7487131245257 7487136459028
+7487136469453 7487141638706
+7487141648265 7487147299404
+7487147307410 7487152440368
+7487152451090 7487157701455
+7487157709977 7487163340790
+7487163348887 7487168517275
+7487168528508 7487174109521
+7487174121061 7487179307870
+7487179317777 7487185398757
+7487185420895 7487191093603
+7487191105389 7487196302470
+7487196313401 7487201518206
+7487201528043 7487207098835
+7487207109520 7487212952042
+7487212963756 7487218474461
+7487218484414 7487223960472
+7487223970661 7487229155827
+7487229165023 7487234796166
+7487234807285 7487239948931
+7487239959044 7487245090983
+7487245099452 7487250618556
+7487250627416 7487256520256
+7487256529350 7487261799783
+7487261808408 7487266994158
+7487267026480 7487272189725
+7487272198388 7487278022910
+7487278034993 7487283230435
+7487283241492 7487288370393
+7487288381286 7487293606947
+7487293617961 7487299210621
+7487299220490 7487304958328
+7487304968915 7487310377905
+7487310389583 7487316779283
+7487316789757 7487322748691
+7487322758092 7487329173505
+7487329185737 7487334390354
+7487334401622 7487339758456
+7487339901913 7487344958046
+7487344967394 7487350350433
+7487350358397 7487356174234
+7487356181768 7487361478423
+7487361486420 7487367042728
+7487367055327 7487372320778
+7487372332043 7487377444611
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex02" });
+(function () {
+  const { el, s: S, C, $ } = DST;
+  const fmt = (n) => Number(n).toLocaleString("en-US");
+  const rows = (id) => DST.text(id).trim().split("\n").filter(Boolean).map((l) => l.trim().split(/\s+/));
+  const KIND = { 4: "small", 5: "medium", 6: "jump", 7: "on_deadline", 8: "before_deadline" };
+  const KCOL = { small: C.accent2, medium: C.accent, jump: C.violet, on_deadline: C.yellow, before_deadline: C.warn };
+  const OPCOL = { put: C.ok, get: C.accent, evict: C.pink };
+  const dur = (ms) => { ms = Number(ms);
+    if (ms < 1000) return `${fmt(ms)} ms`; if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+    if (ms < 3600000) return `${(ms / 60000).toFixed(1)} min`; if (ms < 86400000) return `${(ms / 3600000).toFixed(1)} h`;
+    if (ms < 365.25 * 86400000) return `${(ms / 86400000).toFixed(1)} days`; return `${(ms / (365.25 * 86400000)).toFixed(1)} years`; };
+
+  // ---------- parse captured output ----------
+  const parseRun = (id) => { const t = DST.text(id), m = t.match(/seed=(\d+) steps=(\d+) simulated=(\d+)ms trace=([0-9a-f]+) (PASS|FAIL)/);
+    return { text: t, seed: +m[1], steps: +m[2], sim: +m[3], trace: m[4], ok: m[5] === "PASS" }; };
+  const parseSweep = (id) => { const t = DST.text(id), p = t.match(/PASS: (\d+) seeds, simulated (\d+) s \((\d+) h\)/), r = t.match(/real\s+(\d+)m([\d.]+)s/);
+    return { text: t, seeds: p && +p[1], simS: p && +p[2], realS: r && (+r[1] * 60 + +r[2]), fail: (t.match(/FAIL at seed=(\d+)/) || [])[1] }; };
+  const dumpText = DST.text("log-run1-bug-dump");
+  const notes = {}; for (const m of dumpText.matchAll(/^ {2}step (\d+) t=\d+ms: (.*)$/gm)) notes[+m[1]] = m[2];
+  const steps = [...dumpText.matchAll(/D seed=(\d+) step=(\d+) op=(\d+) key=(\d+) t=(\d+) x=(\d+) cache=(\S*)/g)].map((m) => {
+    const op = +m[3], t = +m[5], xs = m[6], x = xs.length > 15 ? null : +xs;
+    const cache = m[7].split(",").filter(Boolean).map((p) => p.split(":").map(Number));
+    const kind = op >= 4 ? KIND[op] : op === 1 ? "put" : op === 2 ? "get" : "evict";
+    return { i: +m[2], op, kind, key: +m[4], t, x, cache, now: op >= 4 ? t + x : t, note: notes[+m[2]] };
+  });
+  const runA = parseRun("log-run1-bug-a"), runB = parseRun("log-run1-bug-b"), runOk = parseRun("log-run1"), run43 = parseRun("log-run43-bug");
+  const sw = { k1: parseSweep("log-sweep-1k"), k10: parseSweep("log-sweep-10k"), k100: parseSweep("log-sweep") }, swBug = parseSweep("log-sweep-bug");
+  const ops = Object.fromEntries(rows("tsv-ops").map((r) => [+r[0], { n: +r[1], total: +r[2] }]));
+  const adv = rows("tsv-advances").map((r) => ({ op: +r[0], k: +r[1], n: +r[2] }));
+  const perSeed = rows("tsv-per-seed").map((r) => ({ tf: r[0] === "FAIL", tby: r[3], tkind: r[4], nf: r[5] === "FAIL", nby: r[8], nkind: r[9], seed: +r[10] }));
+  const sleepRows = rows("tsv-sleep"), ttlNs = +sleepRows[0][1], sleeps = sleepRows.slice(1).map((r) => ({ t0: +r[0], t1: +r[1] }));
+  const failT = perSeed.filter((p) => p.tf).length, failN = perSeed.filter((p) => p.nf).length;
+
+  const stat = (num, lbl, color) => el("div", { class: "stat" }, el("div", { class: "num", style: color ? { color } : null }, num), el("div", { class: "lbl" }, lbl));
+  const yearsPerSec = sw.k100.simS / sw.k100.realS / (365.25 * 86400);
+  $("#stats").append(
+    stat(`${fmt(Math.round(yearsPerSec))} yr/s`, `simulated years per real second (sweep ${fmt(sw.k100.seeds)}: ${fmt(sw.k100.simS)} s in ${sw.k100.realS} s)`),
+    stat(`seed ${swBug.fail}`, "first failing seed with --bug"),
+    stat(`${failT} vs ${failN}`, "seeds 0–999 that catch the bug: deadline targeting vs random-only", C.warn),
+    stat(`t=${fmt(runA.sim)}ms`, `the exact tick where run 1 --bug fails (key 14's deadline)`, C.yellow));
+
+  // ---------- 01: architecture ----------
+  {
+    const W = 1000, H = 300, svg = S("svg", { viewBox: `0 0 ${W} ${H}` });
+    svg.append(S("defs", {}, S("marker", { id: "ar2", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, S("path", { d: "M0,0 L10,5 L0,10 z", fill: C.dim }))));
+    const box = (x, y, w, h, title, sub, col, dash) => { const g = S("g", {});
+      g.append(S("rect", { x, y, width: w, height: h, rx: 10, fill: "#101a2c", stroke: col, "stroke-width": 1.4, "stroke-dasharray": dash ? "5 4" : null }));
+      g.append(S("text", { x: x + w / 2, y: y + 21, "text-anchor": "middle", fill: col, "font-size": 12.5, "font-family": "monospace", "font-weight": 700 }, title));
+      (Array.isArray(sub) ? sub : [sub]).forEach((t, i) => g.append(S("text", { x: x + w / 2, y: y + 39 + i * 15, "text-anchor": "middle", fill: C.dim, "font-size": 11, "font-family": "monospace" }, t)));
+      svg.append(g); return g; };
+    const ln = (d, col, cls) => svg.append(S("path", { d, stroke: col || C.dim, "stroke-width": 1.6, fill: "none", class: cls === false ? null : "flow", "marker-end": "url(#ar2)" }));
+    box(10, 110, 100, 60, "seed", "u64", C.accent2);
+    box(150, 110, 130, 60, "DefaultPrng", "one stream", C.accent2);
+    box(320, 20, 190, 70, "workload", ["op: put/get/evict/advance", "key · value · gen_ttl_ms"], C.accent2);
+    box(320, 110, 190, 70, "gen_advance()", ["small · medium · jump", "on_deadline · before_dl"], C.accent2);
+    box(560, 20, 190, 70, "TtlCache", ["put · get · evict_expired", "expired(): now >= deadline"], C.warn);
+    box(560, 125, 190, 55, "Time (vtable)", "monotonic_ms()", C.warn);
+    box(560, 215, 190, 70, "TimeSim", ["ticks: u64 (1 tick = 1 ms)", "advance(n): ticks += n"], C.accent2);
+    box(800, 215, 190, 70, "OS clock (TimeOS)", ["production only", "never in the simulator"], C.dim, true);
+    box(800, 15, 190, 100, "Model + invariants", ["live: now - put_at < ttl", "check every get", "check after every evict", "→ deadlines for gen_advance"], C.violet);
+    ln("M110,140 L148,140"); ln("M280,130 L318,60"); ln("M280,145 L318,145");
+    ln("M510,55 L558,55"); ln("M655,90 L655,123"); ln("M655,180 L655,213");
+    ln("M510,160 C540,160 530,250 558,250"); ln("M750,55 L798,60"); ln("M750,250 L798,250", C.dim, false);
+    ln("M800,105 C620,118 560,108 512,140", C.violet, false);
+    svg.append(S("text", { x: 775, y: 240, "text-anchor": "middle", fill: C.dim, "font-size": 18 }, "⇄"));
+    svg.append(S("text", { x: 515, y: 210, fill: C.dim, "font-size": 10, "font-family": "monospace" }, "advance(ticks)"));
+    $("#arch").append(svg);
+  }
+
+  // ---------- 02: timeline replay ----------
+  const keys = []; for (const st of steps) if (st.kind === "put" && !keys.includes(st.key)) keys.push(st.key);
+  const puts = steps.filter((s) => s.kind === "put").map((s) => ({ step: s.i, key: s.key, t: s.t, dl: s.t + s.x, ttl: s.x }));
+  puts.forEach((p) => { const nxt = puts.find((q) => q.key === p.key && q.step > p.step); p.replacedAt = nxt ? nxt.step : null; });
+  const tEnd = steps.at(-1).now, T = Math.ceil(tEnd * 1.06 / 1000) * 1000;
+  const W = 1000, m = { l: 74, r: 90, t: 30 }, laneH = 28, clockH = 40, H = m.t + clockH + keys.length * laneH + 34;
+  const X = (t) => m.l + (Math.min(t, T) / T) * (W - m.l - m.r);
+  const svg = S("svg", { viewBox: `0 0 ${W} ${H}` });
+  const yKey = (k) => m.t + clockH + keys.indexOf(k) * laneH;
+  svg.append(S("text", { x: m.l - 8, y: m.t + 24, "text-anchor": "end", fill: C.muted, "font-size": 12, "font-family": "monospace" }, "clock"));
+  svg.append(S("rect", { x: m.l, y: m.t + 6, width: W - m.l - m.r, height: clockH - 12, rx: 5, fill: "#0f1726" }));
+  keys.forEach((k, i) => { const y = yKey(k);
+    svg.append(S("rect", { x: m.l, y, width: W - m.l - m.r, height: laneH - 4, rx: 5, fill: i % 2 ? "#111a2b" : "#0f1726" }));
+    svg.append(S("text", { x: m.l - 8, y: y + 17, "text-anchor": "end", fill: C.muted, "font-size": 12, "font-family": "monospace" }, `key ${k}`)); });
+  for (let t = 0; t <= T; t += T > 30000 ? 5000 : 2000) svg.append(S("text", { x: X(t), y: H - 10, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, `${fmt(t)}`));
+  svg.append(S("text", { x: W - 6, y: H - 10, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, "sim ms"));
+  const advNodes = steps.filter((s) => s.op >= 4).map((s) => {
+    const r = S("rect", { x: X(s.t), y: m.t + 12, width: Math.max(3, X(s.now) - X(s.t)), height: clockH - 24, rx: 3, fill: KCOL[s.kind] });
+    DST.tip(r, `step ${s.i}: clock +${fmt(s.x)} ms (${s.kind})\n${fmt(s.t)} → ${fmt(s.now)} ms`); svg.append(r); return { s, r }; });
+  const barNodes = puts.map((p) => {
+    const y = yKey(p.key), g = S("g", {});
+    const r = S("rect", { x: X(p.t), y: y + 5, width: Math.max(3, X(p.dl) - X(p.t)), height: laneH - 14, rx: 4, fill: C.ok, opacity: 0.85 });
+    const dl = S("line", { x1: X(p.dl), x2: X(p.dl), y1: y + 1, y2: y + laneH - 5, stroke: C.text, "stroke-width": 2 });
+    g.append(r); if (p.dl <= T) g.append(dl);
+    if (p.dl > T) g.append(S("text", { x: W - m.r + 4, y: y + 17, fill: C.muted, "font-size": 10, "font-family": "monospace" }, `→ ${fmt(p.dl)}`));
+    DST.tip(r, `step ${p.step}: put(key ${p.key}, ttl ${fmt(p.ttl)} ms)\nput at ${fmt(p.t)} ms → deadline ${fmt(p.dl)} ms`);
+    svg.append(g); return { p, g, r }; });
+  const cursor = S("line", { y1: m.t, y2: H - 26, stroke: C.yellow, "stroke-width": 1.5 });
+  const cursorLbl = S("text", { y: m.t - 8, "text-anchor": "middle", fill: C.yellow, "font-size": 11, "font-family": "monospace", "font-weight": 700 }, "");
+  const ring = S("circle", { r: 11, fill: "none", stroke: C.yellow, "stroke-width": 2.5, display: "none", class: "pulse" });
+  svg.append(cursor, cursorLbl, ring);
+  $("#tl").append(svg);
+  $("#tlLegend").append(...Object.entries(KCOL).map(([k, c]) => el("span", {}, el("i", { class: "sw", style: { background: c } }), k)),
+    el("span", {}, el("i", { class: "sw", style: { background: C.ok } }), "entry alive"), el("span", {}, el("i", { class: "sw", style: { background: C.warn } }), "expired, still in cache (lazy expiry: fine)"), el("span", {}, el("i", { class: "sw", style: { background: C.bug } }), "now == deadline: dead per the model, alive per the buggy cache"), el("span", {}, el("i", { class: "sw", style: { background: C.dim } }), "gone"));
+
+  const logEl = $("#steplog");
+  const logRows = steps.map((s) => {
+    const desc = s.kind === "put" ? `put(key ${s.key}, ttl ${fmt(s.x)} ms)` : s.kind === "get" ? `get(key ${s.key}) → ${s.x == null ? "null" : s.x}`
+      : s.kind === "evict" ? `evict_expired() → ${s.x} evicted` : `clock +${fmt(s.x)} ms (${s.kind})`;
+    const col = OPCOL[s.kind] || KCOL[s.kind];
+    const r = el("div", { class: "tl-row", onclick: () => player.go(s.i) }, el("div", { class: "t" }, `${fmt(s.t)}`),
+      el("div", {}, el("span", { class: `ev ${s.note && /kept|want/.test(s.note) ? "bad" : ""}`, style: { color: s.note && /kept/.test(s.note) ? null : col } }, `#${s.i} ${desc}`)));
+    logEl.append(r); return r; });
+  const modelLive = (p, now) => now - p.t < p.ttl;
+  let player;
+  function show(i) {
+    const st = steps[i], now = st.now;
+    cursor.setAttribute("x1", X(now)); cursor.setAttribute("x2", X(now)); cursorLbl.setAttribute("x", X(now)); cursorLbl.textContent = `now=${fmt(now)}`;
+    advNodes.forEach(({ s, r }) => r.setAttribute("opacity", s.i <= i ? 1 : 0.15));
+    const inCache = new Set(st.cache.map(([k, d]) => `${k}:${d}`));
+    let edge = null;
+    barNodes.forEach(({ p, g, r }) => {
+      if (p.step > i) return g.setAttribute("opacity", 0.12), r.setAttribute("fill", C.ok);
+      g.setAttribute("opacity", 1);
+      const present = inCache.has(`${p.key}:${p.dl}`), current = p.replacedAt == null || p.replacedAt > i, live = current && modelLive(p, now);
+      r.setAttribute("fill", present && !live ? (p.dl === now ? C.bug : C.warn) : live ? C.ok : C.dim);
+      if (current && p.dl === now) edge = p;
+    });
+    ring.setAttribute("display", edge ? "inline" : "none");
+    if (edge) { ring.setAttribute("cx", X(edge.dl)); ring.setAttribute("cy", yKey(edge.key) + laneH / 2 - 2); }
+    // slots table
+    const tb = $("#slots"); tb.innerHTML = "";
+    tb.append(el("tr", {}, ["slot", "key", "deadline", "now − deadline", "model says"].map((h) => el("th", {}, h))));
+    st.cache.forEach(([k, d], slot) => {
+      const p = puts.filter((q) => q.key === k && q.step <= i).at(-1), live = modelLive(p, now);
+      tb.append(el("tr", { class: `${live ? "" : d === now ? "zombie" : "dead"} ${d === now ? "edge" : ""}` }, el("td", {}, slot), el("td", {}, k), el("td", {}, `${fmt(d)} ms`),
+        el("td", {}, `${now - d > 0 ? "+" : ""}${fmt(now - d)} ms`), el("td", {}, live ? "live" : d === now ? "DEAD (now == deadline)" : "dead (lazy, not yet removed)")));
+    });
+    if (!st.cache.length) tb.append(el("tr", {}, el("td", { colspan: 5, style: { color: C.dim } }, "(empty)")));
+    $("#clock").innerHTML = `${fmt(now)} ms <small>TimeSim.ticks after step ${i} · ${dur(now)} of simulated time</small>`;
+    logRows.forEach((r, j) => { r.classList.toggle("seen", j <= i); r.classList.toggle("cur", j === i); });
+    logEl.scrollTop = logRows[i].offsetTop - logEl.clientHeight / 2;
+    let txt = `step ${i} at t=${fmt(st.t)} ms: `;
+    if (st.kind === "put") txt += `put(key ${st.key}, ttl ${fmt(st.x)} ms) → deadline ${fmt(st.t + st.x)} ms`;
+    else if (st.kind === "get") txt += `get(key ${st.key}) = ${st.x == null ? "null" : st.x}; the oracle agrees`;
+    else if (st.kind === "evict") txt += `evict_expired() removed ${st.x} entr${st.x === 1 ? "y" : "ies"}`;
+    else txt += `clock +${fmt(st.x)} ms (${st.kind}) → now ${fmt(now)} ms`;
+    if (st.note) txt += `   ⟵ program printed: "${st.note}"`;
+    if (st.kind === "on_deadline") { const tgt = puts.filter((p) => p.dl === now && p.step <= i); if (tgt.length) txt += `  — lands exactly on key ${tgt.map((p) => p.key).join(", ")}'s deadline`; }
+    if (i === steps.length - 1) txt += `  ✗ invariant violated: ${runA.text.trimEnd().split("\n").pop()}`;
+    $("#explain").textContent = txt;
+  }
+  player = new DST.Player("#player", { count: steps.length, onStep: show, speed: 3, label: (i) => `step ${i}/${steps.length - 1} · t=${fmt(steps[i].now)}ms` });
+  DST.term("#runLog", "$ dst02 run 1 --bug\n" + runA.text.trimEnd());
+
+  // ---------- 03: edge zoom ----------
+  {
+    const evictStep = steps.at(-1), victim = puts.filter((p) => evictStep.cache.some(([k, d]) => k === p.key && d === evictStep.now)).at(-1);
+    const D = victim.dl, ticks = [-3, -2, -1, 0, 1, 2, 3], Wz = 1000, Hz = 170, cw = 94, x0 = 330;
+    const svgZ = S("svg", { viewBox: `0 0 ${Wz} ${Hz}` });
+    [["correct: now >= deadline → dead", (t) => t >= D], ["buggy: now > deadline → dead", (t) => t > D], ["model: now − put_at < ttl → live", (t) => !(t - victim.t < victim.ttl)]].forEach(([lbl, dead], r) => {
+      const y = 30 + r * 40;
+      svgZ.append(S("text", { x: x0 - 10, y: y + 20, "text-anchor": "end", fill: C.muted, "font-size": 12, "font-family": "monospace" }, lbl));
+      ticks.forEach((d, j) => { const t = D + d, isDead = dead(t), wrong = r === 1 && isDead !== (t >= D);
+        svgZ.append(S("rect", { x: x0 + j * cw + 2, y, width: cw - 4, height: 30, rx: 6, fill: wrong ? "rgba(255,92,122,.25)" : isDead ? "#121b2c" : "rgba(61,220,132,.18)", stroke: wrong ? C.bug : d === 0 ? C.yellow : C.line, "stroke-width": wrong || d === 0 ? 2 : 1 }));
+        svgZ.append(S("text", { x: x0 + j * cw + cw / 2, y: y + 20, "text-anchor": "middle", fill: wrong ? C.bug : isDead ? C.dim : C.ok, "font-size": 12, "font-family": "monospace", "font-weight": 700 }, wrong ? "ALIVE ✗" : isDead ? "dead" : "alive")); });
+    });
+    ticks.forEach((d, j) => svgZ.append(S("text", { x: x0 + j * cw + cw / 2, y: 18, "text-anchor": "middle", fill: d === 0 ? C.yellow : C.dim, "font-size": 11, "font-family": "monospace" }, `${fmt(D + d)}${d === 0 ? " = D" : ""}`)));
+    svgZ.append(S("text", { x: Wz / 2, y: Hz - 8, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, `key ${victim.key}: put at ${fmt(victim.t)} ms, ttl ${fmt(victim.ttl)} ms, deadline D = ${fmt(D)} ms; the simulator's on_deadline advance put now exactly on D`));
+    $("#edge").append(svgZ);
+  }
+  DST.term("#run43", "$ dst02 run 43 --bug\n" + run43.text.trimEnd());
+
+  // ---------- 04: advance kinds ----------
+  const kinds = [4, 5, 6, 7, 8];
+  const totalAdv = kinds.reduce((a, k) => a + ops[k].n, 0), totalMs = kinds.reduce((a, k) => a + ops[k].total, 0);
+  DST.bar("#kindCount", kinds.map((k) => ({ label: KIND[k], value: ops[k].n, color: KCOL[KIND[k]], note: `${fmt(ops[k].n)} advances, total ${fmt(ops[k].total)} ms` })),
+    { width: 520, labelW: 130, max: Math.max(...kinds.map((k) => ops[k].n)) * 1.3, fmt: (v) => `${fmt(v)} (${((100 * v) / totalAdv).toFixed(1)}%)` });
+  DST.bar("#kindTime", kinds.map((k) => ({ label: KIND[k], value: ops[k].total, color: KCOL[KIND[k]] })),
+    { width: 520, labelW: 130, log: true, max: totalMs * 30, fmt: (v) => `${dur(v)} (${((100 * v) / totalMs).toFixed(3)}%)` });
+  $("#kindCap").textContent = `All clock advances of sweep 2000 --dump (correct cache): ${fmt(totalAdv)} advances, ${dur(totalMs)} of simulated time. Other ops: ${fmt(ops[1].n)} puts, ${fmt(ops[2].n)} gets, ${fmt(ops[3].n)} evicts.`;
+  DST.line("#sizeHist", kinds.map((k) => ({ name: KIND[k], color: KCOL[KIND[k]], dots: true,
+    points: adv.filter((a) => a.op === k).sort((a, b) => a.k - b.k).map((a) => [a.k, a.n, `${KIND[k]}: ${fmt(a.n)} advances of ${dur(2 ** a.k)}–${dur(2 ** (a.k + 1) - 1)}`]) })),
+    { width: 540, height: 300, xmin: 0, xmax: 26, xlabel: "advance size (log₂ buckets)", ylabel: "advances", xfmt: (k) => dur(2 ** k).replace(".0 ", " ") });
+  for (const [grid, key, out] of [["#gridT", "tf", "#gT"], ["#gridN", "nf", "#gN"]]) {
+    perSeed.forEach((p) => { const c = el("i", { class: p[key] ? "f" : null });
+      DST.tip(c, `seed ${p.seed}: ${p[key] ? `caught by ${key === "tf" ? p.tby : p.nby} after ${KIND[key === "tf" ? p.tkind : p.nkind]}` : "bug not hit"}`); $(grid).append(c); });
+    $(out).innerHTML = `<span style="color:${C.bug}">${perSeed.filter((p) => p[key]).length}</span> / ${perSeed.length}`;
+  }
+  const combo = {};
+  for (const p of perSeed) { if (p.tf) { const k = `targeted · ${p.tby} after ${KIND[p.tkind]}`; combo[k] = (combo[k] || 0) + 1; }
+    if (p.nf) { const k = `random-only · ${p.nby} after ${KIND[p.nkind]}`; combo[k] = (combo[k] || 0) + 1; } }
+  DST.bar("#caughtBy", Object.entries(combo).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: k, value: v, color: KCOL[k.split("after ")[1]] })), { width: 1000, labelW: 330 });
+
+  // ---------- 05: time compression ----------
+  const tb = $("#tcTable");
+  tb.append(el("tr", {}, ["sweep", "seeds", "simulated clock time", "real time (time)", "simulated / real"].map((h, i) => el("th", { class: i ? "num" : null }, h))));
+  for (const s of [sw.k1, sw.k10, sw.k100]) tb.append(el("tr", {}, el("td", {}, `sweep ${fmt(s.seeds)}`), el("td", { class: "num" }, fmt(s.seeds)),
+    el("td", { class: "num" }, `${fmt(s.simS)} s ≈ ${dur(s.simS * 1000)}`), el("td", { class: "num" }, `${s.realS} s`),
+    el("td", { class: "num", style: { color: C.accent2 } }, `${(s.simS / s.realS).toExponential(2)} ×`)));
+  DST.bar("#tcBar", [{ label: "real time", value: sw.k100.realS, color: C.accent2 }, { label: "simulated time", value: sw.k100.simS, color: C.violet }],
+    { width: 1000, labelW: 140, log: true, max: sw.k100.simS * 3, fmt: (v) => `${fmt(v)} s` });
+  const tcShow = (f) => { $("#tcReal").innerHTML = `${(f * sw.k100.realS).toFixed(3)} s <small>real (wall-clock) time</small>`;
+    $("#tcSim").innerHTML = `${dur(f * sw.k100.simS * 1000)} <small>simulated clock time · ${fmt(Math.round(f * sw.k100.seeds))} seeds</small>`; };
+  tcShow(1);
+  $("#tcGo").onclick = () => { const t0 = performance.now(), D = sw.k100.realS * 1000;
+    const tick = () => { const f = Math.min(1, (performance.now() - t0) / D); tcShow(f); if (f < 1) requestAnimationFrame(tick); else $("#tcOut").textContent = `done: ${(sw.k100.simS / sw.k100.realS).toExponential(2)} simulated seconds per real second`; };
+    $("#tcOut").textContent = "running at the measured speed…"; tick(); };
+
+  // ---------- 06: sleep test ----------
+  {
+    const over = sleeps.map((s) => (s.t1 - s.t0 - ttlNs) / 1000), bin = 100, nb = Math.ceil(Math.max(...over) / bin);
+    const hist = Array(nb).fill(0); over.forEach((o) => hist[Math.min(nb - 1, Math.floor(o / bin))]++);
+    const Wh = 1000, Hh = 240, mh = { l: 50, r: 10, t: 16, b: 40 }, bw = (Wh - mh.l - mh.r) / nb, hmax = Math.max(...hist);
+    const svgH = S("svg", { viewBox: `0 0 ${Wh} ${Hh}` });
+    hist.forEach((n, i) => { const h = (n / hmax) * (Hh - mh.t - mh.b), r = S("rect", { x: mh.l + i * bw + 1, y: Hh - mh.b - h, width: bw - 2, height: h, rx: 2, fill: C.accent });
+      DST.tip(r, `${n} runs: get landed ${i * bin}–${(i + 1) * bin} µs after the deadline`); svgH.append(r); });
+    for (let i = 0; i <= nb; i += Math.ceil(nb / 13)) svgH.append(S("text", { x: mh.l + i * bw, y: Hh - mh.b + 15, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, `${(i * bin / 1000).toFixed(1)}`));
+    svgH.append(S("text", { x: (Wh + mh.l) / 2, y: Hh - 6, "text-anchor": "middle", fill: C.muted, "font-size": 12 }, "how late get() ran after the 5 ms deadline (ms) — the bug window for a ns clock is the single instant 0"));
+    svgH.append(S("line", { x1: mh.l, x2: mh.l, y1: mh.t - 6, y2: Hh - mh.b, stroke: C.bug, "stroke-width": 3 }));
+    svgH.append(S("text", { x: Wh - mh.r, y: mh.t + 4, "text-anchor": "end", fill: C.bug, "font-size": 11, "font-family": "monospace" }, "red line at 0 = get exactly on the deadline (the only instant the bug is visible)"));
+    svgH.append(S("text", { x: mh.l - 6, y: mh.t + 8, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, hmax));
+    $("#sleepHist").append(svgH);
+    const exact = over.filter((o) => o === 0).length, msHits = sleeps.filter((s) => Math.floor(s.t1 / 1e6) - Math.floor(s.t0 / 1e6) === ttlNs / 1e6).length;
+    const mean = over.reduce((a, b) => a + b, 0) / over.length;
+    $("#sleepCap").textContent = `${sleeps.length} real runs of put; sleep(${ttlNs / 1e6} ms); get. Overshoot min ${Math.min(...over).toFixed(1)} µs, mean ${mean.toFixed(1)} µs, max ${Math.max(...over).toFixed(1)} µs.`;
+    $("#sleepStats").append(stat(`${exact} / ${sleeps.length}`, "runs where get landed exactly on the deadline (ns clock): the bug is invisible", C.bug),
+      stat(`${msHits} / ${sleeps.length}`, "runs that would see the bug with a millisecond clock: pass/fail is decided by scheduler timing (flaky)", C.warn),
+      stat(`step 25`, `run 1 --bug: on_deadline lands on t=${fmt(runA.sim)} ms. Every replay, same tick.`, C.ok));
+  }
+
+  // ---------- 07: determinism ----------
+  DST.term("#replayA", "$ dst02 run 1 --bug    # process 1\n" + runA.text.trimEnd());
+  DST.term("#replayB", "$ dst02 run 1 --bug    # process 2\n" + runB.text.trimEnd());
+  $("#sameNote").innerHTML = `<strong>${runA.text === runB.text ? "Byte-for-byte identical." : "Outputs differ!"}</strong> trace=<code>${runA.trace}</code> vs <code>${runB.trace}</code> ${runA.trace === runB.trace ? "<span class=same>✓ same hash</span>" : "✗"}, simulated=${fmt(runA.sim)} ms both times. Time is frozen between simulator steps, so a replay sees exactly the same <code>now_ms</code> at every step. The <code>--dump</code> run that feeds section 02 printed the same final line: <code>${dumpText.trim().split("\n").pop()}</code>.`;
+  DST.term("#run1ok", "$ dst02 run 1\n" + runOk.text.trimEnd());
+
+  // ---------- 08: mini TTL cache ----------
+  let entries = [], now = 0;
+  function workload(seed) {
+    const r = DST.Rand(seed); entries = []; let t = 0;
+    for (let k = 0; k < 6; k++) { t += r.range(0, 8); const ttl = r.chance(0.2) ? 1 : r.range(2, 25); entries.push({ key: k, put: t, ttl, dl: t + ttl }); }
+    const max = Math.max(...entries.map((e) => e.dl)) + 4; $("#mRange").max = max; now = 0; $("#mRange").value = 0; render();
+  }
+  function render() {
+    const max = +$("#mRange").max, box = $("#mRows"); box.innerHTML = "";
+    box.append(el("div", { class: "mini-row", style: { color: C.muted } }, el("span", {}, "key"), el("span", {}, "put → deadline"), el("span", {}, "correct >="), el("span", {}, "buggy >")));
+    let diff = 0;
+    for (const e of entries) {
+      const put = now >= e.put, good = put && !(now >= e.dl), bad = put && !(now > e.dl), wrong = good !== bad; diff += wrong;
+      const bar = el("div", { style: { position: "relative", height: "14px", background: "#0f1726", borderRadius: "4px" } },
+        el("div", { style: { position: "absolute", left: `${(e.put / max) * 100}%`, width: `${(e.ttl / max) * 100}%`, top: "2px", bottom: "2px", borderRadius: "3px", background: wrong ? C.bug : good ? C.ok : C.dim } }),
+        el("div", { style: { position: "absolute", left: `${(now / max) * 100}%`, top: "-3px", bottom: "-3px", width: "2px", background: C.yellow } }));
+      DST.tip(bar, `key ${e.key}: put at ${e.put} ms, ttl ${e.ttl} ms, deadline ${e.dl} ms`);
+      const pill = (alive, w) => el("span", { class: `pill ${!put ? "dead" : w ? "wrong" : alive ? "live" : "dead"}` }, !put ? "—" : alive ? "alive" : "expired");
+      box.append(el("div", { class: "mini-row" }, el("span", {}, `key ${e.key}`), bar, pill(good, false), pill(bad, wrong)));
+    }
+    $("#mNow").innerHTML = `now = ${now} ms · ${diff ? `<b style="color:${C.bug}">${diff} disagreement${diff > 1 ? "s" : ""}: now == deadline</b>` : "correct and buggy agree"}`;
+  }
+  $("#mRange").oninput = (e) => { now = +e.target.value; render(); };
+  $("#mStep").onclick = () => { now = Math.min(+$("#mRange").max, now + 1); $("#mRange").value = now; render(); };
+  $("#mJump").onclick = () => { const nx = entries.map((e) => e.dl).filter((d) => d > now).sort((a, b) => a - b)[0]; if (nx != null) { now = nx; $("#mRange").value = now; render(); } };
+  $("#mNew").onclick = () => workload(+$("#mSeed").value >>> 0);
+  workload(7); $("#mJump").onclick();
+
+  // ---------- 10: sweeps ----------
+  DST.term("#tSweep", "$ time dst02 sweep 100000\n" + sw.k100.text.trimEnd());
+  DST.term("#tSweepBug", "$ time dst02 sweep 100000 --bug\n" + swBug.text.trimEnd());
+})();
+</script>
+</body></html>

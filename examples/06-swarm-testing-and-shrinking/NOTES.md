@@ -176,6 +176,12 @@ both times). Other failing seeds (31 and 66) shrink to the same 33-op sequence w
 trace `98ce1d6defe82a39`, which shows that the shrunk form describes the bug, not the seed. It
 cannot get smaller: removing any push leaves the queue not full, and the bug does not fire.
 
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--ops`: `run`: print head/tail/count/cap after each op; `shrink`: print each kept deletion and the kept ops.
+
 ## Exercises
 
 1. Fix the uniform mix by hand: make it 60% push. Does `--no-swarm` find the bug now? Then

@@ -1,0 +1,40 @@
+    pub fn replica_compact(
+        checker: *StorageChecker,
+        comptime Replica: type,
+        replica: *const Replica,
+    ) !void {
+        const superblock: *const SuperBlock = &replica.superblock;
+        // If we are recovering from a crash, don't test the checksum until we are caught up.
+        // Until then our grid's checksum is too far ahead.
+        if (superblock.working.vsr_state.op_compacted(replica.commit_min)) return;
+        // If we are syncing, our grid will not be up to date.
+        if (superblock.working.vsr_state.sync_op_max > 0) return;
+
+        const bar_beat_count = constants.lsm_compaction_ops;
+        if ((replica.commit_min + 1) % bar_beat_count != 0) return;
+
+        const checksum = checker.checksum_grid(
+            @TypeOf(replica.state_machine.forest),
+            &replica.state_machine.forest,
+            .free_set_from_memory,
+        );
+        log.debug("{?}: replica_compact: op={} area=grid checksum={x:0>32}", .{
+            superblock.replica_index,
+            replica.commit_min,
+            checksum,
+        });
+
+        if (checker.compactions.get(replica.commit_min)) |checksum_expect| {
+            if (checksum_expect != checksum) {
+                log.err("{?}: replica_compact: mismatch " ++
+                    "area=grid expect={x:0>32} actual={x:0>32}", .{
+                    superblock.replica_index,
+                    checksum_expect,
+                    checksum,
+                });
+                return error.StorageMismatch;
+            }
+        } else {
+            try checker.compactions.putNoClobber(replica.commit_min, checksum);
+        }
+    }

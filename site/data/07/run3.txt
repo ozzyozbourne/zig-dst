@@ -1,0 +1,19 @@
+  t=  0 c0 invoke W(x:=1) -> primary
+  t=  0 c1 invoke W(x:=2) -> primary
+  t=  0 c2 invoke W(x:=3) -> primary
+  t=  5 c1 ok     W(x:=2) at v2
+  t=  6 c2 ok     W(x:=3) at v3
+  t=  7 c0 ok     W(x:=1) at v1
+  t=  9 c1 invoke R(x) -> primary (session token v2)
+  t= 10 c0 invoke R(x) -> backup (session token v1)
+  t= 10 c2 invoke W(y:=4) -> primary
+  t= 10    backup applies v1 (x:=1)
+  t= 13 c1 ok     R(x)=3 from primary at v3
+  t= 16 c1 invoke R(x) -> primary (session token v3)
+  t= 18    backup applies v2 (x:=2)
+  t= 19    backup applies v3 (x:=3)
+  t= 19 c1 ok     R(x)=3 from primary at v4
+  t= 20 c2 ok     W(y:=4) at v4
+  t= 44    backup applies v4 (y:=4)
+  t= 50 c0 ok     R(x)=3 from backup at v4
+seed=3 ops=7 trace=691a3a812948ec74 PASS

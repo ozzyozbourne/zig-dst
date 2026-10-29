@@ -1,0 +1,6 @@
+FAIL at seed=1 after 2 seeds. Replay with:
+  zig run main.zig -- run 1 --bug
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s

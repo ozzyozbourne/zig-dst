@@ -1,0 +1,500 @@
+0	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 1 (tick 1071)
+1	4	symmetric	PASS	-
+2	3	asymmetric	PASS	-
+3	3	symmetric	PASS	-
+4	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 13 has two leaders: node 2 and node 0 (tick 1987)
+5	3	symmetric	PASS	-
+6	4	symmetric	PASS	-
+7	3	asymmetric	PASS	-
+8	5	symmetric	PASS	-
+9	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 3 has two leaders: node 4 and node 1 (tick 588)
+10	4	symmetric	PASS	-
+11	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 2 and node 3 (tick 2736)
+12	5	symmetric	PASS	-
+13	5	asymmetric	PASS	-
+14	3	asymmetric	PASS	-
+15	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 0 and node 1 (tick 120)
+16	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 0 and node 1 (tick 282)
+17	3	asymmetric	PASS	-
+18	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 1 and node 2 (tick 630)
+19	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 16 has two leaders: node 0 and node 2 (tick 1995)
+20	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 4 and node 1 (tick 476)
+21	3	asymmetric	PASS	-
+22	4	symmetric	PASS	-
+23	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 0 and node 1 (tick 1410)
+24	5	symmetric	PASS	-
+25	3	symmetric	PASS	-
+26	3	symmetric	PASS	-
+27	4	asymmetric	PASS	-
+28	3	symmetric	PASS	-
+29	3	asymmetric	PASS	-
+30	4	symmetric	PASS	-
+31	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 18 has two leaders: node 2 and node 0 (tick 2091)
+32	4	asymmetric	PASS	-
+33	5	symmetric	PASS	-
+34	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 1 and node 3 (tick 126)
+35	5	asymmetric	PASS	-
+36	4	symmetric	PASS	-
+37	5	asymmetric	PASS	-
+38	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 2 and node 0 (tick 699)
+39	4	symmetric	PASS	-
+40	5	symmetric	PASS	-
+41	5	asymmetric	PASS	-
+42	4	symmetric	PASS	-
+43	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 3 and node 0 (tick 2555)
+44	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 1 and node 3 (tick 122)
+45	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 3 and node 2 (tick 1369)
+46	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 11 has two leaders: node 0 and node 3 (tick 1121)
+47	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 18 has two leaders: node 1 and node 2 (tick 2016)
+48	5	asymmetric	PASS	-
+49	3	symmetric	PASS	-
+50	3	symmetric	PASS	-
+51	3	asymmetric	PASS	-
+52	5	symmetric	PASS	-
+53	3	symmetric	PASS	-
+54	3	asymmetric	PASS	-
+55	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 11 has two leaders: node 2 and node 1 (tick 1785)
+56	5	symmetric	PASS	-
+57	5	asymmetric	PASS	-
+58	5	symmetric	PASS	-
+59	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 26 has two leaders: node 0 and node 2 (tick 1804)
+60	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 2 and node 1 (tick 2283)
+61	4	symmetric	PASS	-
+62	5	symmetric	PASS	-
+63	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 1 (tick 593)
+64	4	asymmetric	PASS	-
+65	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 4 and node 2 (tick 1742)
+66	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 22 has two leaders: node 4 and node 1 (tick 1670)
+67	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 1 and node 3 (tick 251)
+68	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 4 and node 0 (tick 696)
+69	5	asymmetric	PASS	-
+70	4	symmetric	PASS	-
+71	5	symmetric	PASS	-
+72	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 1 and node 2 (tick 1106)
+73	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 1 and node 3 (tick 530)
+74	4	symmetric	PASS	-
+75	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 4 and node 0 (tick 1051)
+76	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 0 and node 1 (tick 1109)
+77	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 13 has two leaders: node 2 and node 3 (tick 2307)
+78	3	asymmetric	PASS	-
+79	5	symmetric	PASS	-
+80	3	asymmetric	PASS	-
+81	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 29 has two leaders: node 2 and node 0 (tick 2527)
+82	3	asymmetric	PASS	-
+83	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 0 and node 1 (tick 502)
+84	4	symmetric	PASS	-
+85	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 2 and node 4 (tick 113)
+86	3	symmetric	PASS	-
+87	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 46 has two leaders: node 3 and node 2 (tick 2915)
+88	3	asymmetric	PASS	-
+89	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 3 and node 2 (tick 384)
+90	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 0 and node 1 (tick 182)
+91	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 0 and node 4 (tick 178)
+92	3	symmetric	PASS	-
+93	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 0 and node 1 (tick 916)
+94	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 0 and node 1 (tick 372)
+95	4	asymmetric	PASS	-
+96	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 25 has two leaders: node 0 and node 2 (tick 2416)
+97	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 3 and node 1 (tick 2295)
+98	3	asymmetric	PASS	-
+99	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 36 has two leaders: node 3 and node 1 (tick 2312)
+100	5	asymmetric	PASS	-
+101	5	asymmetric	PASS	-
+102	3	asymmetric	PASS	-
+103	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 3 has two leaders: node 2 and node 3 (tick 353)
+104	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 0 and node 1 (tick 1980)
+105	3	symmetric	PASS	-
+106	3	asymmetric	PASS	-
+107	4	symmetric	PASS	-
+108	4	asymmetric	PASS	-
+109	5	symmetric	PASS	-
+110	4	symmetric	PASS	-
+111	3	symmetric	PASS	-
+112	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 16 has two leaders: node 3 and node 1 (tick 1805)
+113	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 1 and node 0 (tick 157)
+114	3	symmetric	PASS	-
+115	5	asymmetric	PASS	-
+116	5	symmetric	PASS	-
+117	3	asymmetric	PASS	-
+118	5	asymmetric	PASS	-
+119	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 1 and node 2 (tick 2217)
+120	3	asymmetric	PASS	-
+121	5	symmetric	PASS	-
+122	3	asymmetric	PASS	-
+123	4	asymmetric	PASS	-
+124	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 2 (tick 720)
+125	3	symmetric	PASS	-
+126	4	symmetric	PASS	-
+127	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 16 has two leaders: node 0 and node 2 (tick 1452)
+128	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 1 and node 0 (tick 169)
+129	3	symmetric	PASS	-
+130	3	asymmetric	PASS	-
+131	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 23 has two leaders: node 1 and node 4 (tick 2008)
+132	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 1 and node 2 (tick 310)
+133	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 1 and node 0 (tick 120)
+134	4	asymmetric	PASS	-
+135	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 1 and node 2 (tick 871)
+136	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 22 has two leaders: node 1 and node 3 (tick 1856)
+137	3	symmetric	PASS	-
+138	3	symmetric	PASS	-
+139	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 24 has two leaders: node 2 and node 4 (tick 1616)
+140	5	symmetric	PASS	-
+141	4	asymmetric	PASS	-
+142	5	symmetric	PASS	-
+143	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 0 and node 4 (tick 1066)
+144	5	symmetric	PASS	-
+145	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 1 and node 2 (tick 2584)
+146	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 2 and node 1 (tick 1640)
+147	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 0 and node 2 (tick 1088)
+148	5	asymmetric	PASS	-
+149	5	symmetric	PASS	-
+150	3	asymmetric	PASS	-
+151	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 3 and node 1 (tick 922)
+152	4	symmetric	PASS	-
+153	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 2 and node 0 (tick 518)
+154	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 1 and node 3 (tick 1832)
+155	3	asymmetric	PASS	-
+156	4	symmetric	PASS	-
+157	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 1 and node 0 (tick 511)
+158	4	symmetric	PASS	-
+159	3	asymmetric	PASS	-
+160	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 2 and node 0 (tick 804)
+161	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 0 and node 2 (tick 497)
+162	4	symmetric	PASS	-
+163	3	asymmetric	PASS	-
+164	3	symmetric	PASS	-
+165	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 0 and node 2 (tick 131)
+166	4	asymmetric	PASS	-
+167	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 1 and node 0 (tick 459)
+168	5	asymmetric	PASS	-
+169	3	symmetric	PASS	-
+170	5	asymmetric	PASS	-
+171	4	symmetric	PASS	-
+172	4	symmetric	PASS	-
+173	5	symmetric	PASS	-
+174	3	asymmetric	PASS	-
+175	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 0 and node 1 (tick 244)
+176	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 4 and node 3 (tick 1047)
+177	4	symmetric	PASS	-
+178	3	asymmetric	PASS	-
+179	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 4 (tick 535)
+180	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 21 has two leaders: node 2 and node 1 (tick 2708)
+181	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 2 and node 1 (tick 1347)
+182	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 0 and node 1 (tick 138)
+183	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 30 has two leaders: node 1 and node 2 (tick 1921)
+184	4	asymmetric	PASS	-
+185	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 2 and node 3 (tick 2376)
+186	5	asymmetric	PASS	-
+187	3	symmetric	PASS	-
+188	5	asymmetric	PASS	-
+189	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 44 has two leaders: node 0 and node 3 (tick 2661)
+190	5	asymmetric	PASS	-
+191	4	symmetric	PASS	-
+192	4	symmetric	PASS	-
+193	4	symmetric	PASS	-
+194	3	symmetric	PASS	-
+195	5	symmetric	PASS	-
+196	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 18 has two leaders: node 1 and node 2 (tick 1990)
+197	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 2 and node 3 (tick 111)
+198	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 25 has two leaders: node 1 and node 2 (tick 2874)
+199	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 4 and node 2 (tick 194)
+200	3	symmetric	PASS	-
+201	4	symmetric	PASS	-
+202	4	symmetric	PASS	-
+203	4	symmetric	PASS	-
+204	3	symmetric	PASS	-
+205	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 22 has two leaders: node 0 and node 3 (tick 1437)
+206	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 2 and node 1 (tick 1994)
+207	3	asymmetric	PASS	-
+208	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 18 has two leaders: node 2 and node 3 (tick 1052)
+209	4	symmetric	PASS	-
+210	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 0 and node 2 (tick 2760)
+211	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 23 has two leaders: node 0 and node 2 (tick 2061)
+212	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 3 and node 2 (tick 843)
+213	3	symmetric	PASS	-
+214	4	asymmetric	PASS	-
+215	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 0 and node 3 (tick 670)
+216	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 0 and node 1 (tick 1360)
+217	4	asymmetric	PASS	-
+218	3	symmetric	PASS	-
+219	3	symmetric	PASS	-
+220	3	symmetric	PASS	-
+221	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 4 and node 2 (tick 390)
+222	3	asymmetric	PASS	-
+223	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 19 has two leaders: node 2 and node 0 (tick 1755)
+224	4	symmetric	PASS	-
+225	5	symmetric	PASS	-
+226	4	symmetric	PASS	-
+227	4	symmetric	PASS	-
+228	3	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 17 has two leaders: node 2 and node 0 (tick 966)
+229	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 1 and node 4 (tick 1627)
+230	3	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 3 has two leaders: node 1 and node 0 (tick 164)
+231	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 24 has two leaders: node 3 and node 1 (tick 1594)
+232	3	symmetric	PASS	-
+233	3	symmetric	PASS	-
+234	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 19 has two leaders: node 1 and node 0 (tick 1596)
+235	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 4 and node 1 (tick 759)
+236	3	asymmetric	PASS	-
+237	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 27 has two leaders: node 0 and node 4 (tick 2352)
+238	4	symmetric	PASS	-
+239	3	symmetric	PASS	-
+240	4	asymmetric	PASS	-
+241	4	symmetric	PASS	-
+242	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 57 has two leaders: node 0 and node 1 (tick 2994)
+243	4	symmetric	PASS	-
+244	5	asymmetric	PASS	-
+245	3	symmetric	PASS	-
+246	5	asymmetric	PASS	-
+247	4	symmetric	PASS	-
+248	3	symmetric	PASS	-
+249	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 0 and node 3 (tick 2131)
+250	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 1 and node 0 (tick 486)
+251	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 1 and node 2 (tick 1149)
+252	3	symmetric	PASS	-
+253	3	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 2 and node 1 (tick 466)
+254	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 0 and node 3 (tick 2240)
+255	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 2 and node 1 (tick 744)
+256	3	symmetric	PASS	-
+257	4	symmetric	PASS	-
+258	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 11 has two leaders: node 1 and node 0 (tick 2559)
+259	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 1 and node 2 (tick 1090)
+260	3	symmetric	PASS	-
+261	4	symmetric	PASS	-
+262	4	symmetric	PASS	-
+263	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 34 has two leaders: node 0 and node 1 (tick 1671)
+264	3	symmetric	PASS	-
+265	5	symmetric	PASS	-
+266	3	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 1 and node 2 (tick 277)
+267	4	symmetric	PASS	-
+268	3	symmetric	PASS	-
+269	5	symmetric	PASS	-
+270	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 30 has two leaders: node 4 and node 3 (tick 2885)
+271	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 22 has two leaders: node 0 and node 1 (tick 2464)
+272	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 2 and node 0 (tick 1903)
+273	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 21 has two leaders: node 2 and node 0 (tick 1636)
+274	5	symmetric	PASS	-
+275	3	asymmetric	PASS	-
+276	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 1 and node 0 (tick 519)
+277	4	symmetric	PASS	-
+278	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 35 has two leaders: node 3 and node 1 (tick 2597)
+279	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 2 and node 1 (tick 1049)
+280	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 2 and node 0 (tick 355)
+281	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 22 has two leaders: node 2 and node 0 (tick 1867)
+282	4	symmetric	PASS	-
+283	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 18 has two leaders: node 0 and node 3 (tick 1295)
+284	3	asymmetric	PASS	-
+285	4	asymmetric	PASS	-
+286	4	symmetric	PASS	-
+287	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 0 and node 1 (tick 692)
+288	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 0 and node 1 (tick 1020)
+289	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 16 has two leaders: node 3 and node 2 (tick 1193)
+290	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 2 and node 1 (tick 172)
+291	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 2 and node 1 (tick 1335)
+292	5	asymmetric	PASS	-
+293	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 13 has two leaders: node 1 and node 0 (tick 1314)
+294	4	symmetric	PASS	-
+295	3	symmetric	PASS	-
+296	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 4 and node 1 (tick 131)
+297	4	asymmetric	PASS	-
+298	3	symmetric	PASS	-
+299	3	symmetric	PASS	-
+300	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 0 and node 4 (tick 244)
+301	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 2 and node 3 (tick 549)
+302	5	symmetric	PASS	-
+303	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 25 has two leaders: node 1 and node 0 (tick 2650)
+304	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 3 and node 0 (tick 609)
+305	4	asymmetric	PASS	-
+306	5	symmetric	PASS	-
+307	4	symmetric	PASS	-
+308	5	symmetric	PASS	-
+309	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 1 and node 0 (tick 2660)
+310	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 28 has two leaders: node 4 and node 1 (tick 1587)
+311	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 2 and node 0 (tick 386)
+312	4	symmetric	PASS	-
+313	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 0 and node 3 (tick 117)
+314	5	asymmetric	PASS	-
+315	3	symmetric	PASS	-
+316	3	asymmetric	PASS	-
+317	3	symmetric	PASS	-
+318	3	symmetric	PASS	-
+319	3	asymmetric	PASS	-
+320	3	symmetric	PASS	-
+321	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 11 has two leaders: node 2 and node 1 (tick 753)
+322	5	symmetric	PASS	-
+323	3	asymmetric	PASS	-
+324	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 2 and node 1 (tick 588)
+325	4	asymmetric	PASS	-
+326	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 15 has two leaders: node 0 and node 1 (tick 1373)
+327	3	symmetric	PASS	-
+328	4	symmetric	PASS	-
+329	4	symmetric	PASS	-
+330	4	symmetric	PASS	-
+331	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 2 and node 3 (tick 1560)
+332	5	asymmetric	PASS	-
+333	4	asymmetric	PASS	-
+334	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 29 has two leaders: node 4 and node 1 (tick 1845)
+335	4	symmetric	PASS	-
+336	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 1 and node 3 (tick 560)
+337	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 32 has two leaders: node 1 and node 3 (tick 2274)
+338	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 2 and node 4 (tick 1268)
+339	3	asymmetric	PASS	-
+340	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 1 and node 3 (tick 924)
+341	3	asymmetric	PASS	-
+342	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 4 and node 0 (tick 126)
+343	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 0 and node 1 (tick 155)
+344	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 4 and node 1 (tick 2354)
+345	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 2 and node 0 (tick 876)
+346	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 25 has two leaders: node 3 and node 1 (tick 2755)
+347	3	symmetric	PASS	-
+348	4	symmetric	PASS	-
+349	5	symmetric	PASS	-
+350	5	symmetric	PASS	-
+351	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 1 and node 4 (tick 1738)
+352	5	asymmetric	PASS	-
+353	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 0 and node 2 (tick 266)
+354	4	asymmetric	PASS	-
+355	4	symmetric	PASS	-
+356	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 4 and node 1 (tick 116)
+357	4	asymmetric	PASS	-
+358	3	asymmetric	PASS	-
+359	3	symmetric	PASS	-
+360	3	asymmetric	PASS	-
+361	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 3 and node 0 (tick 1225)
+362	4	asymmetric	PASS	-
+363	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 1 and node 4 (tick 1792)
+364	4	symmetric	PASS	-
+365	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 4 and node 1 (tick 111)
+366	3	asymmetric	PASS	-
+367	4	symmetric	PASS	-
+368	4	symmetric	PASS	-
+369	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 21 has two leaders: node 2 and node 1 (tick 1805)
+370	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 2 has two leaders: node 3 and node 4 (tick 257)
+371	3	symmetric	PASS	-
+372	3	asymmetric	PASS	-
+373	3	symmetric	PASS	-
+374	4	symmetric	PASS	-
+375	3	symmetric	PASS	-
+376	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 19 has two leaders: node 0 and node 3 (tick 1139)
+377	5	asymmetric	PASS	-
+378	3	asymmetric	PASS	-
+379	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 2 and node 1 (tick 1481)
+380	3	symmetric	PASS	-
+381	4	symmetric	PASS	-
+382	3	symmetric	PASS	-
+383	5	asymmetric	PASS	-
+384	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 13 has two leaders: node 3 and node 1 (tick 2104)
+385	4	asymmetric	PASS	-
+386	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 0 and node 2 (tick 260)
+387	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 2 and node 1 (tick 638)
+388	5	symmetric	PASS	-
+389	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 10 has two leaders: node 2 and node 1 (tick 1376)
+390	3	symmetric	PASS	-
+391	3	symmetric	PASS	-
+392	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 25 has two leaders: node 4 and node 2 (tick 1826)
+393	3	symmetric	PASS	-
+394	4	asymmetric	PASS	-
+395	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 18 has two leaders: node 2 and node 4 (tick 1978)
+396	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 2 and node 3 (tick 497)
+397	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 30 has two leaders: node 1 and node 2 (tick 2587)
+398	3	asymmetric	PASS	-
+399	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 2 and node 1 (tick 2577)
+400	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 29 has two leaders: node 3 and node 0 (tick 2582)
+401	3	asymmetric	PASS	-
+402	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 16 has two leaders: node 4 and node 0 (tick 2459)
+403	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 30 has two leaders: node 1 and node 0 (tick 2048)
+404	5	symmetric	PASS	-
+405	4	asymmetric	PASS	-
+406	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 2 and node 0 (tick 1391)
+407	3	symmetric	PASS	-
+408	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 0 and node 4 (tick 479)
+409	4	symmetric	PASS	-
+410	5	asymmetric	PASS	-
+411	4	symmetric	PASS	-
+412	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 26 has two leaders: node 1 and node 0 (tick 2435)
+413	5	symmetric	PASS	-
+414	5	symmetric	PASS	-
+415	3	symmetric	PASS	-
+416	5	symmetric	PASS	-
+417	5	symmetric	PASS	-
+418	4	symmetric	PASS	-
+419	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 6 has two leaders: node 1 and node 0 (tick 762)
+420	4	asymmetric	PASS	-
+421	3	symmetric	PASS	-
+422	4	symmetric	PASS	-
+423	4	asymmetric	PASS	-
+424	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 5 has two leaders: node 3 and node 0 (tick 411)
+425	5	symmetric	PASS	-
+426	5	asymmetric	PASS	-
+427	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 0 and node 1 (tick 1238)
+428	3	asymmetric	PASS	-
+429	3	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 0 and node 1 (tick 894)
+430	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 1 and node 0 (tick 1545)
+431	4	asymmetric	PASS	-
+432	4	symmetric	PASS	-
+433	4	symmetric	PASS	-
+434	4	asymmetric	PASS	-
+435	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 14 has two leaders: node 2 and node 0 (tick 2072)
+436	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 4 (tick 801)
+437	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 2 and node 4 (tick 788)
+438	5	symmetric	PASS	-
+439	4	symmetric	PASS	-
+440	5	symmetric	PASS	-
+441	4	symmetric	PASS	-
+442	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 3 and node 4 (tick 704)
+443	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 19 has two leaders: node 0 and node 2 (tick 1520)
+444	5	symmetric	PASS	-
+445	5	asymmetric	PASS	-
+446	4	asymmetric	PASS	-
+447	3	asymmetric	PASS	-
+448	3	symmetric	PASS	-
+449	3	symmetric	PASS	-
+450	3	symmetric	PASS	-
+451	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 12 has two leaders: node 0 and node 1 (tick 1098)
+452	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 19 has two leaders: node 3 and node 0 (tick 2223)
+453	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 2 and node 0 (tick 1296)
+454	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 24 has two leaders: node 2 and node 1 (tick 1947)
+455	3	symmetric	PASS	-
+456	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 23 has two leaders: node 3 and node 4 (tick 2400)
+457	3	asymmetric	PASS	-
+458	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 19 has two leaders: node 2 and node 1 (tick 2102)
+459	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 30 has two leaders: node 0 and node 1 (tick 1851)
+460	4	symmetric	PASS	-
+461	4	symmetric	PASS	-
+462	5	asymmetric	PASS	-
+463	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 11 has two leaders: node 1 and node 4 (tick 1128)
+464	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 8 has two leaders: node 0 and node 3 (tick 2032)
+465	3	symmetric	PASS	-
+466	5	asymmetric	PASS	-
+467	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 23 has two leaders: node 0 and node 1 (tick 2134)
+468	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 2 and node 0 (tick 167)
+469	5	asymmetric	PASS	-
+470	4	symmetric	PASS	-
+471	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 0 and node 1 (tick 1483)
+472	4	asymmetric	PASS	-
+473	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 7 has two leaders: node 0 and node 1 (tick 413)
+474	5	symmetric	PASS	-
+475	3	symmetric	PASS	-
+476	3	asymmetric	PASS	-
+477	3	asymmetric	PASS	-
+478	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 13 has two leaders: node 0 and node 1 (tick 1068)
+479	3	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 9 has two leaders: node 1 and node 0 (tick 1206)
+480	5	asymmetric	PASS	-
+481	5	asymmetric	PASS	-
+482	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 4 has two leaders: node 1 and node 4 (tick 123)
+483	3	symmetric	PASS	-
+484	4	asymmetric	PASS	-
+485	3	asymmetric	PASS	-
+486	3	asymmetric	PASS	-
+487	3	symmetric	PASS	-
+488	3	symmetric	PASS	-
+489	5	symmetric	PASS	-
+490	3	symmetric	PASS	-
+491	4	symmetric	PASS	-
+492	5	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 23 has two leaders: node 0 and node 1 (tick 1862)
+493	3	symmetric	PASS	-
+494	3	asymmetric	PASS	-
+495	4	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 20 has two leaders: node 3 and node 0 (tick 1802)
+496	5	asymmetric	FAIL	ELECTION SAFETY VIOLATED: term 21 has two leaders: node 1 and node 3 (tick 2981)
+497	4	symmetric	FAIL	ELECTION SAFETY VIOLATED: term 28 has two leaders: node 1 and node 2 (tick 2168)
+498	3	asymmetric	PASS	-
+499	5	asymmetric	PASS	-

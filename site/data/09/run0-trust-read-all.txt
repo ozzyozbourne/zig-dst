@@ -1,0 +1,35 @@
+  faults: read=0% write=20% misdirect=1% rot=10%
+  atlas replica 0: xxx.xxx.xx.x...xx.xxxxxx.xxx.xxx
+  atlas replica 1: ..xx.x.xx.x.xxx..x....xxx...x.x.
+  atlas replica 2: xx.xx.xx.xxxxxxxxxxxxx..xxxxxx.x
+  t=  3 append           replica=0 block= 0 3b345bd5a7d5ed6d
+  t=  4 client_read      replica=1 block= 0 413f34fb7342bc71
+  t=  5 client_read      replica=2 block= 0 413f34fb7342bc71
+  t=  6 client_read      replica=0 block= 0 413f34fb7342bc71
+  t=  7 client_read      replica=0 block= 0 413f34fb7342bc71
+  t=  8 client_read      replica=2 block= 0 413f34fb7342bc71
+  t=  8 fault_rot        replica=2 block= 0 101
+  t=  9 client_read      replica=0 block= 0 413f34fb7342bc71
+  t=  9 scrub_repair     replica=2 block= 0 0
+  t=  9 repair           replica=2 block= 0 0
+  t= 10 append           replica=0 block= 1 9fabf0e29835a5d
+  t= 11 client_read      replica=1 block= 0 413f34fb7342bc71
+  t= 12 client_read      replica=2 block= 0 413f34fb7342bc71
+  t= 13 client_read      replica=2 block= 0 413f34fb7342bc71
+  t= 14 client_read      replica=0 block= 1 9ea22b58f5ada3c8
+  t= 15 client_read      replica=2 block= 0 413f34fb7342bc71
+  t= 16 client_read      replica=0 block= 0 413f34fb7342bc71
+  t= 16 fault_rot        replica=0 block= 1 5f
+  t= 17 client_read      replica=0 block= 0 413f34fb7342bc71
+  t= 18 client_read      replica=0 block= 0 413f34fb7342bc71
+  t= 19 client_read      replica=1 block= 1 9ea22b58f5ada3c8
+  t= 20 client_read      replica=1 block= 0 413f34fb7342bc71
+  t= 21 client_read      replica=1 block= 0 413f34fb7342bc71
+  t= 22 client_read      replica=1 block= 1 9ea22b58f5ada3c8
+  t= 23 client_read      replica=1 block= 1 9ea22b58f5ada3c8
+  t= 24 client_read      replica=0 block= 0 413f34fb7342bc71
+  t= 25 client_read      replica=1 block= 0 413f34fb7342bc71
+  t= 26 client_read      replica=2 block= 0 413f34fb7342bc71
+  t= 27 client_read      replica=0 block= 1 f22a24ad1ce03c6b
+  t= 27 FAIL CorruptDataReturned: replica=0 block=1
+seed=0 trace=ed1a70000c0e0d2e FAIL CorruptDataReturned

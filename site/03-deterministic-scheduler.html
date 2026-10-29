@@ -1,0 +1,3864 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>03 · Deterministic scheduler — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  /* page-local tweaks only (layout of the replay panels) */
+  .acct { transition: fill .25s ease; }
+  .flash { animation: pulse .6s ease 1; }
+  .reg td { font-family: var(--mono); font-size: .8rem; padding: 4px 8px; }
+  pre.term .cur { background: rgba(245,230,99,.16); display: inline-block; width: 100%; }
+  .mini input[type=number] { width: 110px; }
+  .kv { font-family: var(--mono); font-size: .85rem; color: var(--muted); }
+  .kv b { color: var(--text); }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag easy">Easy–Medium</span><span class="tag">Example 03</span><span class="tag">concurrency</span></div>
+    <h1>A deterministic scheduler</h1>
+    <p class="lede">Threads are replaced by tasks written as explicit state machines, and the OS scheduler by one line:
+      <code>runnable[scheduler.uintLessThan(u8, runnable_count)]</code>. The interleaving becomes a seeded random input. A lost update
+      or a deadlock is then a seed number that replays tick for tick. Every trace, balance and rate on this page is parsed from captured runs of
+      <code>examples/03-deterministic-scheduler/main.zig</code>.</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>The world around the transfer code</h2>
+    <p>The system under test is a bank transfer: <em>lock → lock → read from → read to → write from → write to → unlock</em>. The transfer logic, the lock
+      protocol and the invariant checker are the real thing. Threads, mutexes, preemption and time are all simulated. One root seed gives two sub-seeds:
+      one draws the workload (2–4 accounts at $100, 2–5 tasks, 1–3 transfers of $1–60 each), the other draws every scheduling decision.</p>
+    <div class="viz" id="arch"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>Underneath: program counters, shared memory, one pick per tick</h2>
+    <p>Each <code>Task</code> holds a program counter <code>pc: Pc</code>. Its "locals" (<code>seen_from</code>, <code>seen_to</code>) live in the struct
+      instead of on a stack, so they survive a yield. <code>World.step(task)</code> runs one atomic slice and moves <code>pc</code> along one arrow.
+      Every arrow is a yield point, and <code>World.check()</code> runs after every tick. Choose a captured run and step through it.</p>
+    <div class="controls" id="runpick"></div>
+    <div class="viz">
+      <div id="sm"></div>
+      <div class="cap">Program counter of each task (the <code>Pc</code> enum). The yellow state is where the task will resume. Dimmed states are skipped by this design.</div>
+    </div>
+    <div class="viz">
+      <div id="lanes"></div>
+      <div class="legend" id="lanelegend"></div>
+      <div id="player"></div>
+    </div>
+    <div class="grid g2">
+      <div class="viz"><div id="mem"></div><div class="cap">Shared memory (<code>balances</code>, <code>lock_owner</code>) and each task's private registers.</div></div>
+      <div class="viz"><div id="check"></div><div id="logwrap"></div></div>
+    </div>
+    <div class="callout bug" id="lostcallout"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>The two planted bugs, in code and in a wait-for graph</h2>
+    <div class="grid g2">
+      <div><h3>--bug: skip locking</h3>
+<pre class="code"><span class="kw">fn</span> <span class="fn">first_pc</span>() Pc {
+    <span class="c">// BUG (--bug): skip locking entirely.</span>
+<span class="bad">    <span class="kw">return if</span> (bug_no_lock) .read_from <span class="kw">else</span> .lock_first;</span>
+}</pre>
+        <p>Without locks the task goes straight to <code>read_from</code>. Then <code>write_from</code> stores <code>seen_from - amount</code>, a value
+          computed from a read made one or more yields earlier. If another task wrote that account in between, its write is overwritten.</p>
+      </div>
+      <div><h3>--bug-deadlock: locks in argument order</h3>
+<pre class="code"><span class="kw">fn</span> <span class="fn">lock_order</span>(task: *<span class="kw">const</span> Task) [<span class="n">2</span>]<span class="kw">u8</span> {
+    <span class="kw">const</span> t = task.current();
+<span class="bad">    <span class="kw">if</span> (bug_deadlock) <span class="kw">return</span> .{ t.from, t.to };</span>
+    <span class="c">// Correct: a global order (lowest account first)</span>
+    <span class="c">// makes a wait-for cycle impossible.</span>
+<span class="good">    <span class="kw">return</span> .{ @min(t.from, t.to), @max(t.from, t.to) };</span>
+}</pre>
+        <p>A task waiting on a held lock is simply not runnable (<code>World.runnable</code>). When nothing is runnable and some task is unfinished, the
+          run fails with <code>deadlock</code> and prints the wait-for graph.</p>
+      </div>
+    </div>
+    <h3>Replay of <code>run 1 --bug-deadlock</code></h3>
+    <div class="viz">
+      <div id="wfg"></div>
+      <div id="wfgplayer"></div>
+      <div class="cap" id="wfgcap"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>Over the first 1000 seeds</h2>
+    <p>The same 1000 workloads were run under each design (<code>per-seed.tsv</code>: one <code>run</code> per seed and flag). The uniform scheduler
+      preempts at every yield point, so the bad windows are hit very often.</p>
+    <div class="grid g2">
+      <div class="viz"><h4>Failure rate per design</h4><div id="rate"></div></div>
+      <div class="viz"><h4>Failure rate by number of tasks</h4><div id="bytasks"></div></div>
+    </div>
+    <div class="viz"><h4>Tick at which the checker fired (failing seeds)</h4><div id="tickhist"></div>
+      <div class="cap">A deadlock is detected as soon as no task can run. A lost update is reported at the first tick when no transfer is mid-flight, because
+        only then does <code>check()</code> compare the total.</div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Why a stress test with real threads rarely sees this</h2>
+    <p>On real hardware a thread usually runs <em>read → write</em> in nanoseconds without being preempted. The bug needs a context switch, or a racing
+      core, inside that window. The model below shows the odds for one core with timer preemption only. <strong>It is an illustrative model with
+      assumed parameters, not a measurement.</strong> The DST row is computed from the captured schedule.</p>
+    <div class="viz">
+      <div class="controls">
+        <label>bad window <input type="range" id="w" min="0" max="100" value="40"></label><span class="out" id="wout"></span>
+        <label>time slice <input type="range" id="q" min="0" max="100" value="50"></label><span class="out" id="qout"></span>
+        <label>transfers per test <input type="range" id="n" min="0" max="100" value="50"></label><span class="out" id="nout"></span>
+      </div>
+      <div id="window"></div>
+      <div class="grid g2" id="odds"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Try it in the browser: a JS mini scheduler</h2>
+    <div class="callout warn"><strong>JavaScript re-implementation, for illustration</strong>This is a port of the workload generator, scheduler and checker to
+      JS using <code>DST.Rand</code> (sfc32), not Zig's <code>DefaultPrng</code>. Seed N here is <em>not</em> the same run as seed N of the Zig program. Same
+      seed in, same run out. A <em>stickiness</em> knob adds exercise 1 of NOTES.md: keep running the previous task with probability <em>s</em>.</div>
+    <div class="viz mini">
+      <div class="controls">
+        seed <input type="number" id="jsseed" value="0" min="0">
+        <select id="jsmode"><option value="none">correct</option><option value="bug" selected>--bug</option><option value="dead">--bug-deadlock</option></select>
+        stickiness <select id="jssticky"><option>0</option><option>0.5</option><option>0.9</option><option>0.99</option></select>
+        <button class="primary" id="jsrun">run</button><button id="jsnext">seed+1</button><span class="out" id="jsres"></span>
+      </div>
+      <div id="jslanes"></div>
+      <pre class="term" id="jslog" style="max-height:220px"></pre>
+    </div>
+    <div class="viz"><h4>JS sweep: failure rate over 1000 seeds vs stickiness</h4><div id="jssweep"></div>
+      <div class="cap">The more the scheduler behaves like a real OS (rarely switching in mid-transfer), the rarer the failure. This is the stress-test
+        experience in miniature, and it is why the real Zig scheduler switches uniformly at every yield point.</div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Determinism, TigerBeetle, and the commands</h2>
+    <div class="grid g2" id="det"></div>
+    <h3>How TigerBeetle does the same thing</h3>
+    <p>TigerBeetle doesn't need a fake thread scheduler. Its real code is already built like this example: one thread, async submissions with callbacks, and
+      long operations written as explicit stage machines.</p>
+    <div class="grid g2">
+      <div class="card"><div class="src"><a class="file">src/vsr/replica.zig</a> · <code>CommitStage</code> (line 83), <code>commit_dispatch()</code> (line 4398)</div>
+<pre class="code"><span class="kw">pub const</span> CommitStage = <span class="kw">union</span>(<span class="kw">enum</span>) {
+    <span class="c">/// Not committing.</span>
+    idle,
+    <span class="c">/// Get the next prepare to commit from the journal or pipeline and...</span>
+    start,
+    <span class="c">/// ...if there isn't any, break out of commit loop.</span>
+    check_prepare,
+    <span class="c">/// Load required data from LSM tree on disk into memory.</span>
+    prefetch,
+    ...</pre>
+        <p>A program counter for the commit pipeline. <code>commit_dispatch()</code> switches on it each time an IO callback resumes it, like our
+          <code>switch (task.pc)</code>.</p></div>
+      <div class="card"><div class="src"><a class="file">src/testing/io.zig</a> · <code>IO.run()</code></div>
+<pre class="code"><span class="c">/// Pass all queued submissions to the kernel and peek for completions.</span>
+<span class="kw">pub fn</span> <span class="fn">run</span>(io: *IO) !<span class="kw">void</span> {
+    <span class="kw">while</span> (io.completed.pop()) |completion| {
+        completion.callback(io, completion);
+    }
+}</pre>
+        <p>Callbacks are the yield points, and <code>completed</code> is the run queue. In <a class="file">src/testing/storage.zig</a>,
+          <code>Storage.step()</code> (line 361) completes the next read or write by its <code>ready_at</code> time, drawn from the seeded PRNG
+          (<code>read_latency()</code> / <code>write_latency()</code>). <a class="file">src/testing/cluster.zig</a> <code>Cluster.tick()</code> and
+          <a class="file">src/vopr.zig</a> <code>Simulator.tick()</code> drive it all from <code>stdx.PRNG.from_seed(seed)</code>.</p></div>
+    </div>
+    <h3>Try it</h3>
+<pre class="term"><span class="p">$ cd examples/03-deterministic-scheduler</span>
+<span class="p">$ zig build-exe main.zig -OReleaseSafe -femit-bin=/tmp/dst03</span>
+<span class="p">$ /tmp/dst03 sweep 1000000                 </span><span class="d"># correct design: all seeds pass</span>
+<span class="p">$ /tmp/dst03 sweep 1000000 --bug           </span><span class="d"># lost update, fails at seed 0</span>
+<span class="p">$ /tmp/dst03 run 0 --bug                   </span><span class="d"># full replay with schedule</span>
+<span class="p">$ /tmp/dst03 run 1 --bug-deadlock          </span><span class="d"># deadlock + wait-for graph</span></pre>
+    <div id="rawlogs"></div>
+  </section>
+</main>
+<script type="text/plain" id="log-bug" data-src="data/03/run0-bug.txt">
+accounts=2 (balance 100 each) tasks=2
+  T0: [0->1 $41] [1->0 $1] [0->1 $56]
+  T1: [0->1 $28] [0->1 $3]
+  t=  0 T1 read    acct0 = 100
+  t=  1 T0 read    acct0 = 100
+  t=  2 T0 read    acct1 = 100
+  t=  3 T0 write   acct0 := 59
+  t=  4 T1 read    acct1 = 100
+  t=  5 T0 write   acct1 := 141
+  t=  6 T0 read    acct1 = 141
+  t=  7 T1 write   acct0 := 72
+  t=  8 T1 write   acct1 := 128
+  t=  9 T1 read    acct0 = 72
+  t= 10 T0 read    acct0 = 72
+  t= 11 T1 read    acct1 = 128
+  t= 12 T1 write   acct0 := 69
+  t= 13 T1 write   acct1 := 131
+  t= 14 T0 write   acct1 := 140
+  t= 15 T0 write   acct0 := 73
+schedule (16 ticks, task picked per tick): 1 0 0 0 1 0 0 1 1 1 0 1 1 1 0 0
+balances: 73 140  total=213 expected=200
+FAILURE: money_not_conserved at tick 16
+seed=0 ticks=16 trace=60d07731b56382d1 FAIL
+</script>
+<script type="text/plain" id="log-bug2" data-src="data/03/run0-bug-again.txt">
+accounts=2 (balance 100 each) tasks=2
+  T0: [0->1 $41] [1->0 $1] [0->1 $56]
+  T1: [0->1 $28] [0->1 $3]
+  t=  0 T1 read    acct0 = 100
+  t=  1 T0 read    acct0 = 100
+  t=  2 T0 read    acct1 = 100
+  t=  3 T0 write   acct0 := 59
+  t=  4 T1 read    acct1 = 100
+  t=  5 T0 write   acct1 := 141
+  t=  6 T0 read    acct1 = 141
+  t=  7 T1 write   acct0 := 72
+  t=  8 T1 write   acct1 := 128
+  t=  9 T1 read    acct0 = 72
+  t= 10 T0 read    acct0 = 72
+  t= 11 T1 read    acct1 = 128
+  t= 12 T1 write   acct0 := 69
+  t= 13 T1 write   acct1 := 131
+  t= 14 T0 write   acct1 := 140
+  t= 15 T0 write   acct0 := 73
+schedule (16 ticks, task picked per tick): 1 0 0 0 1 0 0 1 1 1 0 1 1 1 0 0
+balances: 73 140  total=213 expected=200
+FAILURE: money_not_conserved at tick 16
+seed=0 ticks=16 trace=60d07731b56382d1 FAIL
+</script>
+<script type="text/plain" id="log-dead" data-src="data/03/run1-deadlock.txt">
+accounts=3 (balance 100 each) tasks=5
+  T0: [0->2 $32] [0->2 $47] [1->0 $35]
+  T1: [0->1 $33] [0->1 $14] [2->1 $30]
+  T2: [0->2 $8] [1->0 $10] [2->0 $4]
+  T3: [2->1 $59]
+  T4: [1->2 $8]
+  t=  0 T3 lock    acct2
+  t=  1 T4 lock    acct1
+  t=  2 T2 lock    acct0
+schedule (3 ticks, task picked per tick): 3 4 2
+balances: 100 100 100  total=300 expected=300
+FAILURE: deadlock at tick 3
+  T0 waits for acct0, held by T2
+  T1 waits for acct0, held by T2
+  T2 waits for acct2, held by T3
+  T3 waits for acct1, held by T4
+  T4 waits for acct2, held by T3
+seed=1 ticks=3 trace=026ddce53296649e FAIL
+</script>
+<script type="text/plain" id="log-dead2" data-src="data/03/run1-deadlock-again.txt">
+accounts=3 (balance 100 each) tasks=5
+  T0: [0->2 $32] [0->2 $47] [1->0 $35]
+  T1: [0->1 $33] [0->1 $14] [2->1 $30]
+  T2: [0->2 $8] [1->0 $10] [2->0 $4]
+  T3: [2->1 $59]
+  T4: [1->2 $8]
+  t=  0 T3 lock    acct2
+  t=  1 T4 lock    acct1
+  t=  2 T2 lock    acct0
+schedule (3 ticks, task picked per tick): 3 4 2
+balances: 100 100 100  total=300 expected=300
+FAILURE: deadlock at tick 3
+  T0 waits for acct0, held by T2
+  T1 waits for acct0, held by T2
+  T2 waits for acct2, held by T3
+  T3 waits for acct1, held by T4
+  T4 waits for acct2, held by T3
+seed=1 ticks=3 trace=026ddce53296649e FAIL
+</script>
+<script type="text/plain" id="log-ok0" data-src="data/03/run0.txt">
+accounts=2 (balance 100 each) tasks=2
+  T0: [0->1 $41] [1->0 $1] [0->1 $56]
+  T1: [0->1 $28] [0->1 $3]
+  t=  0 T1 lock    acct0
+  t=  1 T1 lock    acct1
+  t=  2 T1 read    acct0 = 100
+  t=  3 T1 read    acct1 = 100
+  t=  4 T1 write   acct0 := 72
+  t=  5 T1 write   acct1 := 128
+  t=  6 T1 unlock
+  t=  7 T1 lock    acct0
+  t=  8 T1 lock    acct1
+  t=  9 T1 read    acct0 = 72
+  t= 10 T1 read    acct1 = 128
+  t= 11 T1 write   acct0 := 69
+  t= 12 T1 write   acct1 := 131
+  t= 13 T1 unlock
+  t= 14 T0 lock    acct0
+  t= 15 T0 lock    acct1
+  t= 16 T0 read    acct0 = 69
+  t= 17 T0 read    acct1 = 131
+  t= 18 T0 write   acct0 := 28
+  t= 19 T0 write   acct1 := 172
+  t= 20 T0 unlock
+  t= 21 T0 lock    acct0
+  t= 22 T0 lock    acct1
+  t= 23 T0 read    acct1 = 172
+  t= 24 T0 read    acct0 = 28
+  t= 25 T0 write   acct1 := 171
+  t= 26 T0 write   acct0 := 29
+  t= 27 T0 unlock
+  t= 28 T0 lock    acct0
+  t= 29 T0 lock    acct1
+  t= 30 T0 read    acct0 = 29
+  t= 31 T0 insufficient funds, abort
+  t= 32 T0 unlock
+schedule (33 ticks, task picked per tick): 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+balances: 29 171  total=200 expected=200
+seed=0 ticks=33 trace=a40e7c5a03659fe8 PASS
+</script>
+<script type="text/plain" id="log-ok1" data-src="data/03/run1.txt">
+accounts=3 (balance 100 each) tasks=5
+  T0: [0->2 $32] [0->2 $47] [1->0 $35]
+  T1: [0->1 $33] [0->1 $14] [2->1 $30]
+  T2: [0->2 $8] [1->0 $10] [2->0 $4]
+  T3: [2->1 $59]
+  T4: [1->2 $8]
+  t=  0 T3 lock    acct1
+  t=  1 T3 lock    acct2
+  t=  2 T3 read    acct2 = 100
+  t=  3 T3 read    acct1 = 100
+  t=  4 T1 lock    acct0
+  t=  5 T3 write   acct2 := 41
+  t=  6 T3 write   acct1 := 159
+  t=  7 T3 unlock
+  t=  8 T4 lock    acct1
+  t=  9 T4 lock    acct2
+  t= 10 T4 read    acct1 = 159
+  t= 11 T4 read    acct2 = 41
+  t= 12 T4 write   acct1 := 151
+  t= 13 T4 write   acct2 := 49
+  t= 14 T4 unlock
+  t= 15 T1 lock    acct1
+  t= 16 T1 read    acct0 = 100
+  t= 17 T1 read    acct1 = 151
+  t= 18 T1 write   acct0 := 67
+  t= 19 T1 write   acct1 := 184
+  t= 20 T1 unlock
+  t= 21 T1 lock    acct0
+  t= 22 T1 lock    acct1
+  t= 23 T1 read    acct0 = 67
+  t= 24 T1 read    acct1 = 184
+  t= 25 T1 write   acct0 := 53
+  t= 26 T1 write   acct1 := 198
+  t= 27 T1 unlock
+  t= 28 T0 lock    acct0
+  t= 29 T0 lock    acct2
+  t= 30 T1 lock    acct1
+  t= 31 T0 read    acct0 = 53
+  t= 32 T0 read    acct2 = 49
+  t= 33 T0 write   acct0 := 21
+  t= 34 T0 write   acct2 := 81
+  t= 35 T0 unlock
+  t= 36 T2 lock    acct0
+  t= 37 T2 lock    acct2
+  t= 38 T2 read    acct0 = 21
+  t= 39 T2 read    acct2 = 81
+  t= 40 T2 write   acct0 := 13
+  t= 41 T2 write   acct2 := 89
+  t= 42 T2 unlock
+  t= 43 T2 lock    acct0
+  t= 44 T1 lock    acct2
+  t= 45 T1 read    acct2 = 89
+  t= 46 T1 read    acct1 = 198
+  t= 47 T1 write   acct2 := 59
+  t= 48 T1 write   acct1 := 228
+  t= 49 T1 unlock
+  t= 50 T2 lock    acct1
+  t= 51 T2 read    acct1 = 228
+  t= 52 T2 read    acct0 = 13
+  t= 53 T2 write   acct1 := 218
+  t= 54 T2 write   acct0 := 23
+  t= 55 T2 unlock
+  t= 56 T2 lock    acct0
+  t= 57 T2 lock    acct2
+  t= 58 T2 read    acct2 = 59
+  t= 59 T2 read    acct0 = 23
+  t= 60 T2 write   acct2 := 55
+  t= 61 T2 write   acct0 := 27
+  t= 62 T2 unlock
+  t= 63 T0 lock    acct0
+  t= 64 T0 lock    acct2
+  t= 65 T0 read    acct0 = 27
+  t= 66 T0 insufficient funds, abort
+  t= 67 T0 unlock
+  t= 68 T0 lock    acct0
+  t= 69 T0 lock    acct1
+  t= 70 T0 read    acct1 = 218
+  t= 71 T0 read    acct0 = 27
+  t= 72 T0 write   acct1 := 183
+  t= 73 T0 write   acct0 := 62
+  t= 74 T0 unlock
+schedule (75 ticks, task picked per tick): 3 3 3 3 1 3 3 3 4 4 4 4 4 4 4 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 1 0 0 0 0 0 2 2 2 2 2 2 2 2 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 2 2 2 0 0 0 0 0 0 0 0 0 0 0 0
+balances: 62 183 55  total=300 expected=300
+seed=1 ticks=75 trace=162e10180debd43e PASS
+</script>
+<script type="text/plain" id="log-sweep" data-src="data/03/sweep.txt">
+PASS: 1000000 seeds
+
+real	0m5.147s
+user	0m4.142s
+sys	0m0.004s
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/03/sweep-bug.txt">
+FAIL at seed=0 (money_not_conserved) after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug
+</script>
+<script type="text/plain" id="log-sweep-dead" data-src="data/03/sweep-deadlock.txt">
+FAIL at seed=1 (deadlock) after 2 seeds. Replay with:
+  zig run main.zig -- run 1 --bug-deadlock
+</script>
+<script type="text/plain" id="tsv-seeds" data-src="data/03/per-seed.tsv">
+0	none	2	2	33	PASS	-
+1	none	3	5	75	PASS	-
+2	none	2	5	84	PASS	-
+3	none	4	3	42	PASS	-
+4	none	3	2	33	PASS	-
+5	none	2	2	28	PASS	-
+6	none	3	2	28	PASS	-
+7	none	3	4	63	PASS	-
+8	none	2	3	49	PASS	-
+9	none	4	3	21	PASS	-
+10	none	4	3	35	PASS	-
+11	none	3	5	75	PASS	-
+12	none	2	3	35	PASS	-
+13	none	3	2	21	PASS	-
+14	none	2	3	49	PASS	-
+15	none	2	2	14	PASS	-
+16	none	2	2	35	PASS	-
+17	none	3	5	42	PASS	-
+18	none	3	4	49	PASS	-
+19	none	2	3	49	PASS	-
+20	none	2	5	70	PASS	-
+21	none	3	4	47	PASS	-
+22	none	2	3	42	PASS	-
+23	none	3	3	35	PASS	-
+24	none	3	2	28	PASS	-
+25	none	4	3	42	PASS	-
+26	none	2	2	14	PASS	-
+27	none	2	3	42	PASS	-
+28	none	3	3	35	PASS	-
+29	none	2	5	70	PASS	-
+30	none	4	2	35	PASS	-
+31	none	2	5	68	PASS	-
+32	none	2	2	28	PASS	-
+33	none	2	3	49	PASS	-
+34	none	3	4	43	PASS	-
+35	none	3	5	66	PASS	-
+36	none	3	3	33	PASS	-
+37	none	4	2	21	PASS	-
+38	none	3	4	42	PASS	-
+39	none	4	2	35	PASS	-
+40	none	2	2	28	PASS	-
+41	none	3	4	35	PASS	-
+42	none	3	2	28	PASS	-
+43	none	3	3	49	PASS	-
+44	none	2	5	70	PASS	-
+45	none	3	5	66	PASS	-
+46	none	2	2	38	PASS	-
+47	none	3	3	38	PASS	-
+48	none	4	4	54	PASS	-
+49	none	3	5	61	PASS	-
+50	none	4	5	70	PASS	-
+51	none	3	5	49	PASS	-
+52	none	4	5	66	PASS	-
+53	none	2	3	47	PASS	-
+54	none	4	5	80	PASS	-
+55	none	2	5	63	PASS	-
+56	none	2	4	78	PASS	-
+57	none	4	2	42	PASS	-
+58	none	3	2	35	PASS	-
+59	none	2	3	40	PASS	-
+60	none	2	5	54	PASS	-
+61	none	4	3	35	PASS	-
+62	none	4	2	14	PASS	-
+63	none	3	3	21	PASS	-
+64	none	2	2	35	PASS	-
+65	none	2	5	84	PASS	-
+66	none	4	4	52	PASS	-
+67	none	2	5	84	PASS	-
+68	none	4	4	52	PASS	-
+69	none	4	3	56	PASS	-
+70	none	3	5	63	PASS	-
+71	none	3	2	42	PASS	-
+72	none	3	3	42	PASS	-
+73	none	2	3	49	PASS	-
+74	none	3	2	21	PASS	-
+75	none	3	3	42	PASS	-
+76	none	3	2	35	PASS	-
+77	none	3	4	45	PASS	-
+78	none	3	2	21	PASS	-
+79	none	2	2	28	PASS	-
+80	none	2	3	42	PASS	-
+81	none	3	2	24	PASS	-
+82	none	4	2	28	PASS	-
+83	none	2	5	61	PASS	-
+84	none	3	3	33	PASS	-
+85	none	3	5	56	PASS	-
+86	none	2	5	89	PASS	-
+87	none	4	4	35	PASS	-
+88	none	3	2	35	PASS	-
+89	none	3	5	56	PASS	-
+90	none	4	5	63	PASS	-
+91	none	4	5	63	PASS	-
+92	none	4	2	38	PASS	-
+93	none	3	2	14	PASS	-
+94	none	2	4	31	PASS	-
+95	none	2	4	63	PASS	-
+96	none	4	5	63	PASS	-
+97	none	4	5	59	PASS	-
+98	none	3	5	75	PASS	-
+99	none	4	2	21	PASS	-
+100	none	3	2	35	PASS	-
+101	none	2	5	56	PASS	-
+102	none	2	3	42	PASS	-
+103	none	3	2	28	PASS	-
+104	none	2	4	68	PASS	-
+105	none	2	3	50	PASS	-
+106	none	4	3	40	PASS	-
+107	none	2	5	63	PASS	-
+108	none	2	5	57	PASS	-
+109	none	2	3	42	PASS	-
+110	none	4	2	21	PASS	-
+111	none	4	5	63	PASS	-
+112	none	4	2	28	PASS	-
+113	none	4	4	63	PASS	-
+114	none	4	4	35	PASS	-
+115	none	3	4	61	PASS	-
+116	none	4	2	21	PASS	-
+117	none	3	5	96	PASS	-
+118	none	3	2	28	PASS	-
+119	none	2	3	21	PASS	-
+120	none	2	2	28	PASS	-
+121	none	3	4	55	PASS	-
+122	none	3	2	28	PASS	-
+123	none	4	2	21	PASS	-
+124	none	2	2	35	PASS	-
+125	none	3	3	56	PASS	-
+126	none	4	4	78	PASS	-
+127	none	3	5	63	PASS	-
+128	none	4	2	35	PASS	-
+129	none	2	3	38	PASS	-
+130	none	3	4	68	PASS	-
+131	none	2	3	56	PASS	-
+132	none	2	2	35	PASS	-
+133	none	2	4	68	PASS	-
+134	none	2	5	49	PASS	-
+135	none	2	5	57	PASS	-
+136	none	2	5	84	PASS	-
+137	none	3	4	73	PASS	-
+138	none	4	5	70	PASS	-
+139	none	3	2	21	PASS	-
+140	none	4	2	26	PASS	-
+141	none	3	2	21	PASS	-
+142	none	2	2	14	PASS	-
+143	none	2	3	24	PASS	-
+144	none	4	4	54	PASS	-
+145	none	2	5	78	PASS	-
+146	none	4	4	68	PASS	-
+147	none	3	5	57	PASS	-
+148	none	4	2	21	PASS	-
+149	none	3	5	85	PASS	-
+150	none	4	5	52	PASS	-
+151	none	3	3	56	PASS	-
+152	none	2	5	77	PASS	-
+153	none	3	5	91	PASS	-
+154	none	4	4	49	PASS	-
+155	none	3	3	47	PASS	-
+156	none	4	2	21	PASS	-
+157	none	4	5	61	PASS	-
+158	none	2	2	33	PASS	-
+159	none	4	5	70	PASS	-
+160	none	3	4	59	PASS	-
+161	none	2	2	28	PASS	-
+162	none	2	5	69	PASS	-
+163	none	4	4	42	PASS	-
+164	none	2	2	35	PASS	-
+165	none	4	3	40	PASS	-
+166	none	2	3	47	PASS	-
+167	none	4	3	54	PASS	-
+168	none	3	3	49	PASS	-
+169	none	3	4	28	PASS	-
+170	none	2	5	91	PASS	-
+171	none	4	2	21	PASS	-
+172	none	3	4	52	PASS	-
+173	none	2	3	42	PASS	-
+174	none	3	5	84	PASS	-
+175	none	2	3	35	PASS	-
+176	none	2	5	45	PASS	-
+177	none	4	5	56	PASS	-
+178	none	2	5	94	PASS	-
+179	none	4	3	56	PASS	-
+180	none	2	4	63	PASS	-
+181	none	3	3	26	PASS	-
+182	none	4	2	42	PASS	-
+183	none	3	2	28	PASS	-
+184	none	2	3	49	PASS	-
+185	none	3	2	33	PASS	-
+186	none	3	3	35	PASS	-
+187	none	4	5	49	PASS	-
+188	none	3	5	54	PASS	-
+189	none	2	5	84	PASS	-
+190	none	2	3	45	PASS	-
+191	none	3	5	70	PASS	-
+192	none	3	5	66	PASS	-
+193	none	3	2	14	PASS	-
+194	none	2	4	35	PASS	-
+195	none	3	4	54	PASS	-
+196	none	2	5	75	PASS	-
+197	none	2	4	70	PASS	-
+198	none	3	3	54	PASS	-
+199	none	3	3	54	PASS	-
+200	none	4	3	28	PASS	-
+201	none	2	2	33	PASS	-
+202	none	3	3	42	PASS	-
+203	none	4	4	35	PASS	-
+204	none	4	2	21	PASS	-
+205	none	4	5	61	PASS	-
+206	none	4	3	33	PASS	-
+207	none	3	2	33	PASS	-
+208	none	3	2	42	PASS	-
+209	none	2	4	61	PASS	-
+210	none	3	3	49	PASS	-
+211	none	3	3	49	PASS	-
+212	none	4	4	77	PASS	-
+213	none	2	3	28	PASS	-
+214	none	2	3	49	PASS	-
+215	none	2	5	42	PASS	-
+216	none	2	3	56	PASS	-
+217	none	3	5	56	PASS	-
+218	none	4	5	70	PASS	-
+219	none	3	3	42	PASS	-
+220	none	4	3	56	PASS	-
+221	none	4	4	56	PASS	-
+222	none	4	2	35	PASS	-
+223	none	4	4	45	PASS	-
+224	none	4	3	35	PASS	-
+225	none	4	3	54	PASS	-
+226	none	2	5	77	PASS	-
+227	none	2	4	49	PASS	-
+228	none	4	5	63	PASS	-
+229	none	4	3	63	PASS	-
+230	none	4	4	33	PASS	-
+231	none	4	3	35	PASS	-
+232	none	3	3	52	PASS	-
+233	none	2	5	63	PASS	-
+234	none	3	4	60	PASS	-
+235	none	3	4	52	PASS	-
+236	none	3	5	59	PASS	-
+237	none	4	4	42	PASS	-
+238	none	2	3	61	PASS	-
+239	none	4	4	54	PASS	-
+240	none	2	2	28	PASS	-
+241	none	3	4	56	PASS	-
+242	none	3	5	61	PASS	-
+243	none	4	2	21	PASS	-
+244	none	3	3	56	PASS	-
+245	none	3	4	56	PASS	-
+246	none	3	5	77	PASS	-
+247	none	4	2	14	PASS	-
+248	none	3	4	77	PASS	-
+249	none	2	2	28	PASS	-
+250	none	3	5	54	PASS	-
+251	none	4	3	35	PASS	-
+252	none	3	4	56	PASS	-
+253	none	3	5	84	PASS	-
+254	none	3	2	35	PASS	-
+255	none	4	2	14	PASS	-
+256	none	2	3	33	PASS	-
+257	none	2	5	80	PASS	-
+258	none	3	4	62	PASS	-
+259	none	4	3	47	PASS	-
+260	none	2	5	83	PASS	-
+261	none	2	5	56	PASS	-
+262	none	3	2	28	PASS	-
+263	none	4	5	63	PASS	-
+264	none	2	4	49	PASS	-
+265	none	3	5	59	PASS	-
+266	none	3	3	47	PASS	-
+267	none	3	5	84	PASS	-
+268	none	2	2	40	PASS	-
+269	none	3	3	42	PASS	-
+270	none	2	5	59	PASS	-
+271	none	4	3	47	PASS	-
+272	none	3	4	56	PASS	-
+273	none	2	5	68	PASS	-
+274	none	3	5	61	PASS	-
+275	none	3	4	52	PASS	-
+276	none	2	4	47	PASS	-
+277	none	2	2	21	PASS	-
+278	none	3	4	61	PASS	-
+279	none	2	3	42	PASS	-
+280	none	2	2	42	PASS	-
+281	none	4	3	56	PASS	-
+282	none	2	2	21	PASS	-
+283	none	4	4	40	PASS	-
+284	none	4	3	49	PASS	-
+285	none	4	3	42	PASS	-
+286	none	2	4	75	PASS	-
+287	none	4	5	63	PASS	-
+288	none	3	5	77	PASS	-
+289	none	2	4	33	PASS	-
+290	none	4	2	28	PASS	-
+291	none	3	4	69	PASS	-
+292	none	2	5	56	PASS	-
+293	none	2	4	60	PASS	-
+294	none	3	3	21	PASS	-
+295	none	2	2	28	PASS	-
+296	none	2	2	28	PASS	-
+297	none	3	2	28	PASS	-
+298	none	3	4	54	PASS	-
+299	none	3	5	61	PASS	-
+300	none	3	3	42	PASS	-
+301	none	4	3	35	PASS	-
+302	none	4	3	54	PASS	-
+303	none	3	4	59	PASS	-
+304	none	4	3	56	PASS	-
+305	none	3	4	49	PASS	-
+306	none	2	2	35	PASS	-
+307	none	2	3	36	PASS	-
+308	none	3	5	54	PASS	-
+309	none	4	3	49	PASS	-
+310	none	3	2	21	PASS	-
+311	none	4	5	84	PASS	-
+312	none	3	3	40	PASS	-
+313	none	4	3	52	PASS	-
+314	none	3	2	14	PASS	-
+315	none	4	4	70	PASS	-
+316	none	3	3	49	PASS	-
+317	none	4	5	89	PASS	-
+318	none	3	4	42	PASS	-
+319	none	2	2	21	PASS	-
+320	none	3	4	56	PASS	-
+321	none	3	3	28	PASS	-
+322	none	2	3	35	PASS	-
+323	none	4	4	49	PASS	-
+324	none	2	2	14	PASS	-
+325	none	3	2	35	PASS	-
+326	none	2	3	35	PASS	-
+327	none	4	2	21	PASS	-
+328	none	3	2	35	PASS	-
+329	none	4	3	28	PASS	-
+330	none	2	2	35	PASS	-
+331	none	4	3	40	PASS	-
+332	none	2	2	19	PASS	-
+333	none	2	4	47	PASS	-
+334	none	3	2	21	PASS	-
+335	none	2	5	77	PASS	-
+336	none	3	3	40	PASS	-
+337	none	2	3	43	PASS	-
+338	none	3	2	21	PASS	-
+339	none	4	3	35	PASS	-
+340	none	2	3	42	PASS	-
+341	none	3	3	40	PASS	-
+342	none	2	5	54	PASS	-
+343	none	2	5	77	PASS	-
+344	none	2	5	66	PASS	-
+345	none	2	3	35	PASS	-
+346	none	2	2	35	PASS	-
+347	none	3	2	14	PASS	-
+348	none	2	3	49	PASS	-
+349	none	3	4	35	PASS	-
+350	none	4	2	35	PASS	-
+351	none	4	3	21	PASS	-
+352	none	3	5	59	PASS	-
+353	none	4	3	35	PASS	-
+354	none	2	3	49	PASS	-
+355	none	3	3	49	PASS	-
+356	none	2	5	75	PASS	-
+357	none	2	5	70	PASS	-
+358	none	2	3	33	PASS	-
+359	none	3	5	80	PASS	-
+360	none	2	5	68	PASS	-
+361	none	3	2	28	PASS	-
+362	none	3	5	71	PASS	-
+363	none	3	4	47	PASS	-
+364	none	4	2	14	PASS	-
+365	none	2	2	28	PASS	-
+366	none	3	3	42	PASS	-
+367	none	3	5	77	PASS	-
+368	none	2	3	42	PASS	-
+369	none	3	2	14	PASS	-
+370	none	3	4	61	PASS	-
+371	none	3	3	35	PASS	-
+372	none	3	3	35	PASS	-
+373	none	3	4	63	PASS	-
+374	none	4	5	84	PASS	-
+375	none	4	3	56	PASS	-
+376	none	4	5	56	PASS	-
+377	none	3	2	28	PASS	-
+378	none	4	2	21	PASS	-
+379	none	3	5	54	PASS	-
+380	none	3	4	70	PASS	-
+381	none	3	5	47	PASS	-
+382	none	4	3	40	PASS	-
+383	none	2	3	42	PASS	-
+384	none	3	4	61	PASS	-
+385	none	4	5	68	PASS	-
+386	none	3	4	61	PASS	-
+387	none	4	4	54	PASS	-
+388	none	4	5	49	PASS	-
+389	none	3	3	21	PASS	-
+390	none	2	4	70	PASS	-
+391	none	3	2	14	PASS	-
+392	none	3	3	40	PASS	-
+393	none	4	3	47	PASS	-
+394	none	2	5	75	PASS	-
+395	none	4	3	49	PASS	-
+396	none	2	2	21	PASS	-
+397	none	3	2	35	PASS	-
+398	none	3	2	35	PASS	-
+399	none	3	4	54	PASS	-
+400	none	2	3	50	PASS	-
+401	none	3	5	61	PASS	-
+402	none	4	2	14	PASS	-
+403	none	4	5	61	PASS	-
+404	none	3	3	42	PASS	-
+405	none	3	5	52	PASS	-
+406	none	4	3	61	PASS	-
+407	none	3	3	49	PASS	-
+408	none	2	5	50	PASS	-
+409	none	3	2	35	PASS	-
+410	none	4	5	73	PASS	-
+411	none	2	3	42	PASS	-
+412	none	4	5	47	PASS	-
+413	none	4	4	40	PASS	-
+414	none	2	5	73	PASS	-
+415	none	4	3	35	PASS	-
+416	none	2	3	45	PASS	-
+417	none	2	2	28	PASS	-
+418	none	2	3	56	PASS	-
+419	none	4	3	40	PASS	-
+420	none	2	3	28	PASS	-
+421	none	3	2	35	PASS	-
+422	none	4	3	49	PASS	-
+423	none	4	4	42	PASS	-
+424	none	4	5	56	PASS	-
+425	none	4	3	21	PASS	-
+426	none	3	3	42	PASS	-
+427	none	4	5	68	PASS	-
+428	none	4	5	75	PASS	-
+429	none	2	4	42	PASS	-
+430	none	4	2	33	PASS	-
+431	none	4	4	49	PASS	-
+432	none	3	5	68	PASS	-
+433	none	3	5	61	PASS	-
+434	none	2	4	56	PASS	-
+435	none	2	5	75	PASS	-
+436	none	3	2	21	PASS	-
+437	none	2	5	77	PASS	-
+438	none	4	5	56	PASS	-
+439	none	4	2	28	PASS	-
+440	none	4	4	56	PASS	-
+441	none	4	4	61	PASS	-
+442	none	4	3	33	PASS	-
+443	none	3	2	28	PASS	-
+444	none	3	4	56	PASS	-
+445	none	3	4	56	PASS	-
+446	none	3	2	21	PASS	-
+447	none	4	3	28	PASS	-
+448	none	3	3	49	PASS	-
+449	none	4	3	21	PASS	-
+450	none	4	5	70	PASS	-
+451	none	2	3	42	PASS	-
+452	none	3	2	42	PASS	-
+453	none	4	4	42	PASS	-
+454	none	4	3	42	PASS	-
+455	none	4	4	73	PASS	-
+456	none	4	3	42	PASS	-
+457	none	2	5	70	PASS	-
+458	none	4	3	28	PASS	-
+459	none	3	4	49	PASS	-
+460	none	2	2	28	PASS	-
+461	none	3	2	42	PASS	-
+462	none	3	3	52	PASS	-
+463	none	3	2	33	PASS	-
+464	none	2	3	56	PASS	-
+465	none	2	4	61	PASS	-
+466	none	3	4	70	PASS	-
+467	none	2	5	40	PASS	-
+468	none	2	5	61	PASS	-
+469	none	3	5	62	PASS	-
+470	none	3	3	42	PASS	-
+471	none	4	2	40	PASS	-
+472	none	2	5	63	PASS	-
+473	none	3	2	14	PASS	-
+474	none	4	2	21	PASS	-
+475	none	3	3	35	PASS	-
+476	none	2	4	66	PASS	-
+477	none	2	5	54	PASS	-
+478	none	2	4	71	PASS	-
+479	none	3	2	28	PASS	-
+480	none	4	5	63	PASS	-
+481	none	2	4	56	PASS	-
+482	none	4	2	28	PASS	-
+483	none	3	4	54	PASS	-
+484	none	2	4	42	PASS	-
+485	none	2	2	21	PASS	-
+486	none	2	4	53	PASS	-
+487	none	3	3	47	PASS	-
+488	none	4	4	56	PASS	-
+489	none	2	4	42	PASS	-
+490	none	3	3	28	PASS	-
+491	none	3	3	49	PASS	-
+492	none	2	4	52	PASS	-
+493	none	4	2	28	PASS	-
+494	none	4	2	28	PASS	-
+495	none	2	2	14	PASS	-
+496	none	3	3	42	PASS	-
+497	none	4	4	49	PASS	-
+498	none	2	2	40	PASS	-
+499	none	2	4	57	PASS	-
+500	none	3	2	38	PASS	-
+501	none	2	5	63	PASS	-
+502	none	2	4	75	PASS	-
+503	none	4	4	52	PASS	-
+504	none	2	5	68	PASS	-
+505	none	3	4	63	PASS	-
+506	none	4	3	49	PASS	-
+507	none	3	4	35	PASS	-
+508	none	2	4	63	PASS	-
+509	none	3	2	42	PASS	-
+510	none	3	2	21	PASS	-
+511	none	3	4	42	PASS	-
+512	none	4	4	49	PASS	-
+513	none	4	4	56	PASS	-
+514	none	2	2	33	PASS	-
+515	none	2	5	45	PASS	-
+516	none	4	5	70	PASS	-
+517	none	3	3	42	PASS	-
+518	none	4	4	42	PASS	-
+519	none	4	4	47	PASS	-
+520	none	3	3	35	PASS	-
+521	none	4	4	61	PASS	-
+522	none	2	2	33	PASS	-
+523	none	2	4	42	PASS	-
+524	none	4	2	42	PASS	-
+525	none	3	2	28	PASS	-
+526	none	4	2	21	PASS	-
+527	none	3	2	21	PASS	-
+528	none	2	4	40	PASS	-
+529	none	3	5	61	PASS	-
+530	none	2	4	42	PASS	-
+531	none	3	4	49	PASS	-
+532	none	2	2	35	PASS	-
+533	none	4	4	61	PASS	-
+534	none	2	5	70	PASS	-
+535	none	2	5	70	PASS	-
+536	none	3	2	28	PASS	-
+537	none	2	3	21	PASS	-
+538	none	3	3	56	PASS	-
+539	none	4	5	77	PASS	-
+540	none	2	3	35	PASS	-
+541	none	3	5	66	PASS	-
+542	none	4	2	14	PASS	-
+543	none	4	3	49	PASS	-
+544	none	2	2	28	PASS	-
+545	none	2	4	28	PASS	-
+546	none	2	2	26	PASS	-
+547	none	4	4	70	PASS	-
+548	none	4	4	73	PASS	-
+549	none	4	5	75	PASS	-
+550	none	3	3	49	PASS	-
+551	none	4	3	43	PASS	-
+552	none	2	3	21	PASS	-
+553	none	4	5	77	PASS	-
+554	none	3	5	66	PASS	-
+555	none	4	5	80	PASS	-
+556	none	4	2	35	PASS	-
+557	none	4	2	14	PASS	-
+558	none	3	5	75	PASS	-
+559	none	2	3	28	PASS	-
+560	none	4	5	77	PASS	-
+561	none	2	4	55	PASS	-
+562	none	4	4	63	PASS	-
+563	none	3	5	66	PASS	-
+564	none	2	3	28	PASS	-
+565	none	4	4	59	PASS	-
+566	none	3	4	70	PASS	-
+567	none	3	5	80	PASS	-
+568	none	2	3	56	PASS	-
+569	none	4	2	28	PASS	-
+570	none	3	4	56	PASS	-
+571	none	4	5	70	PASS	-
+572	none	3	4	42	PASS	-
+573	none	4	2	14	PASS	-
+574	none	2	3	42	PASS	-
+575	none	4	4	70	PASS	-
+576	none	2	4	63	PASS	-
+577	none	4	2	28	PASS	-
+578	none	4	2	21	PASS	-
+579	none	3	2	28	PASS	-
+580	none	4	5	66	PASS	-
+581	none	4	3	56	PASS	-
+582	none	3	5	77	PASS	-
+583	none	3	3	47	PASS	-
+584	none	3	4	70	PASS	-
+585	none	3	5	63	PASS	-
+586	none	4	4	54	PASS	-
+587	none	3	3	49	PASS	-
+588	none	2	3	42	PASS	-
+589	none	2	5	91	PASS	-
+590	none	2	2	28	PASS	-
+591	none	2	5	64	PASS	-
+592	none	4	4	35	PASS	-
+593	none	2	4	43	PASS	-
+594	none	4	4	49	PASS	-
+595	none	2	3	49	PASS	-
+596	none	4	3	26	PASS	-
+597	none	2	4	56	PASS	-
+598	none	3	3	35	PASS	-
+599	none	2	4	82	PASS	-
+600	none	2	3	42	PASS	-
+601	none	2	3	28	PASS	-
+602	none	3	5	78	PASS	-
+603	none	2	5	63	PASS	-
+604	none	3	2	14	PASS	-
+605	none	3	4	52	PASS	-
+606	none	3	2	35	PASS	-
+607	none	3	5	47	PASS	-
+608	none	2	4	42	PASS	-
+609	none	3	5	61	PASS	-
+610	none	3	2	28	PASS	-
+611	none	4	4	35	PASS	-
+612	none	4	3	47	PASS	-
+613	none	2	3	47	PASS	-
+614	none	4	2	28	PASS	-
+615	none	3	4	61	PASS	-
+616	none	4	3	42	PASS	-
+617	none	2	5	66	PASS	-
+618	none	3	4	47	PASS	-
+619	none	4	5	70	PASS	-
+620	none	2	5	59	PASS	-
+621	none	2	5	84	PASS	-
+622	none	4	4	56	PASS	-
+623	none	3	2	35	PASS	-
+624	none	4	2	28	PASS	-
+625	none	3	4	50	PASS	-
+626	none	4	3	35	PASS	-
+627	none	2	4	56	PASS	-
+628	none	3	5	94	PASS	-
+629	none	3	3	47	PASS	-
+630	none	3	5	77	PASS	-
+631	none	3	4	56	PASS	-
+632	none	4	3	28	PASS	-
+633	none	4	2	21	PASS	-
+634	none	3	3	40	PASS	-
+635	none	4	2	28	PASS	-
+636	none	3	3	35	PASS	-
+637	none	3	5	73	PASS	-
+638	none	3	4	40	PASS	-
+639	none	4	2	28	PASS	-
+640	none	2	2	14	PASS	-
+641	none	2	3	31	PASS	-
+642	none	3	3	42	PASS	-
+643	none	4	5	91	PASS	-
+644	none	3	5	54	PASS	-
+645	none	2	5	47	PASS	-
+646	none	2	4	75	PASS	-
+647	none	4	2	35	PASS	-
+648	none	3	5	56	PASS	-
+649	none	4	5	73	PASS	-
+650	none	3	2	28	PASS	-
+651	none	2	5	63	PASS	-
+652	none	3	3	42	PASS	-
+653	none	4	2	28	PASS	-
+654	none	4	5	77	PASS	-
+655	none	3	3	35	PASS	-
+656	none	2	5	54	PASS	-
+657	none	2	2	26	PASS	-
+658	none	4	5	70	PASS	-
+659	none	2	4	54	PASS	-
+660	none	3	5	63	PASS	-
+661	none	3	4	84	PASS	-
+662	none	2	4	68	PASS	-
+663	none	2	4	61	PASS	-
+664	none	2	5	75	PASS	-
+665	none	3	3	35	PASS	-
+666	none	2	4	35	PASS	-
+667	none	4	2	14	PASS	-
+668	none	4	4	54	PASS	-
+669	none	3	5	68	PASS	-
+670	none	3	2	26	PASS	-
+671	none	3	4	35	PASS	-
+672	none	4	2	14	PASS	-
+673	none	3	2	42	PASS	-
+674	none	4	4	56	PASS	-
+675	none	2	5	63	PASS	-
+676	none	4	2	14	PASS	-
+677	none	4	4	68	PASS	-
+678	none	2	3	36	PASS	-
+679	none	4	4	63	PASS	-
+680	none	3	5	63	PASS	-
+681	none	4	2	21	PASS	-
+682	none	2	5	70	PASS	-
+683	none	4	4	47	PASS	-
+684	none	4	2	14	PASS	-
+685	none	2	5	49	PASS	-
+686	none	4	4	38	PASS	-
+687	none	3	5	56	PASS	-
+688	none	4	2	21	PASS	-
+689	none	4	5	70	PASS	-
+690	none	4	2	21	PASS	-
+691	none	2	5	63	PASS	-
+692	none	3	5	73	PASS	-
+693	none	3	4	54	PASS	-
+694	none	2	3	33	PASS	-
+695	none	3	3	45	PASS	-
+696	none	3	5	84	PASS	-
+697	none	2	5	66	PASS	-
+698	none	3	3	38	PASS	-
+699	none	2	2	28	PASS	-
+700	none	4	4	59	PASS	-
+701	none	3	5	69	PASS	-
+702	none	4	2	14	PASS	-
+703	none	4	4	28	PASS	-
+704	none	4	5	54	PASS	-
+705	none	4	2	21	PASS	-
+706	none	3	5	59	PASS	-
+707	none	2	2	26	PASS	-
+708	none	3	2	28	PASS	-
+709	none	3	5	75	PASS	-
+710	none	4	4	63	PASS	-
+711	none	3	2	21	PASS	-
+712	none	2	2	14	PASS	-
+713	none	4	2	28	PASS	-
+714	none	3	2	21	PASS	-
+715	none	4	5	66	PASS	-
+716	none	4	5	70	PASS	-
+717	none	3	3	35	PASS	-
+718	none	2	2	14	PASS	-
+719	none	4	2	28	PASS	-
+720	none	4	3	35	PASS	-
+721	none	4	3	33	PASS	-
+722	none	2	4	28	PASS	-
+723	none	2	4	56	PASS	-
+724	none	2	4	49	PASS	-
+725	none	3	2	35	PASS	-
+726	none	4	3	61	PASS	-
+727	none	2	5	70	PASS	-
+728	none	4	4	49	PASS	-
+729	none	4	4	70	PASS	-
+730	none	3	2	14	PASS	-
+731	none	2	5	82	PASS	-
+732	none	4	4	35	PASS	-
+733	none	2	4	63	PASS	-
+734	none	4	3	42	PASS	-
+735	none	4	5	57	PASS	-
+736	none	2	4	50	PASS	-
+737	none	2	2	35	PASS	-
+738	none	4	4	49	PASS	-
+739	none	2	4	49	PASS	-
+740	none	4	2	28	PASS	-
+741	none	2	3	35	PASS	-
+742	none	4	3	49	PASS	-
+743	none	3	3	49	PASS	-
+744	none	4	4	68	PASS	-
+745	none	2	3	42	PASS	-
+746	none	4	4	56	PASS	-
+747	none	4	4	61	PASS	-
+748	none	4	3	42	PASS	-
+749	none	3	2	28	PASS	-
+750	none	4	3	35	PASS	-
+751	none	4	5	59	PASS	-
+752	none	3	5	61	PASS	-
+753	none	4	4	73	PASS	-
+754	none	3	3	40	PASS	-
+755	none	3	3	28	PASS	-
+756	none	4	2	21	PASS	-
+757	none	4	4	42	PASS	-
+758	none	3	2	14	PASS	-
+759	none	2	2	28	PASS	-
+760	none	2	2	21	PASS	-
+761	none	4	5	54	PASS	-
+762	none	3	4	45	PASS	-
+763	none	4	2	21	PASS	-
+764	none	2	3	28	PASS	-
+765	none	3	5	49	PASS	-
+766	none	2	2	35	PASS	-
+767	none	3	4	42	PASS	-
+768	none	2	3	28	PASS	-
+769	none	4	2	28	PASS	-
+770	none	2	5	77	PASS	-
+771	none	4	4	40	PASS	-
+772	none	3	3	42	PASS	-
+773	none	4	4	42	PASS	-
+774	none	4	3	28	PASS	-
+775	none	2	4	63	PASS	-
+776	none	4	2	21	PASS	-
+777	none	4	4	66	PASS	-
+778	none	2	2	42	PASS	-
+779	none	4	2	28	PASS	-
+780	none	2	2	31	PASS	-
+781	none	4	2	40	PASS	-
+782	none	2	5	58	PASS	-
+783	none	3	5	56	PASS	-
+784	none	2	5	66	PASS	-
+785	none	3	4	45	PASS	-
+786	none	2	3	52	PASS	-
+787	none	4	2	28	PASS	-
+788	none	2	2	21	PASS	-
+789	none	2	4	68	PASS	-
+790	none	4	3	35	PASS	-
+791	none	2	5	70	PASS	-
+792	none	3	3	35	PASS	-
+793	none	4	2	28	PASS	-
+794	none	4	5	56	PASS	-
+795	none	2	5	55	PASS	-
+796	none	2	5	41	PASS	-
+797	none	4	5	54	PASS	-
+798	none	2	3	54	PASS	-
+799	none	4	4	56	PASS	-
+800	none	3	2	28	PASS	-
+801	none	3	5	71	PASS	-
+802	none	4	4	68	PASS	-
+803	none	4	4	70	PASS	-
+804	none	4	2	28	PASS	-
+805	none	3	3	56	PASS	-
+806	none	2	5	70	PASS	-
+807	none	4	5	49	PASS	-
+808	none	3	3	47	PASS	-
+809	none	4	5	70	PASS	-
+810	none	4	4	63	PASS	-
+811	none	3	5	63	PASS	-
+812	none	2	4	56	PASS	-
+813	none	2	3	35	PASS	-
+814	none	2	3	54	PASS	-
+815	none	2	3	56	PASS	-
+816	none	3	5	68	PASS	-
+817	none	4	4	49	PASS	-
+818	none	3	3	42	PASS	-
+819	none	2	3	28	PASS	-
+820	none	2	3	35	PASS	-
+821	none	4	5	49	PASS	-
+822	none	2	2	40	PASS	-
+823	none	4	3	21	PASS	-
+824	none	2	3	43	PASS	-
+825	none	2	2	21	PASS	-
+826	none	4	4	56	PASS	-
+827	none	2	3	42	PASS	-
+828	none	3	2	28	PASS	-
+829	none	4	5	63	PASS	-
+830	none	3	4	75	PASS	-
+831	none	3	3	35	PASS	-
+832	none	2	2	42	PASS	-
+833	none	2	5	68	PASS	-
+834	none	3	2	35	PASS	-
+835	none	3	4	63	PASS	-
+836	none	3	4	75	PASS	-
+837	none	4	5	68	PASS	-
+838	none	3	2	35	PASS	-
+839	none	3	5	63	PASS	-
+840	none	3	2	26	PASS	-
+841	none	4	2	42	PASS	-
+842	none	2	5	84	PASS	-
+843	none	2	2	33	PASS	-
+844	none	2	3	38	PASS	-
+845	none	2	4	47	PASS	-
+846	none	4	4	63	PASS	-
+847	none	3	4	54	PASS	-
+848	none	4	5	77	PASS	-
+849	none	4	5	63	PASS	-
+850	none	2	3	36	PASS	-
+851	none	2	3	42	PASS	-
+852	none	4	4	28	PASS	-
+853	none	3	5	80	PASS	-
+854	none	2	5	49	PASS	-
+855	none	2	4	54	PASS	-
+856	none	3	3	47	PASS	-
+857	none	4	4	49	PASS	-
+858	none	3	3	42	PASS	-
+859	none	3	2	28	PASS	-
+860	none	2	2	26	PASS	-
+861	none	4	3	49	PASS	-
+862	none	4	3	63	PASS	-
+863	none	2	2	14	PASS	-
+864	none	4	5	87	PASS	-
+865	none	3	3	28	PASS	-
+866	none	3	2	21	PASS	-
+867	none	3	3	40	PASS	-
+868	none	4	2	28	PASS	-
+869	none	2	5	54	PASS	-
+870	none	2	2	21	PASS	-
+871	none	2	3	35	PASS	-
+872	none	3	2	35	PASS	-
+873	none	4	5	57	PASS	-
+874	none	3	2	42	PASS	-
+875	none	2	5	84	PASS	-
+876	none	4	4	66	PASS	-
+877	none	3	3	42	PASS	-
+878	none	4	3	49	PASS	-
+879	none	2	2	33	PASS	-
+880	none	2	4	54	PASS	-
+881	none	2	2	35	PASS	-
+882	none	3	5	59	PASS	-
+883	none	3	3	40	PASS	-
+884	none	4	2	21	PASS	-
+885	none	3	5	40	PASS	-
+886	none	4	3	40	PASS	-
+887	none	4	2	42	PASS	-
+888	none	3	2	28	PASS	-
+889	none	3	5	70	PASS	-
+890	none	4	4	63	PASS	-
+891	none	3	4	49	PASS	-
+892	none	3	3	47	PASS	-
+893	none	4	2	33	PASS	-
+894	none	4	4	54	PASS	-
+895	none	4	5	84	PASS	-
+896	none	3	2	33	PASS	-
+897	none	3	4	54	PASS	-
+898	none	4	3	33	PASS	-
+899	none	4	3	35	PASS	-
+900	none	2	5	82	PASS	-
+901	none	2	2	28	PASS	-
+902	none	4	3	40	PASS	-
+903	none	4	3	35	PASS	-
+904	none	4	4	49	PASS	-
+905	none	3	2	28	PASS	-
+906	none	3	2	33	PASS	-
+907	none	2	2	21	PASS	-
+908	none	4	4	47	PASS	-
+909	none	3	5	61	PASS	-
+910	none	3	3	33	PASS	-
+911	none	4	2	35	PASS	-
+912	none	3	5	68	PASS	-
+913	none	3	2	21	PASS	-
+914	none	3	5	59	PASS	-
+915	none	4	2	26	PASS	-
+916	none	2	5	48	PASS	-
+917	none	3	5	75	PASS	-
+918	none	4	2	21	PASS	-
+919	none	3	5	56	PASS	-
+920	none	2	4	63	PASS	-
+921	none	4	3	54	PASS	-
+922	none	4	4	42	PASS	-
+923	none	4	5	82	PASS	-
+924	none	2	5	70	PASS	-
+925	none	4	3	47	PASS	-
+926	none	4	2	35	PASS	-
+927	none	3	2	28	PASS	-
+928	none	2	3	35	PASS	-
+929	none	4	4	70	PASS	-
+930	none	3	4	49	PASS	-
+931	none	4	3	47	PASS	-
+932	none	2	2	14	PASS	-
+933	none	4	5	70	PASS	-
+934	none	3	4	63	PASS	-
+935	none	2	4	40	PASS	-
+936	none	3	4	59	PASS	-
+937	none	2	5	82	PASS	-
+938	none	2	5	84	PASS	-
+939	none	4	2	42	PASS	-
+940	none	3	3	63	PASS	-
+941	none	4	2	28	PASS	-
+942	none	2	3	35	PASS	-
+943	none	2	5	70	PASS	-
+944	none	3	2	35	PASS	-
+945	none	4	4	63	PASS	-
+946	none	4	2	28	PASS	-
+947	none	4	2	28	PASS	-
+948	none	4	3	35	PASS	-
+949	none	3	4	61	PASS	-
+950	none	4	4	56	PASS	-
+951	none	2	5	56	PASS	-
+952	none	3	2	21	PASS	-
+953	none	3	2	42	PASS	-
+954	none	3	2	14	PASS	-
+955	none	2	5	56	PASS	-
+956	none	3	3	35	PASS	-
+957	none	4	3	56	PASS	-
+958	none	2	4	47	PASS	-
+959	none	3	3	33	PASS	-
+960	none	2	2	14	PASS	-
+961	none	4	3	54	PASS	-
+962	none	4	2	14	PASS	-
+963	none	4	2	14	PASS	-
+964	none	3	3	42	PASS	-
+965	none	3	2	35	PASS	-
+966	none	2	3	61	PASS	-
+967	none	2	3	42	PASS	-
+968	none	4	3	63	PASS	-
+969	none	4	2	28	PASS	-
+970	none	3	3	56	PASS	-
+971	none	3	4	56	PASS	-
+972	none	4	2	14	PASS	-
+973	none	2	4	47	PASS	-
+974	none	2	5	77	PASS	-
+975	none	4	2	21	PASS	-
+976	none	2	2	35	PASS	-
+977	none	4	2	28	PASS	-
+978	none	4	5	61	PASS	-
+979	none	2	2	35	PASS	-
+980	none	3	2	42	PASS	-
+981	none	4	5	63	PASS	-
+982	none	3	3	35	PASS	-
+983	none	4	3	54	PASS	-
+984	none	4	3	42	PASS	-
+985	none	2	3	56	PASS	-
+986	none	2	2	14	PASS	-
+987	none	2	4	56	PASS	-
+988	none	3	2	33	PASS	-
+989	none	4	5	66	PASS	-
+990	none	2	2	14	PASS	-
+991	none	3	2	33	PASS	-
+992	none	3	3	28	PASS	-
+993	none	4	4	54	PASS	-
+994	none	2	5	61	PASS	-
+995	none	2	2	35	PASS	-
+996	none	3	2	33	PASS	-
+997	none	2	4	61	PASS	-
+998	none	2	2	35	PASS	-
+999	none	3	2	35	PASS	-
+0	--bug	2	2	16	FAIL	money_not_conserved
+1	--bug	3	5	27	FAIL	money_not_conserved
+2	--bug	2	5	40	FAIL	money_not_conserved
+3	--bug	4	3	20	FAIL	money_not_conserved
+4	--bug	3	2	9	FAIL	money_not_conserved
+5	--bug	2	2	16	PASS	-
+6	--bug	3	2	12	FAIL	money_not_conserved
+7	--bug	3	4	27	FAIL	money_not_conserved
+8	--bug	2	3	8	FAIL	money_not_conserved
+9	--bug	4	3	10	FAIL	money_not_conserved
+10	--bug	4	3	9	FAIL	money_not_conserved
+11	--bug	3	5	27	FAIL	money_not_conserved
+12	--bug	2	3	9	FAIL	money_not_conserved
+13	--bug	3	2	8	FAIL	money_not_conserved
+14	--bug	2	3	18	FAIL	money_not_conserved
+15	--bug	2	2	8	FAIL	money_not_conserved
+16	--bug	2	2	14	FAIL	money_not_conserved
+17	--bug	3	5	14	FAIL	money_not_conserved
+18	--bug	3	4	16	FAIL	money_not_conserved
+19	--bug	2	3	17	FAIL	money_not_conserved
+20	--bug	2	5	14	FAIL	money_not_conserved
+21	--bug	3	4	15	FAIL	money_not_conserved
+22	--bug	2	3	14	FAIL	money_not_conserved
+23	--bug	3	3	13	FAIL	money_not_conserved
+24	--bug	3	2	10	FAIL	money_not_conserved
+25	--bug	4	3	15	FAIL	money_not_conserved
+26	--bug	2	2	8	FAIL	money_not_conserved
+27	--bug	2	3	16	FAIL	money_not_conserved
+28	--bug	3	3	10	FAIL	money_not_conserved
+29	--bug	2	5	29	FAIL	money_not_conserved
+30	--bug	4	2	9	FAIL	money_not_conserved
+31	--bug	2	5	26	FAIL	money_not_conserved
+32	--bug	2	2	12	FAIL	money_not_conserved
+33	--bug	2	3	10	FAIL	money_not_conserved
+34	--bug	3	4	14	FAIL	money_not_conserved
+35	--bug	3	5	26	FAIL	money_not_conserved
+36	--bug	3	3	16	FAIL	money_not_conserved
+37	--bug	4	2	12	PASS	-
+38	--bug	3	4	14	FAIL	money_not_conserved
+39	--bug	4	2	16	FAIL	money_not_conserved
+40	--bug	2	2	16	PASS	-
+41	--bug	3	4	14	FAIL	money_not_conserved
+42	--bug	3	2	16	FAIL	money_not_conserved
+43	--bug	3	3	12	FAIL	money_not_conserved
+44	--bug	2	5	18	FAIL	money_not_conserved
+45	--bug	3	5	20	FAIL	money_not_conserved
+46	--bug	2	2	8	FAIL	money_not_conserved
+47	--bug	3	3	16	FAIL	money_not_conserved
+48	--bug	4	4	14	FAIL	money_not_conserved
+49	--bug	3	5	23	FAIL	money_not_conserved
+50	--bug	4	5	25	FAIL	money_not_conserved
+51	--bug	3	5	12	FAIL	money_not_conserved
+52	--bug	4	5	11	FAIL	money_not_conserved
+53	--bug	2	3	21	FAIL	money_not_conserved
+54	--bug	4	5	18	FAIL	money_not_conserved
+55	--bug	2	5	26	FAIL	money_not_conserved
+56	--bug	2	4	18	FAIL	money_not_conserved
+57	--bug	4	2	20	FAIL	money_not_conserved
+58	--bug	3	2	9	FAIL	money_not_conserved
+59	--bug	2	3	14	FAIL	money_not_conserved
+60	--bug	2	5	26	FAIL	money_not_conserved
+61	--bug	4	3	12	FAIL	money_not_conserved
+62	--bug	4	2	8	FAIL	money_not_conserved
+63	--bug	3	3	12	FAIL	money_not_conserved
+64	--bug	2	2	16	FAIL	money_not_conserved
+65	--bug	2	5	22	FAIL	money_not_conserved
+66	--bug	4	4	18	FAIL	money_not_conserved
+67	--bug	2	5	25	FAIL	money_not_conserved
+68	--bug	4	4	15	FAIL	money_not_conserved
+69	--bug	4	3	11	FAIL	money_not_conserved
+70	--bug	3	5	30	FAIL	money_not_conserved
+71	--bug	3	2	13	FAIL	money_not_conserved
+72	--bug	3	3	21	FAIL	money_not_conserved
+73	--bug	2	3	21	FAIL	money_not_conserved
+74	--bug	3	2	12	PASS	-
+75	--bug	3	3	18	FAIL	money_not_conserved
+76	--bug	3	2	12	FAIL	money_not_conserved
+77	--bug	3	4	20	FAIL	money_not_conserved
+78	--bug	3	2	9	FAIL	money_not_conserved
+79	--bug	2	2	12	FAIL	money_not_conserved
+80	--bug	2	3	13	FAIL	money_not_conserved
+81	--bug	3	2	12	PASS	-
+82	--bug	4	2	16	PASS	-
+83	--bug	2	5	27	FAIL	money_not_conserved
+84	--bug	3	3	16	FAIL	money_not_conserved
+85	--bug	3	5	18	FAIL	money_not_conserved
+86	--bug	2	5	37	FAIL	money_not_conserved
+87	--bug	4	4	13	FAIL	money_not_conserved
+88	--bug	3	2	20	PASS	-
+89	--bug	3	5	21	FAIL	money_not_conserved
+90	--bug	4	5	15	FAIL	money_not_conserved
+91	--bug	4	5	19	FAIL	money_not_conserved
+92	--bug	4	2	20	PASS	-
+93	--bug	3	2	8	PASS	-
+94	--bug	2	4	16	FAIL	money_not_conserved
+95	--bug	2	4	21	FAIL	money_not_conserved
+96	--bug	4	5	18	FAIL	money_not_conserved
+97	--bug	4	5	23	FAIL	money_not_conserved
+98	--bug	3	5	27	FAIL	money_not_conserved
+99	--bug	4	2	12	PASS	-
+100	--bug	3	2	20	FAIL	money_not_conserved
+101	--bug	2	5	17	FAIL	money_not_conserved
+102	--bug	2	3	9	FAIL	money_not_conserved
+103	--bug	3	2	16	PASS	-
+104	--bug	2	4	12	FAIL	money_not_conserved
+105	--bug	2	3	16	FAIL	money_not_conserved
+106	--bug	4	3	9	FAIL	money_not_conserved
+107	--bug	2	5	24	FAIL	money_not_conserved
+108	--bug	2	5	25	FAIL	money_not_conserved
+109	--bug	2	3	10	FAIL	money_not_conserved
+110	--bug	4	2	8	FAIL	money_not_conserved
+111	--bug	4	5	28	FAIL	money_not_conserved
+112	--bug	4	2	8	FAIL	money_not_conserved
+113	--bug	4	4	22	FAIL	money_not_conserved
+114	--bug	4	4	17	FAIL	money_not_conserved
+115	--bug	3	4	31	FAIL	money_not_conserved
+116	--bug	4	2	12	PASS	-
+117	--bug	3	5	28	FAIL	money_not_conserved
+118	--bug	3	2	16	PASS	-
+119	--bug	2	3	12	FAIL	money_not_conserved
+120	--bug	2	2	8	FAIL	money_not_conserved
+121	--bug	3	4	23	FAIL	money_not_conserved
+122	--bug	3	2	8	FAIL	money_not_conserved
+123	--bug	4	2	12	PASS	-
+124	--bug	2	2	10	FAIL	money_not_conserved
+125	--bug	3	3	11	FAIL	money_not_conserved
+126	--bug	4	4	21	FAIL	money_not_conserved
+127	--bug	3	5	26	FAIL	money_not_conserved
+128	--bug	4	2	8	FAIL	money_not_conserved
+129	--bug	2	3	24	FAIL	money_not_conserved
+130	--bug	3	4	15	FAIL	money_not_conserved
+131	--bug	2	3	21	FAIL	money_not_conserved
+132	--bug	2	2	12	FAIL	money_not_conserved
+133	--bug	2	4	9	FAIL	money_not_conserved
+134	--bug	2	5	11	FAIL	money_not_conserved
+135	--bug	2	5	26	FAIL	money_not_conserved
+136	--bug	2	5	26	FAIL	money_not_conserved
+137	--bug	3	4	22	FAIL	money_not_conserved
+138	--bug	4	5	23	FAIL	money_not_conserved
+139	--bug	3	2	8	FAIL	money_not_conserved
+140	--bug	4	2	16	PASS	-
+141	--bug	3	2	12	FAIL	money_not_conserved
+142	--bug	2	2	8	FAIL	money_not_conserved
+143	--bug	2	3	13	FAIL	money_not_conserved
+144	--bug	4	4	19	FAIL	money_not_conserved
+145	--bug	2	5	20	FAIL	money_not_conserved
+146	--bug	4	4	21	FAIL	money_not_conserved
+147	--bug	3	5	9	FAIL	money_not_conserved
+148	--bug	4	2	12	PASS	-
+149	--bug	3	5	18	FAIL	money_not_conserved
+150	--bug	4	5	16	FAIL	money_not_conserved
+151	--bug	3	3	13	FAIL	money_not_conserved
+152	--bug	2	5	14	FAIL	money_not_conserved
+153	--bug	3	5	21	FAIL	money_not_conserved
+154	--bug	4	4	20	FAIL	money_not_conserved
+155	--bug	3	3	16	FAIL	money_not_conserved
+156	--bug	4	2	12	PASS	-
+157	--bug	4	5	14	FAIL	money_not_conserved
+158	--bug	2	2	18	PASS	-
+159	--bug	4	5	17	FAIL	money_not_conserved
+160	--bug	3	4	15	FAIL	money_not_conserved
+161	--bug	2	2	12	FAIL	money_not_conserved
+162	--bug	2	5	11	FAIL	money_not_conserved
+163	--bug	4	4	14	FAIL	money_not_conserved
+164	--bug	2	2	9	FAIL	money_not_conserved
+165	--bug	4	3	10	FAIL	money_not_conserved
+166	--bug	2	3	14	FAIL	money_not_conserved
+167	--bug	4	3	12	FAIL	money_not_conserved
+168	--bug	3	3	12	FAIL	money_not_conserved
+169	--bug	3	4	16	FAIL	money_not_conserved
+170	--bug	2	5	35	FAIL	money_not_conserved
+171	--bug	4	2	12	PASS	-
+172	--bug	3	4	17	FAIL	money_not_conserved
+173	--bug	2	3	10	FAIL	money_not_conserved
+174	--bug	3	5	20	FAIL	money_not_conserved
+175	--bug	2	3	10	FAIL	money_not_conserved
+176	--bug	2	5	20	FAIL	money_not_conserved
+177	--bug	4	5	20	FAIL	money_not_conserved
+178	--bug	2	5	12	FAIL	money_not_conserved
+179	--bug	4	3	22	FAIL	money_not_conserved
+180	--bug	2	4	14	FAIL	money_not_conserved
+181	--bug	3	3	14	FAIL	money_not_conserved
+182	--bug	4	2	10	FAIL	money_not_conserved
+183	--bug	3	2	12	FAIL	money_not_conserved
+184	--bug	2	3	24	FAIL	money_not_conserved
+185	--bug	3	2	16	FAIL	money_not_conserved
+186	--bug	3	3	10	FAIL	money_not_conserved
+187	--bug	4	5	24	FAIL	money_not_conserved
+188	--bug	3	5	11	FAIL	money_not_conserved
+189	--bug	2	5	13	FAIL	money_not_conserved
+190	--bug	2	3	10	FAIL	money_not_conserved
+191	--bug	3	5	12	FAIL	money_not_conserved
+192	--bug	3	5	14	FAIL	money_not_conserved
+193	--bug	3	2	8	FAIL	money_not_conserved
+194	--bug	2	4	18	FAIL	money_not_conserved
+195	--bug	3	4	11	FAIL	money_not_conserved
+196	--bug	2	5	10	FAIL	money_not_conserved
+197	--bug	2	4	14	FAIL	money_not_conserved
+198	--bug	3	3	19	FAIL	money_not_conserved
+199	--bug	3	3	20	FAIL	money_not_conserved
+200	--bug	4	3	12	FAIL	money_not_conserved
+201	--bug	2	2	16	FAIL	money_not_conserved
+202	--bug	3	3	16	FAIL	money_not_conserved
+203	--bug	4	4	16	FAIL	money_not_conserved
+204	--bug	4	2	8	FAIL	money_not_conserved
+205	--bug	4	5	17	FAIL	money_not_conserved
+206	--bug	4	3	13	FAIL	money_not_conserved
+207	--bug	3	2	8	FAIL	money_not_conserved
+208	--bug	3	2	9	FAIL	money_not_conserved
+209	--bug	2	4	21	FAIL	money_not_conserved
+210	--bug	3	3	16	FAIL	money_not_conserved
+211	--bug	3	3	10	FAIL	money_not_conserved
+212	--bug	4	4	22	FAIL	money_not_conserved
+213	--bug	2	3	10	FAIL	money_not_conserved
+214	--bug	2	3	9	FAIL	money_not_conserved
+215	--bug	2	5	16	FAIL	money_not_conserved
+216	--bug	2	3	14	FAIL	money_not_conserved
+217	--bug	3	5	19	FAIL	money_not_conserved
+218	--bug	4	5	25	FAIL	money_not_conserved
+219	--bug	3	3	12	FAIL	money_not_conserved
+220	--bug	4	3	11	FAIL	money_not_conserved
+221	--bug	4	4	13	FAIL	money_not_conserved
+222	--bug	4	2	12	FAIL	money_not_conserved
+223	--bug	4	4	17	FAIL	money_not_conserved
+224	--bug	4	3	9	FAIL	money_not_conserved
+225	--bug	4	3	10	FAIL	money_not_conserved
+226	--bug	2	5	10	FAIL	money_not_conserved
+227	--bug	2	4	10	FAIL	money_not_conserved
+228	--bug	4	5	25	FAIL	money_not_conserved
+229	--bug	4	3	22	FAIL	money_not_conserved
+230	--bug	4	4	17	FAIL	money_not_conserved
+231	--bug	4	3	16	FAIL	money_not_conserved
+232	--bug	3	3	14	FAIL	money_not_conserved
+233	--bug	2	5	16	FAIL	money_not_conserved
+234	--bug	3	4	16	FAIL	money_not_conserved
+235	--bug	3	4	11	FAIL	money_not_conserved
+236	--bug	3	5	15	FAIL	money_not_conserved
+237	--bug	4	4	18	FAIL	money_not_conserved
+238	--bug	2	3	10	FAIL	money_not_conserved
+239	--bug	4	4	14	FAIL	money_not_conserved
+240	--bug	2	2	16	PASS	-
+241	--bug	3	4	22	FAIL	money_not_conserved
+242	--bug	3	5	13	FAIL	money_not_conserved
+243	--bug	4	2	12	PASS	-
+244	--bug	3	3	9	FAIL	money_not_conserved
+245	--bug	3	4	18	FAIL	money_not_conserved
+246	--bug	3	5	26	FAIL	money_not_conserved
+247	--bug	4	2	8	FAIL	money_not_conserved
+248	--bug	3	4	17	FAIL	money_not_conserved
+249	--bug	2	2	8	FAIL	money_not_conserved
+250	--bug	3	5	22	FAIL	money_not_conserved
+251	--bug	4	3	8	FAIL	money_not_conserved
+252	--bug	3	4	18	FAIL	money_not_conserved
+253	--bug	3	5	22	FAIL	money_not_conserved
+254	--bug	3	2	12	FAIL	money_not_conserved
+255	--bug	4	2	8	FAIL	money_not_conserved
+256	--bug	2	3	12	FAIL	money_not_conserved
+257	--bug	2	5	27	FAIL	money_not_conserved
+258	--bug	3	4	11	FAIL	money_not_conserved
+259	--bug	4	3	20	FAIL	money_not_conserved
+260	--bug	2	5	36	FAIL	money_not_conserved
+261	--bug	2	5	10	FAIL	money_not_conserved
+262	--bug	3	2	12	FAIL	money_not_conserved
+263	--bug	4	5	25	FAIL	money_not_conserved
+264	--bug	2	4	11	FAIL	money_not_conserved
+265	--bug	3	5	17	FAIL	money_not_conserved
+266	--bug	3	3	9	FAIL	money_not_conserved
+267	--bug	3	5	16	FAIL	money_not_conserved
+268	--bug	2	2	10	FAIL	money_not_conserved
+269	--bug	3	3	10	FAIL	money_not_conserved
+270	--bug	2	5	18	FAIL	money_not_conserved
+271	--bug	4	3	10	FAIL	money_not_conserved
+272	--bug	3	4	24	FAIL	money_not_conserved
+273	--bug	2	5	28	FAIL	money_not_conserved
+274	--bug	3	5	28	FAIL	money_not_conserved
+275	--bug	3	4	14	FAIL	money_not_conserved
+276	--bug	2	4	22	FAIL	money_not_conserved
+277	--bug	2	2	12	FAIL	money_not_conserved
+278	--bug	3	4	25	FAIL	money_not_conserved
+279	--bug	2	3	16	FAIL	money_not_conserved
+280	--bug	2	2	12	FAIL	money_not_conserved
+281	--bug	4	3	20	FAIL	money_not_conserved
+282	--bug	2	2	8	FAIL	money_not_conserved
+283	--bug	4	4	13	FAIL	money_not_conserved
+284	--bug	4	3	13	FAIL	money_not_conserved
+285	--bug	4	3	14	FAIL	money_not_conserved
+286	--bug	2	4	21	FAIL	money_not_conserved
+287	--bug	4	5	16	FAIL	money_not_conserved
+288	--bug	3	5	24	FAIL	money_not_conserved
+289	--bug	2	4	12	FAIL	money_not_conserved
+290	--bug	4	2	8	FAIL	money_not_conserved
+291	--bug	3	4	30	FAIL	money_not_conserved
+292	--bug	2	5	24	FAIL	money_not_conserved
+293	--bug	2	4	12	FAIL	money_not_conserved
+294	--bug	3	3	8	FAIL	money_not_conserved
+295	--bug	2	2	9	FAIL	money_not_conserved
+296	--bug	2	2	16	PASS	-
+297	--bug	3	2	16	FAIL	money_not_conserved
+298	--bug	3	4	18	FAIL	money_not_conserved
+299	--bug	3	5	16	FAIL	money_not_conserved
+300	--bug	3	3	14	FAIL	money_not_conserved
+301	--bug	4	3	20	FAIL	money_not_conserved
+302	--bug	4	3	11	FAIL	money_not_conserved
+303	--bug	3	4	24	FAIL	money_not_conserved
+304	--bug	4	3	15	FAIL	money_not_conserved
+305	--bug	3	4	9	FAIL	money_not_conserved
+306	--bug	2	2	8	FAIL	money_not_conserved
+307	--bug	2	3	18	PASS	-
+308	--bug	3	5	20	FAIL	money_not_conserved
+309	--bug	4	3	10	FAIL	money_not_conserved
+310	--bug	3	2	10	FAIL	money_not_conserved
+311	--bug	4	5	24	FAIL	money_not_conserved
+312	--bug	3	3	9	FAIL	money_not_conserved
+313	--bug	4	3	18	FAIL	money_not_conserved
+314	--bug	3	2	8	PASS	-
+315	--bug	4	4	13	FAIL	money_not_conserved
+316	--bug	3	3	10	FAIL	money_not_conserved
+317	--bug	4	5	43	FAIL	money_not_conserved
+318	--bug	3	4	11	FAIL	money_not_conserved
+319	--bug	2	2	8	FAIL	money_not_conserved
+320	--bug	3	4	10	FAIL	money_not_conserved
+321	--bug	3	3	12	FAIL	money_not_conserved
+322	--bug	2	3	14	FAIL	money_not_conserved
+323	--bug	4	4	15	FAIL	money_not_conserved
+324	--bug	2	2	8	PASS	-
+325	--bug	3	2	16	FAIL	money_not_conserved
+326	--bug	2	3	17	FAIL	money_not_conserved
+327	--bug	4	2	12	FAIL	money_not_conserved
+328	--bug	3	2	16	FAIL	money_not_conserved
+329	--bug	4	3	12	FAIL	money_not_conserved
+330	--bug	2	2	10	FAIL	money_not_conserved
+331	--bug	4	3	17	FAIL	money_not_conserved
+332	--bug	2	2	10	PASS	-
+333	--bug	2	4	14	FAIL	money_not_conserved
+334	--bug	3	2	8	FAIL	money_not_conserved
+335	--bug	2	5	25	FAIL	money_not_conserved
+336	--bug	3	3	12	FAIL	money_not_conserved
+337	--bug	2	3	13	FAIL	money_not_conserved
+338	--bug	3	2	12	FAIL	money_not_conserved
+339	--bug	4	3	18	FAIL	money_not_conserved
+340	--bug	2	3	15	FAIL	money_not_conserved
+341	--bug	3	3	10	FAIL	money_not_conserved
+342	--bug	2	5	32	FAIL	money_not_conserved
+343	--bug	2	5	23	FAIL	money_not_conserved
+344	--bug	2	5	25	FAIL	money_not_conserved
+345	--bug	2	3	16	FAIL	money_not_conserved
+346	--bug	2	2	10	FAIL	money_not_conserved
+347	--bug	3	2	8	FAIL	money_not_conserved
+348	--bug	2	3	17	FAIL	money_not_conserved
+349	--bug	3	4	16	FAIL	money_not_conserved
+350	--bug	4	2	16	FAIL	money_not_conserved
+351	--bug	4	3	10	FAIL	money_not_conserved
+352	--bug	3	5	19	FAIL	money_not_conserved
+353	--bug	4	3	10	FAIL	money_not_conserved
+354	--bug	2	3	13	FAIL	money_not_conserved
+355	--bug	3	3	14	FAIL	money_not_conserved
+356	--bug	2	5	16	FAIL	money_not_conserved
+357	--bug	2	5	13	FAIL	money_not_conserved
+358	--bug	2	3	9	FAIL	money_not_conserved
+359	--bug	3	5	35	FAIL	money_not_conserved
+360	--bug	2	5	10	FAIL	money_not_conserved
+361	--bug	3	2	8	FAIL	money_not_conserved
+362	--bug	3	5	17	FAIL	money_not_conserved
+363	--bug	3	4	8	FAIL	money_not_conserved
+364	--bug	4	2	8	PASS	-
+365	--bug	2	2	12	FAIL	money_not_conserved
+366	--bug	3	3	9	FAIL	money_not_conserved
+367	--bug	3	5	17	FAIL	money_not_conserved
+368	--bug	2	3	18	FAIL	money_not_conserved
+369	--bug	3	2	8	PASS	-
+370	--bug	3	4	32	FAIL	money_not_conserved
+371	--bug	3	3	16	FAIL	money_not_conserved
+372	--bug	3	3	12	FAIL	money_not_conserved
+373	--bug	3	4	14	FAIL	money_not_conserved
+374	--bug	4	5	34	FAIL	money_not_conserved
+375	--bug	4	3	18	FAIL	money_not_conserved
+376	--bug	4	5	18	FAIL	money_not_conserved
+377	--bug	3	2	8	FAIL	money_not_conserved
+378	--bug	4	2	10	FAIL	money_not_conserved
+379	--bug	3	5	15	FAIL	money_not_conserved
+380	--bug	3	4	22	FAIL	money_not_conserved
+381	--bug	3	5	17	FAIL	money_not_conserved
+382	--bug	4	3	13	FAIL	money_not_conserved
+383	--bug	2	3	10	FAIL	money_not_conserved
+384	--bug	3	4	22	FAIL	money_not_conserved
+385	--bug	4	5	13	FAIL	money_not_conserved
+386	--bug	3	4	23	FAIL	money_not_conserved
+387	--bug	4	4	13	FAIL	money_not_conserved
+388	--bug	4	5	18	FAIL	money_not_conserved
+389	--bug	3	3	12	FAIL	money_not_conserved
+390	--bug	2	4	14	FAIL	money_not_conserved
+391	--bug	3	2	8	FAIL	money_not_conserved
+392	--bug	3	3	16	FAIL	money_not_conserved
+393	--bug	4	3	22	FAIL	money_not_conserved
+394	--bug	2	5	15	FAIL	money_not_conserved
+395	--bug	4	3	17	FAIL	money_not_conserved
+396	--bug	2	2	8	FAIL	money_not_conserved
+397	--bug	3	2	10	FAIL	money_not_conserved
+398	--bug	3	2	14	FAIL	money_not_conserved
+399	--bug	3	4	18	FAIL	money_not_conserved
+400	--bug	2	3	21	FAIL	money_not_conserved
+401	--bug	3	5	15	FAIL	money_not_conserved
+402	--bug	4	2	8	FAIL	money_not_conserved
+403	--bug	4	5	26	FAIL	money_not_conserved
+404	--bug	3	3	9	FAIL	money_not_conserved
+405	--bug	3	5	16	FAIL	money_not_conserved
+406	--bug	4	3	25	FAIL	money_not_conserved
+407	--bug	3	3	17	FAIL	money_not_conserved
+408	--bug	2	5	22	FAIL	money_not_conserved
+409	--bug	3	2	9	FAIL	money_not_conserved
+410	--bug	4	5	26	FAIL	money_not_conserved
+411	--bug	2	3	10	FAIL	money_not_conserved
+412	--bug	4	5	22	FAIL	money_not_conserved
+413	--bug	4	4	13	FAIL	money_not_conserved
+414	--bug	2	5	44	FAIL	money_not_conserved
+415	--bug	4	3	17	FAIL	money_not_conserved
+416	--bug	2	3	28	FAIL	money_not_conserved
+417	--bug	2	2	16	PASS	-
+418	--bug	2	3	14	FAIL	money_not_conserved
+419	--bug	4	3	24	FAIL	money_not_conserved
+420	--bug	2	3	12	FAIL	money_not_conserved
+421	--bug	3	2	9	FAIL	money_not_conserved
+422	--bug	4	3	24	FAIL	money_not_conserved
+423	--bug	4	4	14	FAIL	money_not_conserved
+424	--bug	4	5	14	FAIL	money_not_conserved
+425	--bug	4	3	10	FAIL	money_not_conserved
+426	--bug	3	3	13	FAIL	money_not_conserved
+427	--bug	4	5	10	FAIL	money_not_conserved
+428	--bug	4	5	17	FAIL	money_not_conserved
+429	--bug	2	4	10	FAIL	money_not_conserved
+430	--bug	4	2	12	FAIL	money_not_conserved
+431	--bug	4	4	26	FAIL	money_not_conserved
+432	--bug	3	5	15	FAIL	money_not_conserved
+433	--bug	3	5	15	FAIL	money_not_conserved
+434	--bug	2	4	14	FAIL	money_not_conserved
+435	--bug	2	5	30	FAIL	money_not_conserved
+436	--bug	3	2	12	PASS	-
+437	--bug	2	5	16	FAIL	money_not_conserved
+438	--bug	4	5	24	FAIL	money_not_conserved
+439	--bug	4	2	16	FAIL	money_not_conserved
+440	--bug	4	4	18	FAIL	money_not_conserved
+441	--bug	4	4	10	FAIL	money_not_conserved
+442	--bug	4	3	14	FAIL	money_not_conserved
+443	--bug	3	2	9	FAIL	money_not_conserved
+444	--bug	3	4	16	FAIL	money_not_conserved
+445	--bug	3	4	20	FAIL	money_not_conserved
+446	--bug	3	2	10	FAIL	money_not_conserved
+447	--bug	4	3	10	FAIL	money_not_conserved
+448	--bug	3	3	18	FAIL	money_not_conserved
+449	--bug	4	3	12	PASS	-
+450	--bug	4	5	24	FAIL	money_not_conserved
+451	--bug	2	3	13	FAIL	money_not_conserved
+452	--bug	3	2	17	FAIL	money_not_conserved
+453	--bug	4	4	13	FAIL	money_not_conserved
+454	--bug	4	3	16	FAIL	money_not_conserved
+455	--bug	4	4	36	FAIL	money_not_conserved
+456	--bug	4	3	12	FAIL	money_not_conserved
+457	--bug	2	5	19	FAIL	money_not_conserved
+458	--bug	4	3	10	FAIL	money_not_conserved
+459	--bug	3	4	10	FAIL	money_not_conserved
+460	--bug	2	2	8	FAIL	money_not_conserved
+461	--bug	3	2	8	FAIL	money_not_conserved
+462	--bug	3	3	30	PASS	-
+463	--bug	3	2	10	FAIL	money_not_conserved
+464	--bug	2	3	10	FAIL	money_not_conserved
+465	--bug	2	4	24	FAIL	money_not_conserved
+466	--bug	3	4	17	FAIL	money_not_conserved
+467	--bug	2	5	18	FAIL	money_not_conserved
+468	--bug	2	5	18	FAIL	money_not_conserved
+469	--bug	3	5	25	FAIL	money_not_conserved
+470	--bug	3	3	12	FAIL	money_not_conserved
+471	--bug	4	2	16	FAIL	money_not_conserved
+472	--bug	2	5	32	FAIL	money_not_conserved
+473	--bug	3	2	8	FAIL	money_not_conserved
+474	--bug	4	2	12	FAIL	money_not_conserved
+475	--bug	3	3	12	FAIL	money_not_conserved
+476	--bug	2	4	24	FAIL	money_not_conserved
+477	--bug	2	5	18	FAIL	money_not_conserved
+478	--bug	2	4	12	FAIL	money_not_conserved
+479	--bug	3	2	16	FAIL	money_not_conserved
+480	--bug	4	5	19	FAIL	money_not_conserved
+481	--bug	2	4	23	FAIL	money_not_conserved
+482	--bug	4	2	16	PASS	-
+483	--bug	3	4	16	FAIL	money_not_conserved
+484	--bug	2	4	11	FAIL	money_not_conserved
+485	--bug	2	2	12	PASS	-
+486	--bug	2	4	21	FAIL	money_not_conserved
+487	--bug	3	3	14	FAIL	money_not_conserved
+488	--bug	4	4	21	FAIL	money_not_conserved
+489	--bug	2	4	16	FAIL	money_not_conserved
+490	--bug	3	3	12	FAIL	money_not_conserved
+491	--bug	3	3	10	FAIL	money_not_conserved
+492	--bug	2	4	11	FAIL	money_not_conserved
+493	--bug	4	2	16	FAIL	money_not_conserved
+494	--bug	4	2	9	FAIL	money_not_conserved
+495	--bug	2	2	8	FAIL	money_not_conserved
+496	--bug	3	3	16	FAIL	money_not_conserved
+497	--bug	4	4	24	FAIL	money_not_conserved
+498	--bug	2	2	12	FAIL	money_not_conserved
+499	--bug	2	4	17	FAIL	money_not_conserved
+500	--bug	3	2	12	FAIL	money_not_conserved
+501	--bug	2	5	12	FAIL	money_not_conserved
+502	--bug	2	4	18	FAIL	money_not_conserved
+503	--bug	4	4	12	FAIL	money_not_conserved
+504	--bug	2	5	13	FAIL	money_not_conserved
+505	--bug	3	4	15	FAIL	money_not_conserved
+506	--bug	4	3	14	FAIL	money_not_conserved
+507	--bug	3	4	11	FAIL	money_not_conserved
+508	--bug	2	4	10	FAIL	money_not_conserved
+509	--bug	3	2	10	FAIL	money_not_conserved
+510	--bug	3	2	9	FAIL	money_not_conserved
+511	--bug	3	4	16	FAIL	money_not_conserved
+512	--bug	4	4	17	FAIL	money_not_conserved
+513	--bug	4	4	22	FAIL	money_not_conserved
+514	--bug	2	2	9	FAIL	money_not_conserved
+515	--bug	2	5	21	FAIL	money_not_conserved
+516	--bug	4	5	20	FAIL	money_not_conserved
+517	--bug	3	3	15	FAIL	money_not_conserved
+518	--bug	4	4	14	FAIL	money_not_conserved
+519	--bug	4	4	17	FAIL	money_not_conserved
+520	--bug	3	3	10	FAIL	money_not_conserved
+521	--bug	4	4	19	FAIL	money_not_conserved
+522	--bug	2	2	8	FAIL	money_not_conserved
+523	--bug	2	4	20	FAIL	money_not_conserved
+524	--bug	4	2	12	FAIL	money_not_conserved
+525	--bug	3	2	9	FAIL	money_not_conserved
+526	--bug	4	2	12	PASS	-
+527	--bug	3	2	12	PASS	-
+528	--bug	2	4	20	FAIL	money_not_conserved
+529	--bug	3	5	34	FAIL	money_not_conserved
+530	--bug	2	4	14	FAIL	money_not_conserved
+531	--bug	3	4	28	FAIL	money_not_conserved
+532	--bug	2	2	8	FAIL	money_not_conserved
+533	--bug	4	4	17	FAIL	money_not_conserved
+534	--bug	2	5	23	FAIL	money_not_conserved
+535	--bug	2	5	21	FAIL	money_not_conserved
+536	--bug	3	2	16	PASS	-
+537	--bug	2	3	9	FAIL	money_not_conserved
+538	--bug	3	3	12	FAIL	money_not_conserved
+539	--bug	4	5	11	FAIL	money_not_conserved
+540	--bug	2	3	12	FAIL	money_not_conserved
+541	--bug	3	5	21	FAIL	money_not_conserved
+542	--bug	4	2	8	FAIL	money_not_conserved
+543	--bug	4	3	12	FAIL	money_not_conserved
+544	--bug	2	2	12	FAIL	money_not_conserved
+545	--bug	2	4	14	FAIL	money_not_conserved
+546	--bug	2	2	14	PASS	-
+547	--bug	4	4	16	FAIL	money_not_conserved
+548	--bug	4	4	18	FAIL	money_not_conserved
+549	--bug	4	5	22	FAIL	money_not_conserved
+550	--bug	3	3	13	FAIL	money_not_conserved
+551	--bug	4	3	14	FAIL	money_not_conserved
+552	--bug	2	3	8	FAIL	money_not_conserved
+553	--bug	4	5	12	FAIL	money_not_conserved
+554	--bug	3	5	22	FAIL	money_not_conserved
+555	--bug	4	5	28	FAIL	money_not_conserved
+556	--bug	4	2	9	FAIL	money_not_conserved
+557	--bug	4	2	8	FAIL	money_not_conserved
+558	--bug	3	5	23	FAIL	money_not_conserved
+559	--bug	2	3	9	FAIL	money_not_conserved
+560	--bug	4	5	26	FAIL	money_not_conserved
+561	--bug	2	4	8	FAIL	money_not_conserved
+562	--bug	4	4	12	FAIL	money_not_conserved
+563	--bug	3	5	10	FAIL	money_not_conserved
+564	--bug	2	3	13	FAIL	money_not_conserved
+565	--bug	4	4	19	FAIL	money_not_conserved
+566	--bug	3	4	20	FAIL	money_not_conserved
+567	--bug	3	5	14	FAIL	money_not_conserved
+568	--bug	2	3	10	FAIL	money_not_conserved
+569	--bug	4	2	8	FAIL	money_not_conserved
+570	--bug	3	4	12	FAIL	money_not_conserved
+571	--bug	4	5	26	FAIL	money_not_conserved
+572	--bug	3	4	11	FAIL	money_not_conserved
+573	--bug	4	2	8	PASS	-
+574	--bug	2	3	9	FAIL	money_not_conserved
+575	--bug	4	4	15	FAIL	money_not_conserved
+576	--bug	2	4	29	FAIL	money_not_conserved
+577	--bug	4	2	12	FAIL	money_not_conserved
+578	--bug	4	2	12	PASS	-
+579	--bug	3	2	8	FAIL	money_not_conserved
+580	--bug	4	5	13	FAIL	money_not_conserved
+581	--bug	4	3	11	FAIL	money_not_conserved
+582	--bug	3	5	22	FAIL	money_not_conserved
+583	--bug	3	3	8	FAIL	money_not_conserved
+584	--bug	3	4	23	FAIL	money_not_conserved
+585	--bug	3	5	13	FAIL	money_not_conserved
+586	--bug	4	4	14	FAIL	money_not_conserved
+587	--bug	3	3	12	FAIL	money_not_conserved
+588	--bug	2	3	13	FAIL	money_not_conserved
+589	--bug	2	5	15	FAIL	money_not_conserved
+590	--bug	2	2	9	FAIL	money_not_conserved
+591	--bug	2	5	13	FAIL	money_not_conserved
+592	--bug	4	4	14	FAIL	money_not_conserved
+593	--bug	2	4	11	FAIL	money_not_conserved
+594	--bug	4	4	18	FAIL	money_not_conserved
+595	--bug	2	3	14	FAIL	money_not_conserved
+596	--bug	4	3	12	FAIL	money_not_conserved
+597	--bug	2	4	22	FAIL	money_not_conserved
+598	--bug	3	3	16	FAIL	money_not_conserved
+599	--bug	2	4	19	FAIL	money_not_conserved
+600	--bug	2	3	16	FAIL	money_not_conserved
+601	--bug	2	3	10	FAIL	money_not_conserved
+602	--bug	3	5	28	FAIL	money_not_conserved
+603	--bug	2	5	14	FAIL	money_not_conserved
+604	--bug	3	2	8	FAIL	money_not_conserved
+605	--bug	3	4	10	FAIL	money_not_conserved
+606	--bug	3	2	8	FAIL	money_not_conserved
+607	--bug	3	5	16	FAIL	money_not_conserved
+608	--bug	2	4	16	FAIL	money_not_conserved
+609	--bug	3	5	10	FAIL	money_not_conserved
+610	--bug	3	2	8	FAIL	money_not_conserved
+611	--bug	4	4	18	FAIL	money_not_conserved
+612	--bug	4	3	18	FAIL	money_not_conserved
+613	--bug	2	3	12	FAIL	money_not_conserved
+614	--bug	4	2	8	FAIL	money_not_conserved
+615	--bug	3	4	18	FAIL	money_not_conserved
+616	--bug	4	3	8	FAIL	money_not_conserved
+617	--bug	2	5	15	FAIL	money_not_conserved
+618	--bug	3	4	13	FAIL	money_not_conserved
+619	--bug	4	5	24	FAIL	money_not_conserved
+620	--bug	2	5	25	FAIL	money_not_conserved
+621	--bug	2	5	24	FAIL	money_not_conserved
+622	--bug	4	4	24	FAIL	money_not_conserved
+623	--bug	3	2	12	FAIL	money_not_conserved
+624	--bug	4	2	8	FAIL	money_not_conserved
+625	--bug	3	4	12	FAIL	money_not_conserved
+626	--bug	4	3	12	FAIL	money_not_conserved
+627	--bug	2	4	21	FAIL	money_not_conserved
+628	--bug	3	5	17	FAIL	money_not_conserved
+629	--bug	3	3	10	FAIL	money_not_conserved
+630	--bug	3	5	23	FAIL	money_not_conserved
+631	--bug	3	4	24	FAIL	money_not_conserved
+632	--bug	4	3	14	FAIL	money_not_conserved
+633	--bug	4	2	8	FAIL	money_not_conserved
+634	--bug	3	3	10	FAIL	money_not_conserved
+635	--bug	4	2	16	PASS	-
+636	--bug	3	3	9	FAIL	money_not_conserved
+637	--bug	3	5	13	FAIL	money_not_conserved
+638	--bug	3	4	22	PASS	-
+639	--bug	4	2	16	FAIL	money_not_conserved
+640	--bug	2	2	8	FAIL	money_not_conserved
+641	--bug	2	3	12	FAIL	money_not_conserved
+642	--bug	3	3	14	FAIL	money_not_conserved
+643	--bug	4	5	35	FAIL	money_not_conserved
+644	--bug	3	5	13	FAIL	money_not_conserved
+645	--bug	2	5	23	FAIL	money_not_conserved
+646	--bug	2	4	13	FAIL	money_not_conserved
+647	--bug	4	2	16	FAIL	money_not_conserved
+648	--bug	3	5	27	FAIL	money_not_conserved
+649	--bug	4	5	17	FAIL	money_not_conserved
+650	--bug	3	2	8	FAIL	money_not_conserved
+651	--bug	2	5	30	FAIL	money_not_conserved
+652	--bug	3	3	10	FAIL	money_not_conserved
+653	--bug	4	2	8	FAIL	money_not_conserved
+654	--bug	4	5	18	FAIL	money_not_conserved
+655	--bug	3	3	20	FAIL	money_not_conserved
+656	--bug	2	5	15	FAIL	money_not_conserved
+657	--bug	2	2	8	FAIL	money_not_conserved
+658	--bug	4	5	13	FAIL	money_not_conserved
+659	--bug	2	4	17	FAIL	money_not_conserved
+660	--bug	3	5	30	FAIL	money_not_conserved
+661	--bug	3	4	26	FAIL	money_not_conserved
+662	--bug	2	4	16	FAIL	money_not_conserved
+663	--bug	2	4	22	FAIL	money_not_conserved
+664	--bug	2	5	18	FAIL	money_not_conserved
+665	--bug	3	3	16	FAIL	money_not_conserved
+666	--bug	2	4	13	FAIL	money_not_conserved
+667	--bug	4	2	8	PASS	-
+668	--bug	4	4	9	FAIL	money_not_conserved
+669	--bug	3	5	22	FAIL	money_not_conserved
+670	--bug	3	2	16	PASS	-
+671	--bug	3	4	10	FAIL	money_not_conserved
+672	--bug	4	2	8	FAIL	money_not_conserved
+673	--bug	3	2	18	FAIL	money_not_conserved
+674	--bug	4	4	21	FAIL	money_not_conserved
+675	--bug	2	5	22	FAIL	money_not_conserved
+676	--bug	4	2	8	PASS	-
+677	--bug	4	4	19	FAIL	money_not_conserved
+678	--bug	2	3	16	FAIL	money_not_conserved
+679	--bug	4	4	15	FAIL	money_not_conserved
+680	--bug	3	5	17	FAIL	money_not_conserved
+681	--bug	4	2	12	PASS	-
+682	--bug	2	5	30	FAIL	money_not_conserved
+683	--bug	4	4	12	FAIL	money_not_conserved
+684	--bug	4	2	8	PASS	-
+685	--bug	2	5	9	FAIL	money_not_conserved
+686	--bug	4	4	14	FAIL	money_not_conserved
+687	--bug	3	5	30	FAIL	money_not_conserved
+688	--bug	4	2	12	PASS	-
+689	--bug	4	5	25	FAIL	money_not_conserved
+690	--bug	4	2	12	PASS	-
+691	--bug	2	5	33	FAIL	money_not_conserved
+692	--bug	3	5	11	FAIL	money_not_conserved
+693	--bug	3	4	22	FAIL	money_not_conserved
+694	--bug	2	3	12	FAIL	money_not_conserved
+695	--bug	3	3	13	FAIL	money_not_conserved
+696	--bug	3	5	10	FAIL	money_not_conserved
+697	--bug	2	5	13	FAIL	money_not_conserved
+698	--bug	3	3	10	FAIL	money_not_conserved
+699	--bug	2	2	8	FAIL	money_not_conserved
+700	--bug	4	4	13	FAIL	money_not_conserved
+701	--bug	3	5	33	FAIL	money_not_conserved
+702	--bug	4	2	8	FAIL	money_not_conserved
+703	--bug	4	4	16	FAIL	money_not_conserved
+704	--bug	4	5	20	FAIL	money_not_conserved
+705	--bug	4	2	12	FAIL	money_not_conserved
+706	--bug	3	5	20	FAIL	money_not_conserved
+707	--bug	2	2	10	FAIL	money_not_conserved
+708	--bug	3	2	8	FAIL	money_not_conserved
+709	--bug	3	5	26	FAIL	money_not_conserved
+710	--bug	4	4	19	FAIL	money_not_conserved
+711	--bug	3	2	8	FAIL	money_not_conserved
+712	--bug	2	2	8	FAIL	money_not_conserved
+713	--bug	4	2	16	FAIL	money_not_conserved
+714	--bug	3	2	12	PASS	-
+715	--bug	4	5	30	FAIL	money_not_conserved
+716	--bug	4	5	9	FAIL	money_not_conserved
+717	--bug	3	3	13	FAIL	money_not_conserved
+718	--bug	2	2	8	FAIL	money_not_conserved
+719	--bug	4	2	16	PASS	-
+720	--bug	4	3	13	FAIL	money_not_conserved
+721	--bug	4	3	10	FAIL	money_not_conserved
+722	--bug	2	4	14	FAIL	money_not_conserved
+723	--bug	2	4	30	FAIL	money_not_conserved
+724	--bug	2	4	15	FAIL	money_not_conserved
+725	--bug	3	2	12	FAIL	money_not_conserved
+726	--bug	4	3	10	FAIL	money_not_conserved
+727	--bug	2	5	22	FAIL	money_not_conserved
+728	--bug	4	4	15	FAIL	money_not_conserved
+729	--bug	4	4	18	FAIL	money_not_conserved
+730	--bug	3	2	8	FAIL	money_not_conserved
+731	--bug	2	5	27	FAIL	money_not_conserved
+732	--bug	4	4	20	FAIL	money_not_conserved
+733	--bug	2	4	21	FAIL	money_not_conserved
+734	--bug	4	3	12	FAIL	money_not_conserved
+735	--bug	4	5	20	FAIL	money_not_conserved
+736	--bug	2	4	16	FAIL	money_not_conserved
+737	--bug	2	2	10	FAIL	money_not_conserved
+738	--bug	4	4	11	FAIL	money_not_conserved
+739	--bug	2	4	14	FAIL	money_not_conserved
+740	--bug	4	2	16	PASS	-
+741	--bug	2	3	16	FAIL	money_not_conserved
+742	--bug	4	3	9	FAIL	money_not_conserved
+743	--bug	3	3	21	FAIL	money_not_conserved
+744	--bug	4	4	13	FAIL	money_not_conserved
+745	--bug	2	3	13	FAIL	money_not_conserved
+746	--bug	4	4	14	FAIL	money_not_conserved
+747	--bug	4	4	21	FAIL	money_not_conserved
+748	--bug	4	3	10	FAIL	money_not_conserved
+749	--bug	3	2	10	FAIL	money_not_conserved
+750	--bug	4	3	9	FAIL	money_not_conserved
+751	--bug	4	5	12	FAIL	money_not_conserved
+752	--bug	3	5	14	FAIL	money_not_conserved
+753	--bug	4	4	16	FAIL	money_not_conserved
+754	--bug	3	3	12	FAIL	money_not_conserved
+755	--bug	3	3	12	FAIL	money_not_conserved
+756	--bug	4	2	8	FAIL	money_not_conserved
+757	--bug	4	4	12	FAIL	money_not_conserved
+758	--bug	3	2	8	PASS	-
+759	--bug	2	2	12	FAIL	money_not_conserved
+760	--bug	2	2	12	FAIL	money_not_conserved
+761	--bug	4	5	16	FAIL	money_not_conserved
+762	--bug	3	4	25	FAIL	money_not_conserved
+763	--bug	4	2	12	PASS	-
+764	--bug	2	3	16	PASS	-
+765	--bug	3	5	15	FAIL	money_not_conserved
+766	--bug	2	2	9	FAIL	money_not_conserved
+767	--bug	3	4	11	FAIL	money_not_conserved
+768	--bug	2	3	10	FAIL	money_not_conserved
+769	--bug	4	2	16	PASS	-
+770	--bug	2	5	12	FAIL	money_not_conserved
+771	--bug	4	4	20	FAIL	money_not_conserved
+772	--bug	3	3	10	FAIL	money_not_conserved
+773	--bug	4	4	13	FAIL	money_not_conserved
+774	--bug	4	3	16	FAIL	money_not_conserved
+775	--bug	2	4	10	FAIL	money_not_conserved
+776	--bug	4	2	10	FAIL	money_not_conserved
+777	--bug	4	4	9	FAIL	money_not_conserved
+778	--bug	2	2	9	FAIL	money_not_conserved
+779	--bug	4	2	8	FAIL	money_not_conserved
+780	--bug	2	2	8	FAIL	money_not_conserved
+781	--bug	4	2	13	FAIL	money_not_conserved
+782	--bug	2	5	12	FAIL	money_not_conserved
+783	--bug	3	5	20	FAIL	money_not_conserved
+784	--bug	2	5	29	FAIL	money_not_conserved
+785	--bug	3	4	13	FAIL	money_not_conserved
+786	--bug	2	3	12	FAIL	money_not_conserved
+787	--bug	4	2	8	FAIL	money_not_conserved
+788	--bug	2	2	12	FAIL	money_not_conserved
+789	--bug	2	4	21	FAIL	money_not_conserved
+790	--bug	4	3	14	FAIL	money_not_conserved
+791	--bug	2	5	27	FAIL	money_not_conserved
+792	--bug	3	3	10	FAIL	money_not_conserved
+793	--bug	4	2	13	FAIL	money_not_conserved
+794	--bug	4	5	29	FAIL	money_not_conserved
+795	--bug	2	5	14	FAIL	money_not_conserved
+796	--bug	2	5	21	FAIL	money_not_conserved
+797	--bug	4	5	22	FAIL	money_not_conserved
+798	--bug	2	3	28	FAIL	money_not_conserved
+799	--bug	4	4	23	FAIL	money_not_conserved
+800	--bug	3	2	8	FAIL	money_not_conserved
+801	--bug	3	5	19	FAIL	money_not_conserved
+802	--bug	4	4	12	FAIL	money_not_conserved
+803	--bug	4	4	23	FAIL	money_not_conserved
+804	--bug	4	2	16	PASS	-
+805	--bug	3	3	15	FAIL	money_not_conserved
+806	--bug	2	5	30	FAIL	money_not_conserved
+807	--bug	4	5	18	FAIL	money_not_conserved
+808	--bug	3	3	10	FAIL	money_not_conserved
+809	--bug	4	5	20	FAIL	money_not_conserved
+810	--bug	4	4	10	FAIL	money_not_conserved
+811	--bug	3	5	25	FAIL	money_not_conserved
+812	--bug	2	4	20	FAIL	money_not_conserved
+813	--bug	2	3	16	FAIL	money_not_conserved
+814	--bug	2	3	11	FAIL	money_not_conserved
+815	--bug	2	3	15	FAIL	money_not_conserved
+816	--bug	3	5	18	FAIL	money_not_conserved
+817	--bug	4	4	16	FAIL	money_not_conserved
+818	--bug	3	3	17	FAIL	money_not_conserved
+819	--bug	2	3	16	FAIL	money_not_conserved
+820	--bug	2	3	16	FAIL	money_not_conserved
+821	--bug	4	5	22	FAIL	money_not_conserved
+822	--bug	2	2	16	FAIL	money_not_conserved
+823	--bug	4	3	10	FAIL	money_not_conserved
+824	--bug	2	3	12	FAIL	money_not_conserved
+825	--bug	2	2	12	PASS	-
+826	--bug	4	4	22	FAIL	money_not_conserved
+827	--bug	2	3	20	FAIL	money_not_conserved
+828	--bug	3	2	8	FAIL	money_not_conserved
+829	--bug	4	5	10	FAIL	money_not_conserved
+830	--bug	3	4	10	FAIL	money_not_conserved
+831	--bug	3	3	16	FAIL	money_not_conserved
+832	--bug	2	2	16	FAIL	money_not_conserved
+833	--bug	2	5	16	FAIL	money_not_conserved
+834	--bug	3	2	13	FAIL	money_not_conserved
+835	--bug	3	4	36	FAIL	money_not_conserved
+836	--bug	3	4	11	FAIL	money_not_conserved
+837	--bug	4	5	16	FAIL	money_not_conserved
+838	--bug	3	2	12	FAIL	money_not_conserved
+839	--bug	3	5	13	FAIL	money_not_conserved
+840	--bug	3	2	13	FAIL	money_not_conserved
+841	--bug	4	2	17	FAIL	money_not_conserved
+842	--bug	2	5	19	FAIL	money_not_conserved
+843	--bug	2	2	18	PASS	-
+844	--bug	2	3	15	FAIL	money_not_conserved
+845	--bug	2	4	18	FAIL	money_not_conserved
+846	--bug	4	4	20	FAIL	money_not_conserved
+847	--bug	3	4	12	FAIL	money_not_conserved
+848	--bug	4	5	19	FAIL	money_not_conserved
+849	--bug	4	5	14	FAIL	money_not_conserved
+850	--bug	2	3	11	FAIL	money_not_conserved
+851	--bug	2	3	9	FAIL	money_not_conserved
+852	--bug	4	4	16	FAIL	money_not_conserved
+853	--bug	3	5	14	FAIL	money_not_conserved
+854	--bug	2	5	15	FAIL	money_not_conserved
+855	--bug	2	4	28	FAIL	money_not_conserved
+856	--bug	3	3	16	FAIL	money_not_conserved
+857	--bug	4	4	18	FAIL	money_not_conserved
+858	--bug	3	3	13	FAIL	money_not_conserved
+859	--bug	3	2	8	FAIL	money_not_conserved
+860	--bug	2	2	16	FAIL	money_not_conserved
+861	--bug	4	3	18	FAIL	money_not_conserved
+862	--bug	4	3	10	FAIL	money_not_conserved
+863	--bug	2	2	8	FAIL	money_not_conserved
+864	--bug	4	5	28	FAIL	money_not_conserved
+865	--bug	3	3	16	PASS	-
+866	--bug	3	2	12	FAIL	money_not_conserved
+867	--bug	3	3	9	FAIL	money_not_conserved
+868	--bug	4	2	9	FAIL	money_not_conserved
+869	--bug	2	5	26	FAIL	money_not_conserved
+870	--bug	2	2	12	PASS	-
+871	--bug	2	3	13	FAIL	money_not_conserved
+872	--bug	3	2	9	FAIL	money_not_conserved
+873	--bug	4	5	16	FAIL	money_not_conserved
+874	--bug	3	2	16	FAIL	money_not_conserved
+875	--bug	2	5	24	FAIL	money_not_conserved
+876	--bug	4	4	17	FAIL	money_not_conserved
+877	--bug	3	3	10	FAIL	money_not_conserved
+878	--bug	4	3	11	FAIL	money_not_conserved
+879	--bug	2	2	14	FAIL	money_not_conserved
+880	--bug	2	4	22	FAIL	money_not_conserved
+881	--bug	2	2	13	FAIL	money_not_conserved
+882	--bug	3	5	22	FAIL	money_not_conserved
+883	--bug	3	3	16	FAIL	money_not_conserved
+884	--bug	4	2	8	FAIL	money_not_conserved
+885	--bug	3	5	18	FAIL	money_not_conserved
+886	--bug	4	3	14	FAIL	money_not_conserved
+887	--bug	4	2	20	FAIL	money_not_conserved
+888	--bug	3	2	8	FAIL	money_not_conserved
+889	--bug	3	5	14	FAIL	money_not_conserved
+890	--bug	4	4	11	FAIL	money_not_conserved
+891	--bug	3	4	26	FAIL	money_not_conserved
+892	--bug	3	3	18	FAIL	money_not_conserved
+893	--bug	4	2	12	FAIL	money_not_conserved
+894	--bug	4	4	12	FAIL	money_not_conserved
+895	--bug	4	5	23	FAIL	money_not_conserved
+896	--bug	3	2	20	FAIL	money_not_conserved
+897	--bug	3	4	21	FAIL	money_not_conserved
+898	--bug	4	3	16	FAIL	money_not_conserved
+899	--bug	4	3	12	FAIL	money_not_conserved
+900	--bug	2	5	10	FAIL	money_not_conserved
+901	--bug	2	2	12	FAIL	money_not_conserved
+902	--bug	4	3	9	FAIL	money_not_conserved
+903	--bug	4	3	9	FAIL	money_not_conserved
+904	--bug	4	4	11	FAIL	money_not_conserved
+905	--bug	3	2	16	PASS	-
+906	--bug	3	2	8	FAIL	money_not_conserved
+907	--bug	2	2	8	FAIL	money_not_conserved
+908	--bug	4	4	21	FAIL	money_not_conserved
+909	--bug	3	5	25	FAIL	money_not_conserved
+910	--bug	3	3	10	FAIL	money_not_conserved
+911	--bug	4	2	12	FAIL	money_not_conserved
+912	--bug	3	5	12	FAIL	money_not_conserved
+913	--bug	3	2	9	FAIL	money_not_conserved
+914	--bug	3	5	29	FAIL	money_not_conserved
+915	--bug	4	2	8	FAIL	money_not_conserved
+916	--bug	2	5	18	FAIL	money_not_conserved
+917	--bug	3	5	24	FAIL	money_not_conserved
+918	--bug	4	2	8	FAIL	money_not_conserved
+919	--bug	3	5	11	FAIL	money_not_conserved
+920	--bug	2	4	25	FAIL	money_not_conserved
+921	--bug	4	3	13	FAIL	money_not_conserved
+922	--bug	4	4	14	FAIL	money_not_conserved
+923	--bug	4	5	12	FAIL	money_not_conserved
+924	--bug	2	5	14	FAIL	money_not_conserved
+925	--bug	4	3	18	FAIL	money_not_conserved
+926	--bug	4	2	16	FAIL	money_not_conserved
+927	--bug	3	2	8	FAIL	money_not_conserved
+928	--bug	2	3	10	FAIL	money_not_conserved
+929	--bug	4	4	30	FAIL	money_not_conserved
+930	--bug	3	4	10	FAIL	money_not_conserved
+931	--bug	4	3	12	FAIL	money_not_conserved
+932	--bug	2	2	8	PASS	-
+933	--bug	4	5	21	FAIL	money_not_conserved
+934	--bug	3	4	14	FAIL	money_not_conserved
+935	--bug	2	4	10	FAIL	money_not_conserved
+936	--bug	3	4	11	FAIL	money_not_conserved
+937	--bug	2	5	24	FAIL	money_not_conserved
+938	--bug	2	5	31	FAIL	money_not_conserved
+939	--bug	4	2	9	FAIL	money_not_conserved
+940	--bug	3	3	18	FAIL	money_not_conserved
+941	--bug	4	2	8	FAIL	money_not_conserved
+942	--bug	2	3	9	FAIL	money_not_conserved
+943	--bug	2	5	19	FAIL	money_not_conserved
+944	--bug	3	2	16	FAIL	money_not_conserved
+945	--bug	4	4	11	FAIL	money_not_conserved
+946	--bug	4	2	16	PASS	-
+947	--bug	4	2	8	FAIL	money_not_conserved
+948	--bug	4	3	20	PASS	-
+949	--bug	3	4	11	FAIL	money_not_conserved
+950	--bug	4	4	13	FAIL	money_not_conserved
+951	--bug	2	5	26	FAIL	money_not_conserved
+952	--bug	3	2	12	PASS	-
+953	--bug	3	2	8	FAIL	money_not_conserved
+954	--bug	3	2	8	FAIL	money_not_conserved
+955	--bug	2	5	18	FAIL	money_not_conserved
+956	--bug	3	3	12	FAIL	money_not_conserved
+957	--bug	4	3	13	FAIL	money_not_conserved
+958	--bug	2	4	18	FAIL	money_not_conserved
+959	--bug	3	3	12	FAIL	money_not_conserved
+960	--bug	2	2	8	PASS	-
+961	--bug	4	3	16	FAIL	money_not_conserved
+962	--bug	4	2	8	FAIL	money_not_conserved
+963	--bug	4	2	8	PASS	-
+964	--bug	3	3	9	FAIL	money_not_conserved
+965	--bug	3	2	9	FAIL	money_not_conserved
+966	--bug	2	3	29	FAIL	money_not_conserved
+967	--bug	2	3	10	FAIL	money_not_conserved
+968	--bug	4	3	11	FAIL	money_not_conserved
+969	--bug	4	2	16	PASS	-
+970	--bug	3	3	18	FAIL	money_not_conserved
+971	--bug	3	4	15	FAIL	money_not_conserved
+972	--bug	4	2	8	PASS	-
+973	--bug	2	4	10	FAIL	money_not_conserved
+974	--bug	2	5	36	FAIL	money_not_conserved
+975	--bug	4	2	12	PASS	-
+976	--bug	2	2	10	FAIL	money_not_conserved
+977	--bug	4	2	16	PASS	-
+978	--bug	4	5	16	FAIL	money_not_conserved
+979	--bug	2	2	16	FAIL	money_not_conserved
+980	--bug	3	2	8	FAIL	money_not_conserved
+981	--bug	4	5	28	FAIL	money_not_conserved
+982	--bug	3	3	16	FAIL	money_not_conserved
+983	--bug	4	3	10	FAIL	money_not_conserved
+984	--bug	4	3	10	FAIL	money_not_conserved
+985	--bug	2	3	19	FAIL	money_not_conserved
+986	--bug	2	2	8	FAIL	money_not_conserved
+987	--bug	2	4	11	FAIL	money_not_conserved
+988	--bug	3	2	9	FAIL	money_not_conserved
+989	--bug	4	5	22	FAIL	money_not_conserved
+990	--bug	2	2	8	FAIL	money_not_conserved
+991	--bug	3	2	12	FAIL	money_not_conserved
+992	--bug	3	3	9	FAIL	money_not_conserved
+993	--bug	4	4	25	FAIL	money_not_conserved
+994	--bug	2	5	28	FAIL	money_not_conserved
+995	--bug	2	2	9	FAIL	money_not_conserved
+996	--bug	3	2	12	FAIL	money_not_conserved
+997	--bug	2	4	12	FAIL	money_not_conserved
+998	--bug	2	2	10	FAIL	money_not_conserved
+999	--bug	3	2	16	FAIL	money_not_conserved
+0	--bug-deadlock	2	2	33	PASS	-
+1	--bug-deadlock	3	5	3	FAIL	deadlock
+2	--bug-deadlock	2	5	16	FAIL	deadlock
+3	--bug-deadlock	4	3	42	PASS	-
+4	--bug-deadlock	3	2	31	PASS	-
+5	--bug-deadlock	2	2	28	PASS	-
+6	--bug-deadlock	3	2	28	PASS	-
+7	--bug-deadlock	3	4	3	FAIL	deadlock
+8	--bug-deadlock	2	3	2	FAIL	deadlock
+9	--bug-deadlock	4	3	21	PASS	-
+10	--bug-deadlock	4	3	35	PASS	-
+11	--bug-deadlock	3	5	3	FAIL	deadlock
+12	--bug-deadlock	2	3	9	FAIL	deadlock
+13	--bug-deadlock	3	2	21	PASS	-
+14	--bug-deadlock	2	3	9	FAIL	deadlock
+15	--bug-deadlock	2	2	2	FAIL	deadlock
+16	--bug-deadlock	2	2	35	PASS	-
+17	--bug-deadlock	3	5	10	FAIL	deadlock
+18	--bug-deadlock	3	4	2	FAIL	deadlock
+19	--bug-deadlock	2	3	2	FAIL	deadlock
+20	--bug-deadlock	2	5	2	FAIL	deadlock
+21	--bug-deadlock	3	4	23	FAIL	deadlock
+22	--bug-deadlock	2	3	2	FAIL	deadlock
+23	--bug-deadlock	3	3	3	FAIL	deadlock
+24	--bug-deadlock	3	2	28	PASS	-
+25	--bug-deadlock	4	3	3	FAIL	deadlock
+26	--bug-deadlock	2	2	14	PASS	-
+27	--bug-deadlock	2	3	30	FAIL	deadlock
+28	--bug-deadlock	3	3	35	PASS	-
+29	--bug-deadlock	2	5	2	FAIL	deadlock
+30	--bug-deadlock	4	2	35	PASS	-
+31	--bug-deadlock	2	5	2	FAIL	deadlock
+32	--bug-deadlock	2	2	2	FAIL	deadlock
+33	--bug-deadlock	2	3	23	FAIL	deadlock
+34	--bug-deadlock	3	4	43	PASS	-
+35	--bug-deadlock	3	5	17	FAIL	deadlock
+36	--bug-deadlock	3	3	33	PASS	-
+37	--bug-deadlock	4	2	21	PASS	-
+38	--bug-deadlock	3	4	3	FAIL	deadlock
+39	--bug-deadlock	4	2	2	FAIL	deadlock
+40	--bug-deadlock	2	2	28	PASS	-
+41	--bug-deadlock	3	4	9	FAIL	deadlock
+42	--bug-deadlock	3	2	28	PASS	-
+43	--bug-deadlock	3	3	49	PASS	-
+44	--bug-deadlock	2	5	2	FAIL	deadlock
+45	--bug-deadlock	3	5	66	PASS	-
+46	--bug-deadlock	2	2	38	PASS	-
+47	--bug-deadlock	3	3	38	PASS	-
+48	--bug-deadlock	4	4	44	FAIL	deadlock
+49	--bug-deadlock	3	5	2	FAIL	deadlock
+50	--bug-deadlock	4	5	3	FAIL	deadlock
+51	--bug-deadlock	3	5	3	FAIL	deadlock
+52	--bug-deadlock	4	5	30	FAIL	deadlock
+53	--bug-deadlock	2	3	2	FAIL	deadlock
+54	--bug-deadlock	4	5	3	FAIL	deadlock
+55	--bug-deadlock	2	5	2	FAIL	deadlock
+56	--bug-deadlock	2	4	9	FAIL	deadlock
+57	--bug-deadlock	4	2	42	PASS	-
+58	--bug-deadlock	3	2	9	FAIL	deadlock
+59	--bug-deadlock	2	3	2	FAIL	deadlock
+60	--bug-deadlock	2	5	9	FAIL	deadlock
+61	--bug-deadlock	4	3	3	FAIL	deadlock
+62	--bug-deadlock	4	2	14	PASS	-
+63	--bug-deadlock	3	3	21	PASS	-
+64	--bug-deadlock	2	2	9	FAIL	deadlock
+65	--bug-deadlock	2	5	9	FAIL	deadlock
+66	--bug-deadlock	4	4	16	FAIL	deadlock
+67	--bug-deadlock	2	5	2	FAIL	deadlock
+68	--bug-deadlock	4	4	52	PASS	-
+69	--bug-deadlock	4	3	3	FAIL	deadlock
+70	--bug-deadlock	3	5	17	FAIL	deadlock
+71	--bug-deadlock	3	2	42	PASS	-
+72	--bug-deadlock	3	3	23	FAIL	deadlock
+73	--bug-deadlock	2	3	9	FAIL	deadlock
+74	--bug-deadlock	3	2	21	PASS	-
+75	--bug-deadlock	3	3	23	FAIL	deadlock
+76	--bug-deadlock	3	2	35	PASS	-
+77	--bug-deadlock	3	4	43	PASS	-
+78	--bug-deadlock	3	2	21	PASS	-
+79	--bug-deadlock	2	2	2	FAIL	deadlock
+80	--bug-deadlock	2	3	2	FAIL	deadlock
+81	--bug-deadlock	3	2	24	PASS	-
+82	--bug-deadlock	4	2	28	PASS	-
+83	--bug-deadlock	2	5	2	FAIL	deadlock
+84	--bug-deadlock	3	3	2	FAIL	deadlock
+85	--bug-deadlock	3	5	56	PASS	-
+86	--bug-deadlock	2	5	16	FAIL	deadlock
+87	--bug-deadlock	4	4	2	FAIL	deadlock
+88	--bug-deadlock	3	2	35	PASS	-
+89	--bug-deadlock	3	5	3	FAIL	deadlock
+90	--bug-deadlock	4	5	63	PASS	-
+91	--bug-deadlock	4	5	4	FAIL	deadlock
+92	--bug-deadlock	4	2	38	PASS	-
+93	--bug-deadlock	3	2	14	PASS	-
+94	--bug-deadlock	2	4	2	FAIL	deadlock
+95	--bug-deadlock	2	4	9	FAIL	deadlock
+96	--bug-deadlock	4	5	63	PASS	-
+97	--bug-deadlock	4	5	31	FAIL	deadlock
+98	--bug-deadlock	3	5	10	FAIL	deadlock
+99	--bug-deadlock	4	2	21	PASS	-
+100	--bug-deadlock	3	2	35	PASS	-
+101	--bug-deadlock	2	5	2	FAIL	deadlock
+102	--bug-deadlock	2	3	16	FAIL	deadlock
+103	--bug-deadlock	3	2	28	PASS	-
+104	--bug-deadlock	2	4	16	FAIL	deadlock
+105	--bug-deadlock	2	3	2	FAIL	deadlock
+106	--bug-deadlock	4	3	40	PASS	-
+107	--bug-deadlock	2	5	2	FAIL	deadlock
+108	--bug-deadlock	2	5	2	FAIL	deadlock
+109	--bug-deadlock	2	3	2	FAIL	deadlock
+110	--bug-deadlock	4	2	21	PASS	-
+111	--bug-deadlock	4	5	16	FAIL	deadlock
+112	--bug-deadlock	4	2	28	PASS	-
+113	--bug-deadlock	4	4	11	FAIL	deadlock
+114	--bug-deadlock	4	4	35	PASS	-
+115	--bug-deadlock	3	4	30	FAIL	deadlock
+116	--bug-deadlock	4	2	21	PASS	-
+117	--bug-deadlock	3	5	10	FAIL	deadlock
+118	--bug-deadlock	3	2	28	PASS	-
+119	--bug-deadlock	2	3	21	PASS	-
+120	--bug-deadlock	2	2	28	PASS	-
+121	--bug-deadlock	3	4	55	PASS	-
+122	--bug-deadlock	3	2	2	FAIL	deadlock
+123	--bug-deadlock	4	2	21	PASS	-
+124	--bug-deadlock	2	2	16	FAIL	deadlock
+125	--bug-deadlock	3	3	37	FAIL	deadlock
+126	--bug-deadlock	4	4	16	FAIL	deadlock
+127	--bug-deadlock	3	5	10	FAIL	deadlock
+128	--bug-deadlock	4	2	35	PASS	-
+129	--bug-deadlock	2	3	21	FAIL	deadlock
+130	--bug-deadlock	3	4	3	FAIL	deadlock
+131	--bug-deadlock	2	3	2	FAIL	deadlock
+132	--bug-deadlock	2	2	35	PASS	-
+133	--bug-deadlock	2	4	2	FAIL	deadlock
+134	--bug-deadlock	2	5	2	FAIL	deadlock
+135	--bug-deadlock	2	5	57	PASS	-
+136	--bug-deadlock	2	5	23	FAIL	deadlock
+137	--bug-deadlock	3	4	3	FAIL	deadlock
+138	--bug-deadlock	4	5	70	PASS	-
+139	--bug-deadlock	3	2	21	PASS	-
+140	--bug-deadlock	4	2	26	PASS	-
+141	--bug-deadlock	3	2	21	PASS	-
+142	--bug-deadlock	2	2	14	PASS	-
+143	--bug-deadlock	2	3	24	PASS	-
+144	--bug-deadlock	4	4	56	PASS	-
+145	--bug-deadlock	2	5	16	FAIL	deadlock
+146	--bug-deadlock	4	4	2	FAIL	deadlock
+147	--bug-deadlock	3	5	2	FAIL	deadlock
+148	--bug-deadlock	4	2	21	PASS	-
+149	--bug-deadlock	3	5	3	FAIL	deadlock
+150	--bug-deadlock	4	5	54	PASS	-
+151	--bug-deadlock	3	3	9	FAIL	deadlock
+152	--bug-deadlock	2	5	9	FAIL	deadlock
+153	--bug-deadlock	3	5	2	FAIL	deadlock
+154	--bug-deadlock	4	4	49	PASS	-
+155	--bug-deadlock	3	3	47	PASS	-
+156	--bug-deadlock	4	2	21	PASS	-
+157	--bug-deadlock	4	5	10	FAIL	deadlock
+158	--bug-deadlock	2	2	16	FAIL	deadlock
+159	--bug-deadlock	4	5	70	PASS	-
+160	--bug-deadlock	3	4	10	FAIL	deadlock
+161	--bug-deadlock	2	2	28	PASS	-
+162	--bug-deadlock	2	5	2	FAIL	deadlock
+163	--bug-deadlock	4	4	42	PASS	-
+164	--bug-deadlock	2	2	9	FAIL	deadlock
+165	--bug-deadlock	4	3	40	PASS	-
+166	--bug-deadlock	2	3	2	FAIL	deadlock
+167	--bug-deadlock	4	3	54	PASS	-
+168	--bug-deadlock	3	3	49	PASS	-
+169	--bug-deadlock	3	4	28	PASS	-
+170	--bug-deadlock	2	5	2	FAIL	deadlock
+171	--bug-deadlock	4	2	21	PASS	-
+172	--bug-deadlock	3	4	54	PASS	-
+173	--bug-deadlock	2	3	2	FAIL	deadlock
+174	--bug-deadlock	3	5	2	FAIL	deadlock
+175	--bug-deadlock	2	3	2	FAIL	deadlock
+176	--bug-deadlock	2	5	2	FAIL	deadlock
+177	--bug-deadlock	4	5	17	FAIL	deadlock
+178	--bug-deadlock	2	5	30	FAIL	deadlock
+179	--bug-deadlock	4	3	30	FAIL	deadlock
+180	--bug-deadlock	2	4	16	FAIL	deadlock
+181	--bug-deadlock	3	3	26	PASS	-
+182	--bug-deadlock	4	2	42	PASS	-
+183	--bug-deadlock	3	2	28	PASS	-
+184	--bug-deadlock	2	3	30	FAIL	deadlock
+185	--bug-deadlock	3	2	33	PASS	-
+186	--bug-deadlock	3	3	3	FAIL	deadlock
+187	--bug-deadlock	4	5	49	PASS	-
+188	--bug-deadlock	3	5	10	FAIL	deadlock
+189	--bug-deadlock	2	5	2	FAIL	deadlock
+190	--bug-deadlock	2	3	45	PASS	-
+191	--bug-deadlock	3	5	3	FAIL	deadlock
+192	--bug-deadlock	3	5	3	FAIL	deadlock
+193	--bug-deadlock	3	2	14	PASS	-
+194	--bug-deadlock	2	4	2	FAIL	deadlock
+195	--bug-deadlock	3	4	3	FAIL	deadlock
+196	--bug-deadlock	2	5	9	FAIL	deadlock
+197	--bug-deadlock	2	4	9	FAIL	deadlock
+198	--bug-deadlock	3	3	31	FAIL	deadlock
+199	--bug-deadlock	3	3	16	FAIL	deadlock
+200	--bug-deadlock	4	3	28	PASS	-
+201	--bug-deadlock	2	2	33	PASS	-
+202	--bug-deadlock	3	3	42	PASS	-
+203	--bug-deadlock	4	4	35	PASS	-
+204	--bug-deadlock	4	2	21	PASS	-
+205	--bug-deadlock	4	5	3	FAIL	deadlock
+206	--bug-deadlock	4	3	33	PASS	-
+207	--bug-deadlock	3	2	33	PASS	-
+208	--bug-deadlock	3	2	42	PASS	-
+209	--bug-deadlock	2	4	9	FAIL	deadlock
+210	--bug-deadlock	3	3	2	FAIL	deadlock
+211	--bug-deadlock	3	3	49	PASS	-
+212	--bug-deadlock	4	4	32	FAIL	deadlock
+213	--bug-deadlock	2	3	2	FAIL	deadlock
+214	--bug-deadlock	2	3	9	FAIL	deadlock
+215	--bug-deadlock	2	5	2	FAIL	deadlock
+216	--bug-deadlock	2	3	23	FAIL	deadlock
+217	--bug-deadlock	3	5	17	FAIL	deadlock
+218	--bug-deadlock	4	5	58	FAIL	deadlock
+219	--bug-deadlock	3	3	42	PASS	-
+220	--bug-deadlock	4	3	10	FAIL	deadlock
+221	--bug-deadlock	4	4	56	PASS	-
+222	--bug-deadlock	4	2	35	PASS	-
+223	--bug-deadlock	4	4	45	PASS	-
+224	--bug-deadlock	4	3	35	PASS	-
+225	--bug-deadlock	4	3	56	PASS	-
+226	--bug-deadlock	2	5	2	FAIL	deadlock
+227	--bug-deadlock	2	4	2	FAIL	deadlock
+228	--bug-deadlock	4	5	24	FAIL	deadlock
+229	--bug-deadlock	4	3	16	FAIL	deadlock
+230	--bug-deadlock	4	4	33	PASS	-
+231	--bug-deadlock	4	3	35	PASS	-
+232	--bug-deadlock	3	3	44	FAIL	deadlock
+233	--bug-deadlock	2	5	16	FAIL	deadlock
+234	--bug-deadlock	3	4	21	FAIL	deadlock
+235	--bug-deadlock	3	4	3	FAIL	deadlock
+236	--bug-deadlock	3	5	17	FAIL	deadlock
+237	--bug-deadlock	4	4	42	PASS	-
+238	--bug-deadlock	2	3	16	FAIL	deadlock
+239	--bug-deadlock	4	4	10	FAIL	deadlock
+240	--bug-deadlock	2	2	28	PASS	-
+241	--bug-deadlock	3	4	17	FAIL	deadlock
+242	--bug-deadlock	3	5	3	FAIL	deadlock
+243	--bug-deadlock	4	2	21	PASS	-
+244	--bug-deadlock	3	3	9	FAIL	deadlock
+245	--bug-deadlock	3	4	2	FAIL	deadlock
+246	--bug-deadlock	3	5	10	FAIL	deadlock
+247	--bug-deadlock	4	2	14	PASS	-
+248	--bug-deadlock	3	4	3	FAIL	deadlock
+249	--bug-deadlock	2	2	28	PASS	-
+250	--bug-deadlock	3	5	2	FAIL	deadlock
+251	--bug-deadlock	4	3	35	PASS	-
+252	--bug-deadlock	3	4	17	FAIL	deadlock
+253	--bug-deadlock	3	5	17	FAIL	deadlock
+254	--bug-deadlock	3	2	35	PASS	-
+255	--bug-deadlock	4	2	14	PASS	-
+256	--bug-deadlock	2	3	16	FAIL	deadlock
+257	--bug-deadlock	2	5	2	FAIL	deadlock
+258	--bug-deadlock	3	4	38	FAIL	deadlock
+259	--bug-deadlock	4	3	47	PASS	-
+260	--bug-deadlock	2	5	16	FAIL	deadlock
+261	--bug-deadlock	2	5	2	FAIL	deadlock
+262	--bug-deadlock	3	2	2	FAIL	deadlock
+263	--bug-deadlock	4	5	63	PASS	-
+264	--bug-deadlock	2	4	2	FAIL	deadlock
+265	--bug-deadlock	3	5	28	FAIL	deadlock
+266	--bug-deadlock	3	3	3	FAIL	deadlock
+267	--bug-deadlock	3	5	17	FAIL	deadlock
+268	--bug-deadlock	2	2	40	PASS	-
+269	--bug-deadlock	3	3	42	PASS	-
+270	--bug-deadlock	2	5	16	FAIL	deadlock
+271	--bug-deadlock	4	3	47	PASS	-
+272	--bug-deadlock	3	4	16	FAIL	deadlock
+273	--bug-deadlock	2	5	2	FAIL	deadlock
+274	--bug-deadlock	3	5	3	FAIL	deadlock
+275	--bug-deadlock	3	4	37	FAIL	deadlock
+276	--bug-deadlock	2	4	2	FAIL	deadlock
+277	--bug-deadlock	2	2	21	PASS	-
+278	--bug-deadlock	3	4	61	PASS	-
+279	--bug-deadlock	2	3	9	FAIL	deadlock
+280	--bug-deadlock	2	2	16	FAIL	deadlock
+281	--bug-deadlock	4	3	23	FAIL	deadlock
+282	--bug-deadlock	2	2	2	FAIL	deadlock
+283	--bug-deadlock	4	4	2	FAIL	deadlock
+284	--bug-deadlock	4	3	49	PASS	-
+285	--bug-deadlock	4	3	42	PASS	-
+286	--bug-deadlock	2	4	2	FAIL	deadlock
+287	--bug-deadlock	4	5	24	FAIL	deadlock
+288	--bug-deadlock	3	5	17	FAIL	deadlock
+289	--bug-deadlock	2	4	2	FAIL	deadlock
+290	--bug-deadlock	4	2	28	PASS	-
+291	--bug-deadlock	3	4	3	FAIL	deadlock
+292	--bug-deadlock	2	5	2	FAIL	deadlock
+293	--bug-deadlock	2	4	28	FAIL	deadlock
+294	--bug-deadlock	3	3	21	PASS	-
+295	--bug-deadlock	2	2	28	PASS	-
+296	--bug-deadlock	2	2	9	FAIL	deadlock
+297	--bug-deadlock	3	2	2	FAIL	deadlock
+298	--bug-deadlock	3	4	17	FAIL	deadlock
+299	--bug-deadlock	3	5	30	FAIL	deadlock
+300	--bug-deadlock	3	3	42	PASS	-
+301	--bug-deadlock	4	3	35	PASS	-
+302	--bug-deadlock	4	3	30	FAIL	deadlock
+303	--bug-deadlock	3	4	57	PASS	-
+304	--bug-deadlock	4	3	23	FAIL	deadlock
+305	--bug-deadlock	3	4	49	PASS	-
+306	--bug-deadlock	2	2	35	PASS	-
+307	--bug-deadlock	2	3	36	PASS	-
+308	--bug-deadlock	3	5	3	FAIL	deadlock
+309	--bug-deadlock	4	3	49	PASS	-
+310	--bug-deadlock	3	2	9	FAIL	deadlock
+311	--bug-deadlock	4	5	4	FAIL	deadlock
+312	--bug-deadlock	3	3	21	FAIL	deadlock
+313	--bug-deadlock	4	3	52	PASS	-
+314	--bug-deadlock	3	2	14	PASS	-
+315	--bug-deadlock	4	4	70	PASS	-
+316	--bug-deadlock	3	3	30	FAIL	deadlock
+317	--bug-deadlock	4	5	3	FAIL	deadlock
+318	--bug-deadlock	3	4	42	PASS	-
+319	--bug-deadlock	2	2	2	FAIL	deadlock
+320	--bug-deadlock	3	4	24	FAIL	deadlock
+321	--bug-deadlock	3	3	16	FAIL	deadlock
+322	--bug-deadlock	2	3	2	FAIL	deadlock
+323	--bug-deadlock	4	4	49	PASS	-
+324	--bug-deadlock	2	2	14	PASS	-
+325	--bug-deadlock	3	2	35	PASS	-
+326	--bug-deadlock	2	3	35	PASS	-
+327	--bug-deadlock	4	2	21	PASS	-
+328	--bug-deadlock	3	2	9	FAIL	deadlock
+329	--bug-deadlock	4	3	28	PASS	-
+330	--bug-deadlock	2	2	35	PASS	-
+331	--bug-deadlock	4	3	40	PASS	-
+332	--bug-deadlock	2	2	19	PASS	-
+333	--bug-deadlock	2	4	9	FAIL	deadlock
+334	--bug-deadlock	3	2	21	PASS	-
+335	--bug-deadlock	2	5	2	FAIL	deadlock
+336	--bug-deadlock	3	3	40	PASS	-
+337	--bug-deadlock	2	3	9	FAIL	deadlock
+338	--bug-deadlock	3	2	21	PASS	-
+339	--bug-deadlock	4	3	35	PASS	-
+340	--bug-deadlock	2	3	23	FAIL	deadlock
+341	--bug-deadlock	3	3	40	PASS	-
+342	--bug-deadlock	2	5	9	FAIL	deadlock
+343	--bug-deadlock	2	5	2	FAIL	deadlock
+344	--bug-deadlock	2	5	9	FAIL	deadlock
+345	--bug-deadlock	2	3	16	FAIL	deadlock
+346	--bug-deadlock	2	2	35	PASS	-
+347	--bug-deadlock	3	2	14	PASS	-
+348	--bug-deadlock	2	3	2	FAIL	deadlock
+349	--bug-deadlock	3	4	2	FAIL	deadlock
+350	--bug-deadlock	4	2	35	PASS	-
+351	--bug-deadlock	4	3	21	PASS	-
+352	--bug-deadlock	3	5	59	PASS	-
+353	--bug-deadlock	4	3	35	PASS	-
+354	--bug-deadlock	2	3	2	FAIL	deadlock
+355	--bug-deadlock	3	3	45	PASS	-
+356	--bug-deadlock	2	5	2	FAIL	deadlock
+357	--bug-deadlock	2	5	2	FAIL	deadlock
+358	--bug-deadlock	2	3	2	FAIL	deadlock
+359	--bug-deadlock	3	5	3	FAIL	deadlock
+360	--bug-deadlock	2	5	2	FAIL	deadlock
+361	--bug-deadlock	3	2	28	PASS	-
+362	--bug-deadlock	3	5	69	PASS	-
+363	--bug-deadlock	3	4	10	FAIL	deadlock
+364	--bug-deadlock	4	2	14	PASS	-
+365	--bug-deadlock	2	2	2	FAIL	deadlock
+366	--bug-deadlock	3	3	3	FAIL	deadlock
+367	--bug-deadlock	3	5	10	FAIL	deadlock
+368	--bug-deadlock	2	3	2	FAIL	deadlock
+369	--bug-deadlock	3	2	14	PASS	-
+370	--bug-deadlock	3	4	37	FAIL	deadlock
+371	--bug-deadlock	3	3	3	FAIL	deadlock
+372	--bug-deadlock	3	3	3	FAIL	deadlock
+373	--bug-deadlock	3	4	3	FAIL	deadlock
+374	--bug-deadlock	4	5	10	FAIL	deadlock
+375	--bug-deadlock	4	3	2	FAIL	deadlock
+376	--bug-deadlock	4	5	4	FAIL	deadlock
+377	--bug-deadlock	3	2	28	PASS	-
+378	--bug-deadlock	4	2	21	PASS	-
+379	--bug-deadlock	3	5	35	FAIL	deadlock
+380	--bug-deadlock	3	4	37	FAIL	deadlock
+381	--bug-deadlock	3	5	49	PASS	-
+382	--bug-deadlock	4	3	40	PASS	-
+383	--bug-deadlock	2	3	2	FAIL	deadlock
+384	--bug-deadlock	3	4	61	PASS	-
+385	--bug-deadlock	4	5	4	FAIL	deadlock
+386	--bug-deadlock	3	4	61	PASS	-
+387	--bug-deadlock	4	4	54	PASS	-
+388	--bug-deadlock	4	5	4	FAIL	deadlock
+389	--bug-deadlock	3	3	21	PASS	-
+390	--bug-deadlock	2	4	30	FAIL	deadlock
+391	--bug-deadlock	3	2	14	PASS	-
+392	--bug-deadlock	3	3	40	PASS	-
+393	--bug-deadlock	4	3	47	PASS	-
+394	--bug-deadlock	2	5	9	FAIL	deadlock
+395	--bug-deadlock	4	3	49	PASS	-
+396	--bug-deadlock	2	2	2	FAIL	deadlock
+397	--bug-deadlock	3	2	23	FAIL	deadlock
+398	--bug-deadlock	3	2	2	FAIL	deadlock
+399	--bug-deadlock	3	4	2	FAIL	deadlock
+400	--bug-deadlock	2	3	9	FAIL	deadlock
+401	--bug-deadlock	3	5	9	FAIL	deadlock
+402	--bug-deadlock	4	2	14	PASS	-
+403	--bug-deadlock	4	5	61	PASS	-
+404	--bug-deadlock	3	3	3	FAIL	deadlock
+405	--bug-deadlock	3	5	52	PASS	-
+406	--bug-deadlock	4	3	16	FAIL	deadlock
+407	--bug-deadlock	3	3	49	PASS	-
+408	--bug-deadlock	2	5	9	FAIL	deadlock
+409	--bug-deadlock	3	2	35	PASS	-
+410	--bug-deadlock	4	5	24	FAIL	deadlock
+411	--bug-deadlock	2	3	9	FAIL	deadlock
+412	--bug-deadlock	4	5	47	PASS	-
+413	--bug-deadlock	4	4	16	FAIL	deadlock
+414	--bug-deadlock	2	5	2	FAIL	deadlock
+415	--bug-deadlock	4	3	35	PASS	-
+416	--bug-deadlock	2	3	45	PASS	-
+417	--bug-deadlock	2	2	28	PASS	-
+418	--bug-deadlock	2	3	2	FAIL	deadlock
+419	--bug-deadlock	4	3	40	PASS	-
+420	--bug-deadlock	2	3	2	FAIL	deadlock
+421	--bug-deadlock	3	2	2	FAIL	deadlock
+422	--bug-deadlock	4	3	3	FAIL	deadlock
+423	--bug-deadlock	4	4	42	PASS	-
+424	--bug-deadlock	4	5	56	PASS	-
+425	--bug-deadlock	4	3	21	PASS	-
+426	--bug-deadlock	3	3	3	FAIL	deadlock
+427	--bug-deadlock	4	5	24	FAIL	deadlock
+428	--bug-deadlock	4	5	24	FAIL	deadlock
+429	--bug-deadlock	2	4	16	FAIL	deadlock
+430	--bug-deadlock	4	2	33	PASS	-
+431	--bug-deadlock	4	4	49	PASS	-
+432	--bug-deadlock	3	5	3	FAIL	deadlock
+433	--bug-deadlock	3	5	23	FAIL	deadlock
+434	--bug-deadlock	2	4	2	FAIL	deadlock
+435	--bug-deadlock	2	5	9	FAIL	deadlock
+436	--bug-deadlock	3	2	21	PASS	-
+437	--bug-deadlock	2	5	2	FAIL	deadlock
+438	--bug-deadlock	4	5	4	FAIL	deadlock
+439	--bug-deadlock	4	2	28	PASS	-
+440	--bug-deadlock	4	4	4	FAIL	deadlock
+441	--bug-deadlock	4	4	61	PASS	-
+442	--bug-deadlock	4	3	33	PASS	-
+443	--bug-deadlock	3	2	28	PASS	-
+444	--bug-deadlock	3	4	56	PASS	-
+445	--bug-deadlock	3	4	24	FAIL	deadlock
+446	--bug-deadlock	3	2	21	PASS	-
+447	--bug-deadlock	4	3	28	PASS	-
+448	--bug-deadlock	3	3	49	PASS	-
+449	--bug-deadlock	4	3	21	PASS	-
+450	--bug-deadlock	4	5	70	PASS	-
+451	--bug-deadlock	2	3	2	FAIL	deadlock
+452	--bug-deadlock	3	2	16	FAIL	deadlock
+453	--bug-deadlock	4	4	42	PASS	-
+454	--bug-deadlock	4	3	42	PASS	-
+455	--bug-deadlock	4	4	73	PASS	-
+456	--bug-deadlock	4	3	30	FAIL	deadlock
+457	--bug-deadlock	2	5	16	FAIL	deadlock
+458	--bug-deadlock	4	3	28	PASS	-
+459	--bug-deadlock	3	4	10	FAIL	deadlock
+460	--bug-deadlock	2	2	28	PASS	-
+461	--bug-deadlock	3	2	42	PASS	-
+462	--bug-deadlock	3	3	52	PASS	-
+463	--bug-deadlock	3	2	16	FAIL	deadlock
+464	--bug-deadlock	2	3	16	FAIL	deadlock
+465	--bug-deadlock	2	4	9	FAIL	deadlock
+466	--bug-deadlock	3	4	10	FAIL	deadlock
+467	--bug-deadlock	2	5	2	FAIL	deadlock
+468	--bug-deadlock	2	5	2	FAIL	deadlock
+469	--bug-deadlock	3	5	10	FAIL	deadlock
+470	--bug-deadlock	3	3	42	PASS	-
+471	--bug-deadlock	4	2	40	PASS	-
+472	--bug-deadlock	2	5	2	FAIL	deadlock
+473	--bug-deadlock	3	2	14	PASS	-
+474	--bug-deadlock	4	2	21	PASS	-
+475	--bug-deadlock	3	3	3	FAIL	deadlock
+476	--bug-deadlock	2	4	2	FAIL	deadlock
+477	--bug-deadlock	2	5	2	FAIL	deadlock
+478	--bug-deadlock	2	4	40	FAIL	deadlock
+479	--bug-deadlock	3	2	28	PASS	-
+480	--bug-deadlock	4	5	11	FAIL	deadlock
+481	--bug-deadlock	2	4	2	FAIL	deadlock
+482	--bug-deadlock	4	2	28	PASS	-
+483	--bug-deadlock	3	4	3	FAIL	deadlock
+484	--bug-deadlock	2	4	2	FAIL	deadlock
+485	--bug-deadlock	2	2	21	PASS	-
+486	--bug-deadlock	2	4	2	FAIL	deadlock
+487	--bug-deadlock	3	3	16	FAIL	deadlock
+488	--bug-deadlock	4	4	56	PASS	-
+489	--bug-deadlock	2	4	2	FAIL	deadlock
+490	--bug-deadlock	3	3	28	PASS	-
+491	--bug-deadlock	3	3	10	FAIL	deadlock
+492	--bug-deadlock	2	4	52	PASS	-
+493	--bug-deadlock	4	2	28	PASS	-
+494	--bug-deadlock	4	2	2	FAIL	deadlock
+495	--bug-deadlock	2	2	2	FAIL	deadlock
+496	--bug-deadlock	3	3	42	PASS	-
+497	--bug-deadlock	4	4	49	PASS	-
+498	--bug-deadlock	2	2	9	FAIL	deadlock
+499	--bug-deadlock	2	4	2	FAIL	deadlock
+500	--bug-deadlock	3	2	38	PASS	-
+501	--bug-deadlock	2	5	2	FAIL	deadlock
+502	--bug-deadlock	2	4	2	FAIL	deadlock
+503	--bug-deadlock	4	4	52	PASS	-
+504	--bug-deadlock	2	5	2	FAIL	deadlock
+505	--bug-deadlock	3	4	10	FAIL	deadlock
+506	--bug-deadlock	4	3	49	PASS	-
+507	--bug-deadlock	3	4	10	FAIL	deadlock
+508	--bug-deadlock	2	4	2	FAIL	deadlock
+509	--bug-deadlock	3	2	16	FAIL	deadlock
+510	--bug-deadlock	3	2	21	PASS	-
+511	--bug-deadlock	3	4	3	FAIL	deadlock
+512	--bug-deadlock	4	4	10	FAIL	deadlock
+513	--bug-deadlock	4	4	56	PASS	-
+514	--bug-deadlock	2	2	33	PASS	-
+515	--bug-deadlock	2	5	26	FAIL	deadlock
+516	--bug-deadlock	4	5	2	FAIL	deadlock
+517	--bug-deadlock	3	3	42	PASS	-
+518	--bug-deadlock	4	4	30	FAIL	deadlock
+519	--bug-deadlock	4	4	4	FAIL	deadlock
+520	--bug-deadlock	3	3	35	PASS	-
+521	--bug-deadlock	4	4	59	PASS	-
+522	--bug-deadlock	2	2	2	FAIL	deadlock
+523	--bug-deadlock	2	4	2	FAIL	deadlock
+524	--bug-deadlock	4	2	42	PASS	-
+525	--bug-deadlock	3	2	28	PASS	-
+526	--bug-deadlock	4	2	21	PASS	-
+527	--bug-deadlock	3	2	21	PASS	-
+528	--bug-deadlock	2	4	23	FAIL	deadlock
+529	--bug-deadlock	3	5	16	FAIL	deadlock
+530	--bug-deadlock	2	4	2	FAIL	deadlock
+531	--bug-deadlock	3	4	37	FAIL	deadlock
+532	--bug-deadlock	2	2	35	PASS	-
+533	--bug-deadlock	4	4	4	FAIL	deadlock
+534	--bug-deadlock	2	5	2	FAIL	deadlock
+535	--bug-deadlock	2	5	16	FAIL	deadlock
+536	--bug-deadlock	3	2	28	PASS	-
+537	--bug-deadlock	2	3	2	FAIL	deadlock
+538	--bug-deadlock	3	3	37	FAIL	deadlock
+539	--bug-deadlock	4	5	77	PASS	-
+540	--bug-deadlock	2	3	16	FAIL	deadlock
+541	--bug-deadlock	3	5	9	FAIL	deadlock
+542	--bug-deadlock	4	2	14	PASS	-
+543	--bug-deadlock	4	3	49	PASS	-
+544	--bug-deadlock	2	2	28	PASS	-
+545	--bug-deadlock	2	4	9	FAIL	deadlock
+546	--bug-deadlock	2	2	26	PASS	-
+547	--bug-deadlock	4	4	70	PASS	-
+548	--bug-deadlock	4	4	71	PASS	-
+549	--bug-deadlock	4	5	4	FAIL	deadlock
+550	--bug-deadlock	3	3	3	FAIL	deadlock
+551	--bug-deadlock	4	3	43	PASS	-
+552	--bug-deadlock	2	3	2	FAIL	deadlock
+553	--bug-deadlock	4	5	45	FAIL	deadlock
+554	--bug-deadlock	3	5	10	FAIL	deadlock
+555	--bug-deadlock	4	5	80	PASS	-
+556	--bug-deadlock	4	2	35	PASS	-
+557	--bug-deadlock	4	2	2	FAIL	deadlock
+558	--bug-deadlock	3	5	9	FAIL	deadlock
+559	--bug-deadlock	2	3	2	FAIL	deadlock
+560	--bug-deadlock	4	5	39	FAIL	deadlock
+561	--bug-deadlock	2	4	28	FAIL	deadlock
+562	--bug-deadlock	4	4	11	FAIL	deadlock
+563	--bug-deadlock	3	5	9	FAIL	deadlock
+564	--bug-deadlock	2	3	28	PASS	-
+565	--bug-deadlock	4	4	59	PASS	-
+566	--bug-deadlock	3	4	3	FAIL	deadlock
+567	--bug-deadlock	3	5	24	FAIL	deadlock
+568	--bug-deadlock	2	3	2	FAIL	deadlock
+569	--bug-deadlock	4	2	28	PASS	-
+570	--bug-deadlock	3	4	10	FAIL	deadlock
+571	--bug-deadlock	4	5	17	FAIL	deadlock
+572	--bug-deadlock	3	4	42	PASS	-
+573	--bug-deadlock	4	2	14	PASS	-
+574	--bug-deadlock	2	3	2	FAIL	deadlock
+575	--bug-deadlock	4	4	31	FAIL	deadlock
+576	--bug-deadlock	2	4	2	FAIL	deadlock
+577	--bug-deadlock	4	2	2	FAIL	deadlock
+578	--bug-deadlock	4	2	21	PASS	-
+579	--bug-deadlock	3	2	2	FAIL	deadlock
+580	--bug-deadlock	4	5	66	PASS	-
+581	--bug-deadlock	4	3	56	PASS	-
+582	--bug-deadlock	3	5	50	FAIL	deadlock
+583	--bug-deadlock	3	3	10	FAIL	deadlock
+584	--bug-deadlock	3	4	10	FAIL	deadlock
+585	--bug-deadlock	3	5	3	FAIL	deadlock
+586	--bug-deadlock	4	4	54	PASS	-
+587	--bug-deadlock	3	3	9	FAIL	deadlock
+588	--bug-deadlock	2	3	9	FAIL	deadlock
+589	--bug-deadlock	2	5	2	FAIL	deadlock
+590	--bug-deadlock	2	2	2	FAIL	deadlock
+591	--bug-deadlock	2	5	2	FAIL	deadlock
+592	--bug-deadlock	4	4	35	PASS	-
+593	--bug-deadlock	2	4	23	FAIL	deadlock
+594	--bug-deadlock	4	4	49	PASS	-
+595	--bug-deadlock	2	3	2	FAIL	deadlock
+596	--bug-deadlock	4	3	26	PASS	-
+597	--bug-deadlock	2	4	9	FAIL	deadlock
+598	--bug-deadlock	3	3	35	PASS	-
+599	--bug-deadlock	2	4	2	FAIL	deadlock
+600	--bug-deadlock	2	3	9	FAIL	deadlock
+601	--bug-deadlock	2	3	2	FAIL	deadlock
+602	--bug-deadlock	3	5	3	FAIL	deadlock
+603	--bug-deadlock	2	5	2	FAIL	deadlock
+604	--bug-deadlock	3	2	14	PASS	-
+605	--bug-deadlock	3	4	10	FAIL	deadlock
+606	--bug-deadlock	3	2	35	PASS	-
+607	--bug-deadlock	3	5	9	FAIL	deadlock
+608	--bug-deadlock	2	4	2	FAIL	deadlock
+609	--bug-deadlock	3	5	2	FAIL	deadlock
+610	--bug-deadlock	3	2	28	PASS	-
+611	--bug-deadlock	4	4	35	PASS	-
+612	--bug-deadlock	4	3	17	FAIL	deadlock
+613	--bug-deadlock	2	3	47	PASS	-
+614	--bug-deadlock	4	2	28	PASS	-
+615	--bug-deadlock	3	4	47	FAIL	deadlock
+616	--bug-deadlock	4	3	10	FAIL	deadlock
+617	--bug-deadlock	2	5	9	FAIL	deadlock
+618	--bug-deadlock	3	4	47	PASS	-
+619	--bug-deadlock	4	5	4	FAIL	deadlock
+620	--bug-deadlock	2	5	9	FAIL	deadlock
+621	--bug-deadlock	2	5	9	FAIL	deadlock
+622	--bug-deadlock	4	4	44	FAIL	deadlock
+623	--bug-deadlock	3	2	35	PASS	-
+624	--bug-deadlock	4	2	28	PASS	-
+625	--bug-deadlock	3	4	3	FAIL	deadlock
+626	--bug-deadlock	4	3	35	PASS	-
+627	--bug-deadlock	2	4	2	FAIL	deadlock
+628	--bug-deadlock	3	5	10	FAIL	deadlock
+629	--bug-deadlock	3	3	47	PASS	-
+630	--bug-deadlock	3	5	3	FAIL	deadlock
+631	--bug-deadlock	3	4	9	FAIL	deadlock
+632	--bug-deadlock	4	3	28	PASS	-
+633	--bug-deadlock	4	2	21	PASS	-
+634	--bug-deadlock	3	3	40	PASS	-
+635	--bug-deadlock	4	2	28	PASS	-
+636	--bug-deadlock	3	3	35	PASS	-
+637	--bug-deadlock	3	5	73	PASS	-
+638	--bug-deadlock	3	4	38	PASS	-
+639	--bug-deadlock	4	2	28	PASS	-
+640	--bug-deadlock	2	2	14	PASS	-
+641	--bug-deadlock	2	3	9	FAIL	deadlock
+642	--bug-deadlock	3	3	42	PASS	-
+643	--bug-deadlock	4	5	11	FAIL	deadlock
+644	--bug-deadlock	3	5	2	FAIL	deadlock
+645	--bug-deadlock	2	5	9	FAIL	deadlock
+646	--bug-deadlock	2	4	2	FAIL	deadlock
+647	--bug-deadlock	4	2	35	PASS	-
+648	--bug-deadlock	3	5	31	FAIL	deadlock
+649	--bug-deadlock	4	5	42	FAIL	deadlock
+650	--bug-deadlock	3	2	28	PASS	-
+651	--bug-deadlock	2	5	9	FAIL	deadlock
+652	--bug-deadlock	3	3	42	PASS	-
+653	--bug-deadlock	4	2	28	PASS	-
+654	--bug-deadlock	4	5	31	FAIL	deadlock
+655	--bug-deadlock	3	3	9	FAIL	deadlock
+656	--bug-deadlock	2	5	2	FAIL	deadlock
+657	--bug-deadlock	2	2	26	PASS	-
+658	--bug-deadlock	4	5	16	FAIL	deadlock
+659	--bug-deadlock	2	4	2	FAIL	deadlock
+660	--bug-deadlock	3	5	23	FAIL	deadlock
+661	--bug-deadlock	3	4	2	FAIL	deadlock
+662	--bug-deadlock	2	4	2	FAIL	deadlock
+663	--bug-deadlock	2	4	2	FAIL	deadlock
+664	--bug-deadlock	2	5	9	FAIL	deadlock
+665	--bug-deadlock	3	3	35	PASS	-
+666	--bug-deadlock	2	4	35	PASS	-
+667	--bug-deadlock	4	2	14	PASS	-
+668	--bug-deadlock	4	4	16	FAIL	deadlock
+669	--bug-deadlock	3	5	10	FAIL	deadlock
+670	--bug-deadlock	3	2	26	PASS	-
+671	--bug-deadlock	3	4	9	FAIL	deadlock
+672	--bug-deadlock	4	2	14	PASS	-
+673	--bug-deadlock	3	2	42	PASS	-
+674	--bug-deadlock	4	4	56	PASS	-
+675	--bug-deadlock	2	5	2	FAIL	deadlock
+676	--bug-deadlock	4	2	14	PASS	-
+677	--bug-deadlock	4	4	44	FAIL	deadlock
+678	--bug-deadlock	2	3	9	FAIL	deadlock
+679	--bug-deadlock	4	4	3	FAIL	deadlock
+680	--bug-deadlock	3	5	3	FAIL	deadlock
+681	--bug-deadlock	4	2	21	PASS	-
+682	--bug-deadlock	2	5	2	FAIL	deadlock
+683	--bug-deadlock	4	4	47	PASS	-
+684	--bug-deadlock	4	2	2	FAIL	deadlock
+685	--bug-deadlock	2	5	2	FAIL	deadlock
+686	--bug-deadlock	4	4	38	PASS	-
+687	--bug-deadlock	3	5	2	FAIL	deadlock
+688	--bug-deadlock	4	2	21	PASS	-
+689	--bug-deadlock	4	5	28	FAIL	deadlock
+690	--bug-deadlock	4	2	21	PASS	-
+691	--bug-deadlock	2	5	2	FAIL	deadlock
+692	--bug-deadlock	3	5	10	FAIL	deadlock
+693	--bug-deadlock	3	4	50	PASS	-
+694	--bug-deadlock	2	3	2	FAIL	deadlock
+695	--bug-deadlock	3	3	45	PASS	-
+696	--bug-deadlock	3	5	17	FAIL	deadlock
+697	--bug-deadlock	2	5	2	FAIL	deadlock
+698	--bug-deadlock	3	3	38	PASS	-
+699	--bug-deadlock	2	2	9	FAIL	deadlock
+700	--bug-deadlock	4	4	59	PASS	-
+701	--bug-deadlock	3	5	23	FAIL	deadlock
+702	--bug-deadlock	4	2	14	PASS	-
+703	--bug-deadlock	4	4	28	PASS	-
+704	--bug-deadlock	4	5	23	FAIL	deadlock
+705	--bug-deadlock	4	2	21	PASS	-
+706	--bug-deadlock	3	5	3	FAIL	deadlock
+707	--bug-deadlock	2	2	26	PASS	-
+708	--bug-deadlock	3	2	28	PASS	-
+709	--bug-deadlock	3	5	63	FAIL	deadlock
+710	--bug-deadlock	4	4	37	FAIL	deadlock
+711	--bug-deadlock	3	2	21	PASS	-
+712	--bug-deadlock	2	2	14	PASS	-
+713	--bug-deadlock	4	2	28	PASS	-
+714	--bug-deadlock	3	2	2	FAIL	deadlock
+715	--bug-deadlock	4	5	66	PASS	-
+716	--bug-deadlock	4	5	3	FAIL	deadlock
+717	--bug-deadlock	3	3	35	PASS	-
+718	--bug-deadlock	2	2	2	FAIL	deadlock
+719	--bug-deadlock	4	2	28	PASS	-
+720	--bug-deadlock	4	3	35	PASS	-
+721	--bug-deadlock	4	3	33	PASS	-
+722	--bug-deadlock	2	4	2	FAIL	deadlock
+723	--bug-deadlock	2	4	2	FAIL	deadlock
+724	--bug-deadlock	2	4	30	FAIL	deadlock
+725	--bug-deadlock	3	2	35	PASS	-
+726	--bug-deadlock	4	3	17	FAIL	deadlock
+727	--bug-deadlock	2	5	2	FAIL	deadlock
+728	--bug-deadlock	4	4	9	FAIL	deadlock
+729	--bug-deadlock	4	4	30	FAIL	deadlock
+730	--bug-deadlock	3	2	14	PASS	-
+731	--bug-deadlock	2	5	9	FAIL	deadlock
+732	--bug-deadlock	4	4	35	PASS	-
+733	--bug-deadlock	2	4	9	FAIL	deadlock
+734	--bug-deadlock	4	3	17	FAIL	deadlock
+735	--bug-deadlock	4	5	47	FAIL	deadlock
+736	--bug-deadlock	2	4	14	FAIL	deadlock
+737	--bug-deadlock	2	2	2	FAIL	deadlock
+738	--bug-deadlock	4	4	47	PASS	-
+739	--bug-deadlock	2	4	2	FAIL	deadlock
+740	--bug-deadlock	4	2	28	PASS	-
+741	--bug-deadlock	2	3	2	FAIL	deadlock
+742	--bug-deadlock	4	3	49	PASS	-
+743	--bug-deadlock	3	3	49	PASS	-
+744	--bug-deadlock	4	4	10	FAIL	deadlock
+745	--bug-deadlock	2	3	2	FAIL	deadlock
+746	--bug-deadlock	4	4	24	FAIL	deadlock
+747	--bug-deadlock	4	4	61	PASS	-
+748	--bug-deadlock	4	3	3	FAIL	deadlock
+749	--bug-deadlock	3	2	28	PASS	-
+750	--bug-deadlock	4	3	35	PASS	-
+751	--bug-deadlock	4	5	16	FAIL	deadlock
+752	--bug-deadlock	3	5	51	FAIL	deadlock
+753	--bug-deadlock	4	4	73	PASS	-
+754	--bug-deadlock	3	3	9	FAIL	deadlock
+755	--bug-deadlock	3	3	9	FAIL	deadlock
+756	--bug-deadlock	4	2	21	PASS	-
+757	--bug-deadlock	4	4	3	FAIL	deadlock
+758	--bug-deadlock	3	2	14	PASS	-
+759	--bug-deadlock	2	2	28	PASS	-
+760	--bug-deadlock	2	2	21	PASS	-
+761	--bug-deadlock	4	5	54	PASS	-
+762	--bug-deadlock	3	4	16	FAIL	deadlock
+763	--bug-deadlock	4	2	21	PASS	-
+764	--bug-deadlock	2	3	9	FAIL	deadlock
+765	--bug-deadlock	3	5	3	FAIL	deadlock
+766	--bug-deadlock	2	2	2	FAIL	deadlock
+767	--bug-deadlock	3	4	10	FAIL	deadlock
+768	--bug-deadlock	2	3	2	FAIL	deadlock
+769	--bug-deadlock	4	2	28	PASS	-
+770	--bug-deadlock	2	5	23	FAIL	deadlock
+771	--bug-deadlock	4	4	40	PASS	-
+772	--bug-deadlock	3	3	2	FAIL	deadlock
+773	--bug-deadlock	4	4	42	PASS	-
+774	--bug-deadlock	4	3	28	PASS	-
+775	--bug-deadlock	2	4	63	PASS	-
+776	--bug-deadlock	4	2	2	FAIL	deadlock
+777	--bug-deadlock	4	4	3	FAIL	deadlock
+778	--bug-deadlock	2	2	9	FAIL	deadlock
+779	--bug-deadlock	4	2	28	PASS	-
+780	--bug-deadlock	2	2	31	PASS	-
+781	--bug-deadlock	4	2	40	PASS	-
+782	--bug-deadlock	2	5	21	FAIL	deadlock
+783	--bug-deadlock	3	5	56	PASS	-
+784	--bug-deadlock	2	5	35	FAIL	deadlock
+785	--bug-deadlock	3	4	16	FAIL	deadlock
+786	--bug-deadlock	2	3	2	FAIL	deadlock
+787	--bug-deadlock	4	2	28	PASS	-
+788	--bug-deadlock	2	2	21	PASS	-
+789	--bug-deadlock	2	4	21	FAIL	deadlock
+790	--bug-deadlock	4	3	35	PASS	-
+791	--bug-deadlock	2	5	30	FAIL	deadlock
+792	--bug-deadlock	3	3	35	PASS	-
+793	--bug-deadlock	4	2	28	PASS	-
+794	--bug-deadlock	4	5	30	FAIL	deadlock
+795	--bug-deadlock	2	5	2	FAIL	deadlock
+796	--bug-deadlock	2	5	16	FAIL	deadlock
+797	--bug-deadlock	4	5	24	FAIL	deadlock
+798	--bug-deadlock	2	3	16	FAIL	deadlock
+799	--bug-deadlock	4	4	16	FAIL	deadlock
+800	--bug-deadlock	3	2	28	PASS	-
+801	--bug-deadlock	3	5	24	FAIL	deadlock
+802	--bug-deadlock	4	4	25	FAIL	deadlock
+803	--bug-deadlock	4	4	70	PASS	-
+804	--bug-deadlock	4	2	28	PASS	-
+805	--bug-deadlock	3	3	31	FAIL	deadlock
+806	--bug-deadlock	2	5	9	FAIL	deadlock
+807	--bug-deadlock	4	5	23	FAIL	deadlock
+808	--bug-deadlock	3	3	2	FAIL	deadlock
+809	--bug-deadlock	4	5	30	FAIL	deadlock
+810	--bug-deadlock	4	4	38	FAIL	deadlock
+811	--bug-deadlock	3	5	30	FAIL	deadlock
+812	--bug-deadlock	2	4	9	FAIL	deadlock
+813	--bug-deadlock	2	3	2	FAIL	deadlock
+814	--bug-deadlock	2	3	9	FAIL	deadlock
+815	--bug-deadlock	2	3	2	FAIL	deadlock
+816	--bug-deadlock	3	5	3	FAIL	deadlock
+817	--bug-deadlock	4	4	49	PASS	-
+818	--bug-deadlock	3	3	3	FAIL	deadlock
+819	--bug-deadlock	2	3	28	PASS	-
+820	--bug-deadlock	2	3	16	FAIL	deadlock
+821	--bug-deadlock	4	5	9	FAIL	deadlock
+822	--bug-deadlock	2	2	9	FAIL	deadlock
+823	--bug-deadlock	4	3	21	PASS	-
+824	--bug-deadlock	2	3	33	FAIL	deadlock
+825	--bug-deadlock	2	2	21	PASS	-
+826	--bug-deadlock	4	4	44	FAIL	deadlock
+827	--bug-deadlock	2	3	9	FAIL	deadlock
+828	--bug-deadlock	3	2	28	PASS	-
+829	--bug-deadlock	4	5	10	FAIL	deadlock
+830	--bug-deadlock	3	4	9	FAIL	deadlock
+831	--bug-deadlock	3	3	10	FAIL	deadlock
+832	--bug-deadlock	2	2	16	FAIL	deadlock
+833	--bug-deadlock	2	5	2	FAIL	deadlock
+834	--bug-deadlock	3	2	35	PASS	-
+835	--bug-deadlock	3	4	16	FAIL	deadlock
+836	--bug-deadlock	3	4	3	FAIL	deadlock
+837	--bug-deadlock	4	5	68	PASS	-
+838	--bug-deadlock	3	2	35	PASS	-
+839	--bug-deadlock	3	5	3	FAIL	deadlock
+840	--bug-deadlock	3	2	16	FAIL	deadlock
+841	--bug-deadlock	4	2	42	PASS	-
+842	--bug-deadlock	2	5	9	FAIL	deadlock
+843	--bug-deadlock	2	2	9	FAIL	deadlock
+844	--bug-deadlock	2	3	21	FAIL	deadlock
+845	--bug-deadlock	2	4	47	PASS	-
+846	--bug-deadlock	4	4	17	FAIL	deadlock
+847	--bug-deadlock	3	4	54	PASS	-
+848	--bug-deadlock	4	5	24	FAIL	deadlock
+849	--bug-deadlock	4	5	63	PASS	-
+850	--bug-deadlock	2	3	19	FAIL	deadlock
+851	--bug-deadlock	2	3	2	FAIL	deadlock
+852	--bug-deadlock	4	4	28	PASS	-
+853	--bug-deadlock	3	5	2	FAIL	deadlock
+854	--bug-deadlock	2	5	2	FAIL	deadlock
+855	--bug-deadlock	2	4	2	FAIL	deadlock
+856	--bug-deadlock	3	3	47	PASS	-
+857	--bug-deadlock	4	4	49	PASS	-
+858	--bug-deadlock	3	3	10	FAIL	deadlock
+859	--bug-deadlock	3	2	2	FAIL	deadlock
+860	--bug-deadlock	2	2	16	FAIL	deadlock
+861	--bug-deadlock	4	3	24	FAIL	deadlock
+862	--bug-deadlock	4	3	63	PASS	-
+863	--bug-deadlock	2	2	2	FAIL	deadlock
+864	--bug-deadlock	4	5	18	FAIL	deadlock
+865	--bug-deadlock	3	3	28	PASS	-
+866	--bug-deadlock	3	2	21	PASS	-
+867	--bug-deadlock	3	3	40	PASS	-
+868	--bug-deadlock	4	2	28	PASS	-
+869	--bug-deadlock	2	5	9	FAIL	deadlock
+870	--bug-deadlock	2	2	21	PASS	-
+871	--bug-deadlock	2	3	9	FAIL	deadlock
+872	--bug-deadlock	3	2	33	PASS	-
+873	--bug-deadlock	4	5	49	FAIL	deadlock
+874	--bug-deadlock	3	2	23	FAIL	deadlock
+875	--bug-deadlock	2	5	9	FAIL	deadlock
+876	--bug-deadlock	4	4	42	FAIL	deadlock
+877	--bug-deadlock	3	3	2	FAIL	deadlock
+878	--bug-deadlock	4	3	49	PASS	-
+879	--bug-deadlock	2	2	2	FAIL	deadlock
+880	--bug-deadlock	2	4	9	FAIL	deadlock
+881	--bug-deadlock	2	2	23	FAIL	deadlock
+882	--bug-deadlock	3	5	59	PASS	-
+883	--bug-deadlock	3	3	40	PASS	-
+884	--bug-deadlock	4	2	21	PASS	-
+885	--bug-deadlock	3	5	40	PASS	-
+886	--bug-deadlock	4	3	40	PASS	-
+887	--bug-deadlock	4	2	42	PASS	-
+888	--bug-deadlock	3	2	28	PASS	-
+889	--bug-deadlock	3	5	10	FAIL	deadlock
+890	--bug-deadlock	4	4	63	PASS	-
+891	--bug-deadlock	3	4	10	FAIL	deadlock
+892	--bug-deadlock	3	3	47	PASS	-
+893	--bug-deadlock	4	2	33	PASS	-
+894	--bug-deadlock	4	4	54	PASS	-
+895	--bug-deadlock	4	5	10	FAIL	deadlock
+896	--bug-deadlock	3	2	33	PASS	-
+897	--bug-deadlock	3	4	24	FAIL	deadlock
+898	--bug-deadlock	4	3	16	FAIL	deadlock
+899	--bug-deadlock	4	3	35	PASS	-
+900	--bug-deadlock	2	5	2	FAIL	deadlock
+901	--bug-deadlock	2	2	9	FAIL	deadlock
+902	--bug-deadlock	4	3	23	FAIL	deadlock
+903	--bug-deadlock	4	3	35	PASS	-
+904	--bug-deadlock	4	4	49	PASS	-
+905	--bug-deadlock	3	2	28	PASS	-
+906	--bug-deadlock	3	2	33	PASS	-
+907	--bug-deadlock	2	2	21	PASS	-
+908	--bug-deadlock	4	4	47	PASS	-
+909	--bug-deadlock	3	5	9	FAIL	deadlock
+910	--bug-deadlock	3	3	2	FAIL	deadlock
+911	--bug-deadlock	4	2	35	PASS	-
+912	--bug-deadlock	3	5	2	FAIL	deadlock
+913	--bug-deadlock	3	2	21	PASS	-
+914	--bug-deadlock	3	5	57	PASS	-
+915	--bug-deadlock	4	2	26	PASS	-
+916	--bug-deadlock	2	5	14	FAIL	deadlock
+917	--bug-deadlock	3	5	24	FAIL	deadlock
+918	--bug-deadlock	4	2	21	PASS	-
+919	--bug-deadlock	3	5	16	FAIL	deadlock
+920	--bug-deadlock	2	4	2	FAIL	deadlock
+921	--bug-deadlock	4	3	54	PASS	-
+922	--bug-deadlock	4	4	42	PASS	-
+923	--bug-deadlock	4	5	66	FAIL	deadlock
+924	--bug-deadlock	2	5	9	FAIL	deadlock
+925	--bug-deadlock	4	3	47	PASS	-
+926	--bug-deadlock	4	2	35	PASS	-
+927	--bug-deadlock	3	2	28	PASS	-
+928	--bug-deadlock	2	3	16	FAIL	deadlock
+929	--bug-deadlock	4	4	23	FAIL	deadlock
+930	--bug-deadlock	3	4	30	FAIL	deadlock
+931	--bug-deadlock	4	3	47	PASS	-
+932	--bug-deadlock	2	2	2	FAIL	deadlock
+933	--bug-deadlock	4	5	70	PASS	-
+934	--bug-deadlock	3	4	24	FAIL	deadlock
+935	--bug-deadlock	2	4	16	FAIL	deadlock
+936	--bug-deadlock	3	4	61	PASS	-
+937	--bug-deadlock	2	5	2	FAIL	deadlock
+938	--bug-deadlock	2	5	2	FAIL	deadlock
+939	--bug-deadlock	4	2	23	FAIL	deadlock
+940	--bug-deadlock	3	3	9	FAIL	deadlock
+941	--bug-deadlock	4	2	28	PASS	-
+942	--bug-deadlock	2	3	9	FAIL	deadlock
+943	--bug-deadlock	2	5	2	FAIL	deadlock
+944	--bug-deadlock	3	2	35	PASS	-
+945	--bug-deadlock	4	4	9	FAIL	deadlock
+946	--bug-deadlock	4	2	28	PASS	-
+947	--bug-deadlock	4	2	28	PASS	-
+948	--bug-deadlock	4	3	35	PASS	-
+949	--bug-deadlock	3	4	3	FAIL	deadlock
+950	--bug-deadlock	4	4	56	PASS	-
+951	--bug-deadlock	2	5	2	FAIL	deadlock
+952	--bug-deadlock	3	2	21	PASS	-
+953	--bug-deadlock	3	2	42	PASS	-
+954	--bug-deadlock	3	2	14	PASS	-
+955	--bug-deadlock	2	5	2	FAIL	deadlock
+956	--bug-deadlock	3	3	2	FAIL	deadlock
+957	--bug-deadlock	4	3	56	PASS	-
+958	--bug-deadlock	2	4	9	FAIL	deadlock
+959	--bug-deadlock	3	3	33	PASS	-
+960	--bug-deadlock	2	2	14	PASS	-
+961	--bug-deadlock	4	3	54	PASS	-
+962	--bug-deadlock	4	2	14	PASS	-
+963	--bug-deadlock	4	2	14	PASS	-
+964	--bug-deadlock	3	3	42	PASS	-
+965	--bug-deadlock	3	2	35	PASS	-
+966	--bug-deadlock	2	3	16	FAIL	deadlock
+967	--bug-deadlock	2	3	2	FAIL	deadlock
+968	--bug-deadlock	4	3	63	PASS	-
+969	--bug-deadlock	4	2	28	PASS	-
+970	--bug-deadlock	3	3	3	FAIL	deadlock
+971	--bug-deadlock	3	4	24	FAIL	deadlock
+972	--bug-deadlock	4	2	2	FAIL	deadlock
+973	--bug-deadlock	2	4	47	PASS	-
+974	--bug-deadlock	2	5	2	FAIL	deadlock
+975	--bug-deadlock	4	2	21	PASS	-
+976	--bug-deadlock	2	2	2	FAIL	deadlock
+977	--bug-deadlock	4	2	28	PASS	-
+978	--bug-deadlock	4	5	29	FAIL	deadlock
+979	--bug-deadlock	2	2	16	FAIL	deadlock
+980	--bug-deadlock	3	2	42	PASS	-
+981	--bug-deadlock	4	5	3	FAIL	deadlock
+982	--bug-deadlock	3	3	35	PASS	-
+983	--bug-deadlock	4	3	54	PASS	-
+984	--bug-deadlock	4	3	3	FAIL	deadlock
+985	--bug-deadlock	2	3	2	FAIL	deadlock
+986	--bug-deadlock	2	2	14	PASS	-
+987	--bug-deadlock	2	4	23	FAIL	deadlock
+988	--bug-deadlock	3	2	33	PASS	-
+989	--bug-deadlock	4	5	64	PASS	-
+990	--bug-deadlock	2	2	14	PASS	-
+991	--bug-deadlock	3	2	33	PASS	-
+992	--bug-deadlock	3	3	28	PASS	-
+993	--bug-deadlock	4	4	52	PASS	-
+994	--bug-deadlock	2	5	2	FAIL	deadlock
+995	--bug-deadlock	2	2	2	FAIL	deadlock
+996	--bug-deadlock	3	2	33	PASS	-
+997	--bug-deadlock	2	4	2	FAIL	deadlock
+998	--bug-deadlock	2	2	23	FAIL	deadlock
+999	--bug-deadlock	3	2	35	PASS	-
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex03" });
+const { el, s, C } = DST;
+const PCS = ["lock_first", "lock_second", "read_from", "read_to", "write_from", "write_to", "unlock", "done"];
+
+// ---------- parse a captured `run` output ----------
+function parseRun(txt, nolock) {
+  const L = txt.split("\n");
+  const h = L[0].match(/accounts=(\d+).*tasks=(\d+)/);
+  const run = { text: txt, lines: L, accounts: +h[1], tasks: [], events: [], nolock, waits: [] };
+  for (const ln of L) {
+    let m;
+    if ((m = ln.match(/^  T(\d+): (.*)$/))) run.tasks.push({ id: +m[1], transfers: [...m[2].matchAll(/\[(\d+)->(\d+) \$(\d+)\]/g)].map((x) => ({ from: +x[1], to: +x[2], amount: +x[3] })) });
+    else if ((m = ln.match(/^  t=\s*(\d+) T(\d+) (lock|read|write|unlock|insufficient)\s*(?:acct(\d+))?(?: :?= (-?\d+))?/))) run.events.push({ t: +m[1], task: +m[2], op: m[3], acct: m[4] == null ? null : +m[4], value: m[5] == null ? null : +m[5], line: L.indexOf(ln) });
+    else if ((m = ln.match(/^schedule \((\d+) ticks.*\): (.*)$/))) run.schedule = m[2].trim().split(/\s+/).map(Number);
+    else if ((m = ln.match(/^balances: ([\d ]+?)\s+total=(\d+) expected=(\d+)/))) { run.final = m[1].split(" ").map(Number); run.total = +m[2]; run.expected = +m[3]; }
+    else if ((m = ln.match(/^FAILURE: (\w+) at tick (\d+)/))) { run.failure = m[1]; run.failTick = +m[2]; }
+    else if ((m = ln.match(/^  T(\d+) waits for acct(\d+), held by T(\d+)/))) run.waits.push({ task: +m[1], acct: +m[2], holder: +m[3] });
+    else if ((m = ln.match(/^seed=(\d+) ticks=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/))) { run.seed = +m[1]; run.ticks = +m[2]; run.trace = m[3]; run.result = m[4]; }
+  }
+  simulate(run);
+  return run;
+}
+
+// Re-derive every task's pc from the event stream (mirrors World.step / finish_transfer).
+function simulate(run) {
+  const first = run.nolock ? "read_from" : "lock_first";
+  const bal = Array(run.accounts).fill(100), owner = Array(run.accounts).fill(null);
+  const T = run.tasks.map((t) => ({ ti: 0, pc: t.transfers.length ? first : "done", seen_from: null, seen_to: null, inflight: false, readAt: {} }));
+  const snap = (ev) => ({ ev, bal: [...bal], owner: [...owner], tasks: T.map((t) => ({ ...t })) });
+  const states = [snap(null)];
+  const next = (k) => { const t = T[k]; t.ti++; t.pc = t.ti === run.tasks[k].transfers.length ? "done" : first; };
+  run.windows = [];
+  for (const e of run.events) {
+    const t = T[e.task], tr = run.tasks[e.task].transfers[t.ti];
+    e.pc = t.pc;
+    if (e.op === "lock") { owner[e.acct] = e.task; t.pc = t.pc === "lock_first" ? "lock_second" : "read_from"; }
+    else if (e.op === "read") {
+      if (t.pc === "read_from") { t.seen_from = e.value; t.pc = "read_to"; t.readAt.from = e.t; }
+      else { t.seen_to = e.value; t.pc = "write_from"; t.readAt.to = e.t; }
+    } else if (e.op === "insufficient") { if (run.nolock) next(e.task); else t.pc = "unlock"; }
+    else if (e.op === "write") {
+      const which = t.pc === "write_from" ? "from" : "to", tr0 = t.readAt[which];
+      // lost update: someone else wrote this account between our read and this write
+      const others = run.events.filter((o) => o.op === "write" && o.acct === e.acct && o.task !== e.task && o.t > tr0 && o.t < e.t);
+      if (others.length) run.windows.push({ task: e.task, acct: e.acct, tRead: tr0, readValue: which === "from" ? t.seen_from : t.seen_to, tWrite: e.t, value: e.value, others });
+      bal[e.acct] = e.value;
+      if (t.pc === "write_from") { t.inflight = true; t.pc = "write_to"; }
+      else { t.inflight = false; if (run.nolock) next(e.task); else t.pc = "unlock"; }
+    } else if (e.op === "unlock") { owner.forEach((o, a) => { if (o === e.task) owner[a] = null; }); next(e.task); }
+    states.push(snap(e));
+  }
+  run.states = states;
+}
+
+const R = {
+  bug: parseRun(DST.text("log-bug"), true),
+  ok0: parseRun(DST.text("log-ok0"), false),
+  ok1: parseRun(DST.text("log-ok1"), false),
+  dead: parseRun(DST.text("log-dead"), false),
+};
+const TSV = DST.text("tsv-seeds").trim().split("\n").map((l) => { const c = l.split("\t"); return { seed: +c[0], flag: c[1], accounts: +c[2], tasks: +c[3], ticks: +c[4], result: c[5], failure: c[6] }; });
+const sweepTxt = DST.text("log-sweep"), sweepBug = DST.text("log-sweep-bug"), sweepDead = DST.text("log-sweep-dead");
+const sweepN = +sweepTxt.match(/PASS: (\d+) seeds/)[1], sweepT = sweepTxt.match(/real\s+(\S+)/)[1];
+const failAt = (t) => t.match(/FAIL at seed=(\d+) \((\w+)\)/);
+
+// ---------- hero stats ----------
+const rate = (flag) => { const r = TSV.filter((x) => x.flag === flag); return [r.filter((x) => x.result === "FAIL").length, r.length]; };
+{
+  const [fb, nb] = rate("--bug"), [fd, nd] = rate("--bug-deadlock");
+  const stat = (num, lbl) => el("div", { class: "stat" }, el("div", { class: "num" }, num), el("div", { class: "lbl" }, lbl));
+  DST.$("#stats").append(
+    stat(sweepN.toLocaleString(), `seeds pass with fixed lock order (sweep, real ${sweepT})`),
+    stat("seed " + failAt(sweepBug)[1], `first failure of --bug (${failAt(sweepBug)[2]})`),
+    stat("seed " + failAt(sweepDead)[1], `first failure of --bug-deadlock (${failAt(sweepDead)[2]})`),
+    stat(`${fb} / ${fd}`, `failing seeds of the first ${nb} (--bug / --bug-deadlock)`));
+}
+
+// ---------- 01 architecture ----------
+{
+  const W = 1000, H = 330, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(s("defs", {}, s("marker", { id: "ar", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0L10,5L0,10z", fill: C.dim }))));
+  const box = (x, y, w, h, title, sub, col, dash) => {
+    svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: C.panel2, stroke: col, "stroke-width": 1.5, "stroke-dasharray": dash || null }));
+    svg.append(s("text", { x: x + w / 2, y: y + 22, "text-anchor": "middle", fill: C.text, "font-size": 13, "font-weight": 700 }, title));
+    (sub || []).forEach((t, i) => svg.append(s("text", { x: x + w / 2, y: y + 40 + i * 15, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, t)));
+  };
+  const arrow = (x1, y1, x2, y2, label, lx, ly) => {
+    svg.append(s("path", { d: `M${x1},${y1}L${x2},${y2}`, stroke: C.accent, "stroke-width": 1.6, fill: "none", "marker-end": "url(#ar)", class: "flow" }));
+    if (label) svg.append(s("text", { x: lx, y: ly, fill: C.dim, "font-size": 10, "font-family": "monospace" }, label));
+  };
+  box(20, 130, 120, 60, "seed", ["u64 from CLI"], C.yellow);
+  box(190, 130, 150, 60, "root PRNG", ["DefaultPrng(seed)"], C.yellow);
+  box(400, 30, 200, 90, "workload_prng", ["generate_world()", "accounts, tasks,", "transfers"], C.violet, "5 3");
+  box(400, 200, 200, 90, "scheduler_prng", ["pick = runnable[", "uintLessThan(n)]", "1 draw per tick"], C.violet, "5 3");
+  arrow(140, 160, 190, 160);
+  arrow(340, 150, 400, 80, "int(u64)", 300, 100);
+  arrow(340, 170, 400, 245, "int(u64)", 300, 228);
+  // real code block
+  svg.append(s("rect", { x: 650, y: 18, width: 330, height: 300, rx: 12, fill: "none", stroke: C.ok, "stroke-dasharray": "2 4" }));
+  svg.append(s("text", { x: 815, y: 38, "text-anchor": "middle", fill: C.ok, "font-size": 12, "font-weight": 700 }, "REAL CODE (system under test)"));
+  box(670, 50, 290, 70, "Task.step() / World.step()", ["lock · read · check funds · write", "unlock (switch on task.pc)"], C.ok);
+  box(670, 135, 290, 60, "lock protocol", ["lock_order(): {min, max}"], C.ok);
+  box(670, 210, 290, 90, "World.check() every tick", ["no negative balance", "sum == 100·accounts (if none in flight)", "touching ⇒ holding both locks"], C.ok);
+  arrow(600, 75, 670, 85, "World", 606, 102);
+  arrow(600, 245, 670, 245, "pick", 612, 238);
+  svg.append(s("text", { x: 20, y: 250, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "SIMULATED: threads → Task structs"));
+  svg.append(s("text", { x: 20, y: 268, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "mutex → lock_owner[account]"));
+  svg.append(s("text", { x: 20, y: 286, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "preemption → seeded pick"));
+  svg.append(s("text", { x: 20, y: 304, fill: C.violet, "font-size": 11, "font-family": "monospace" }, "time → tick counter"));
+  DST.$("#arch").append(svg);
+}
+
+// ---------- 02 replay ----------
+const KCOL = { lock: C.violet, read: C.accent, write: C.warn, unlock: C.dim, insufficient: C.pink };
+const RUNS = [
+  { key: "bug", label: "run 0 --bug (lost update)" },
+  { key: "ok0", label: "run 0 (correct, same workload)" },
+  { key: "ok1", label: "run 1 (correct, 5 tasks)" },
+];
+let player;
+function showRun(key) {
+  const run = R[key];
+  DST.$("#runpick").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === key));
+  for (const id of ["#sm", "#lanes", "#lanelegend", "#player", "#mem", "#check", "#logwrap"]) DST.$(id).innerHTML = "";
+  if (player) player.stop();
+  const N = run.events.length;
+
+  // state machines
+  const rowH = 64, labW = 170, nodeW = 94, gap = 10, smW = labW + PCS.length * (nodeW + gap);
+  const sm = s("svg", { viewBox: `0 0 ${smW} ${run.tasks.length * rowH + 10}` });
+  const nodeRefs = run.tasks.map((task, k) => {
+    const y = 10 + k * rowH, cy = y + 30;
+    const lab = s("text", { x: 4, y: cy - 4, fill: C.text, "font-size": 13, "font-family": "monospace", "font-weight": 700 }, "T" + k);
+    const sub = s("text", { x: 4, y: cy + 12, fill: C.muted, "font-size": 10.5, "font-family": "monospace" }, "");
+    sm.append(lab, sub);
+    const X = (i) => labW + i * (nodeW + gap);
+    // back arc (next transfer) and abort arc
+    const back = run.nolock ? [5, 2] : [6, 0];
+    sm.append(s("path", { d: `M${X(back[0]) + nodeW / 2},${cy - 12} C${X(back[0]) + nodeW / 2},${y - 6} ${X(back[1]) + nodeW / 2},${y - 6} ${X(back[1]) + nodeW / 2},${cy - 12}`, fill: "none", stroke: C.line, "stroke-width": 1.2, "stroke-dasharray": "3 3" }));
+    const nodes = PCS.map((pc, i) => {
+      const skip = run.nolock && (pc.startsWith("lock") || pc === "unlock");
+      if (i) sm.append(s("line", { x1: X(i) - gap, x2: X(i), y1: cy, y2: cy, stroke: C.line, "stroke-width": 1.5 }));
+      const r = s("rect", { x: X(i), y: cy - 12, width: nodeW, height: 24, rx: 12, fill: C.panel2, stroke: pc === "done" ? C.ok : C.line, opacity: skip ? 0.3 : 1 });
+      const tx = s("text", { x: X(i) + nodeW / 2, y: cy + 4, "text-anchor": "middle", fill: C.muted, "font-size": 10.5, "font-family": "monospace", opacity: skip ? 0.4 : 1 }, pc);
+      sm.append(r, tx);
+      return { r, tx };
+    });
+    return { nodes, sub };
+  });
+  DST.$("#sm").append(sm);
+
+  // swimlanes
+  const lanesNames = run.tasks.map((t) => "T" + t.id);
+  const labels = N <= 40;
+  const evs = run.events.map((e) => ({
+    lane: e.task, t: e.t, t2: e.t + 0.9, color: KCOL[e.op],
+    label: labels ? (e.op === "lock" ? "L" + e.acct : e.op === "read" ? `R${e.acct}=${e.value}` : e.op === "write" ? `W${e.acct}:${e.value}` : e.op === "unlock" ? "U" : "abort") : null,
+    tip: run.lines[e.line].trim() + `\npc: ${e.pc}`,
+  }));
+  const ln = DST.lanes("#lanes", lanesNames, evs, { tmin: 0, tmax: Math.max(N, run.failTick || 0), laneH: 38 });
+  const laneY = (k) => 22 + k * 38;
+  // lost-update windows: band from the stale read to the overwrite
+  run.windows.forEach((w, j) => {
+    const band = s("rect", { x: ln.x(w.tRead), y: laneY(w.task) + 1, width: ln.x(w.tWrite + 0.9) - ln.x(w.tRead), height: 34, rx: 6, fill: "none", stroke: C.bug, "stroke-width": j ? 1 : 2.2, "stroke-dasharray": j ? "4 3" : null });
+    DST.tip(band, `lost update on acct${w.acct}: T${w.task} read ${w.readValue} at t=${w.tRead}, ${w.others.map((o) => `T${o.task} wrote ${o.value} at t=${o.t}`).join(", ")}, T${w.task} overwrote with ${w.value} at t=${w.tWrite}`);
+    ln.svg.insertBefore(band, ln.svg.lastChild);
+    for (const o of w.others) ln.svg.insertBefore(s("line", { x1: ln.x(o.t + 0.45), y1: laneY(o.task) + 17, x2: ln.x(w.tWrite + 0.45), y2: laneY(w.task) + 17, stroke: C.bug, "stroke-width": j ? 1 : 2, opacity: 0.8, "stroke-dasharray": "5 3" }), ln.svg.lastChild);
+  });
+  if (run.failTick != null) ln.svg.insertBefore(s("text", { x: ln.x(run.failTick), y: 16, fill: C.bug, "font-size": 11, "text-anchor": "end", "font-family": "monospace" }, `✕ ${run.failure} @ tick ${run.failTick}`), ln.svg.lastChild);
+  DST.$("#lanelegend").append(...Object.entries(KCOL).map(([k, c]) => el("span", {}, el("i", { class: "sw", style: { background: c } }), k)),
+    run.windows.length ? el("span", {}, el("i", { class: "sw", style: { background: "transparent", border: `2px solid ${C.bug}` } }), "lost-update window (read … overwrite)") : null);
+
+  // memory
+  const accW = 150, mem = s("svg", { viewBox: `0 0 520 ${110 + run.tasks.length * 26}` });
+  const accRefs = Array.from({ length: run.accounts }, (_, a) => {
+    const x = 10 + a * (accW + 14);
+    const r = s("rect", { x, y: 10, width: accW - 20, height: 62, rx: 10, fill: C.panel2, stroke: C.line, class: "acct" });
+    const t1 = s("text", { x: x + 10, y: 28, fill: C.muted, "font-size": 11, "font-family": "monospace" }, `balances[${a}]`);
+    const v = s("text", { x: x + 10, y: 54, fill: C.text, "font-size": 22, "font-weight": 700, "font-family": "monospace" }, "100");
+    const lo = s("text", { x: x + accW - 28, y: 54, "text-anchor": "end", fill: C.violet, "font-size": 10.5, "font-family": "monospace" }, "");
+    mem.append(r, t1, v, lo);
+    return { r, v, lo };
+  });
+  const COLS = [10, 60, 190, 290, 380], HEAD = ["task", "transfer", "seen_from", "seen_to", "in_flight"];
+  HEAD.forEach((h, j) => mem.append(s("text", { x: COLS[j], y: 96, fill: C.dim, "font-size": 11, "font-family": "monospace" }, h)));
+  const regRefs = run.tasks.map((_, k) => COLS.map((x) => { const t = s("text", { x, y: 118 + k * 26, fill: C.text, "font-size": 12, "font-family": "monospace" }, ""); mem.append(t); return t; }));
+  DST.$("#mem").append(mem);
+
+  // log
+  const pre = el("pre", { class: "term", style: { maxHeight: "260px" } });
+  const lineSpans = run.lines.map((l) => { const sp = el("span", {}, l + "\n"); if (/FAILURE|FAIL$/.test(l)) sp.className = "f"; else if (/PASS$/.test(l)) sp.className = "k"; pre.append(sp); return sp; });
+  DST.$("#logwrap").append(pre);
+  const checkBox = el("div", { class: "kv" });
+  DST.$("#check").append(el("h4", { style: { margin: "0 0 6px" } }, "World.check() after this tick"), checkBox);
+
+  const expected = 100 * run.accounts;
+  player = new DST.Player("#player", {
+    count: N + 1, speed: 3,
+    label: (i) => (i === 0 ? "before tick 0" : `after tick ${i - 1} / ${N}`),
+    onStep(i) {
+      const st = run.states[i], e = st.ev;
+      ln.mark(i - 0.05);
+      run.tasks.forEach((task, k) => {
+        const ts = st.tasks[k], ref = nodeRefs[k];
+        ref.nodes.forEach((n, j) => {
+          const cur = PCS[j] === ts.pc, justRan = e && e.task === k && PCS[j] === e.pc;
+          n.r.setAttribute("fill", cur ? (ts.pc === "done" ? C.ok : C.yellow) : justRan ? "#2a3550" : C.panel2);
+          n.r.setAttribute("stroke", justRan ? C.accent : PCS[j] === "done" ? C.ok : C.line);
+          n.tx.setAttribute("fill", cur ? "#0b0f17" : C.muted);
+          n.tx.setAttribute("font-weight", cur ? 700 : 400);
+        });
+        const tr = task.transfers[Math.min(ts.ti, task.transfers.length - 1)];
+        ref.sub.textContent = ts.pc === "done" ? `done (${task.transfers.length} transfers)` : `[${tr.from}->${tr.to} $${tr.amount}] ${ts.ti + 1}/${task.transfers.length}`;
+        [`T${k}`, ts.pc === "done" ? "done" : `${tr.from}->${tr.to} $${tr.amount}`, ts.seen_from ?? "-", ts.seen_to ?? "-", ts.inflight ? "yes" : "no"].forEach((v, j) => {
+          regRefs[k][j].textContent = v;
+          regRefs[k][j].setAttribute("fill", e && e.task === k ? C.yellow : j === 4 && ts.inflight ? C.warn : C.text);
+        });
+      });
+      accRefs.forEach((a, j) => {
+        a.v.textContent = st.bal[j];
+        const written = e && e.op === "write" && e.acct === j, read = e && e.op === "read" && e.acct === j;
+        a.r.setAttribute("fill", written ? "#4a3512" : read ? "#1c2b52" : C.panel2);
+        a.r.setAttribute("stroke", written ? C.warn : read ? C.accent : C.line);
+        a.lo.textContent = st.owner[j] != null ? `lock: T${st.owner[j]}` : run.nolock ? "no lock" : "free";
+      });
+      const sum = st.bal.reduce((x, y) => x + y, 0), inflight = st.tasks.some((t) => t.inflight);
+      const fail = i === N && run.failure;
+      checkBox.innerHTML = "";
+      checkBox.append(
+        el("div", {}, "sum = ", el("b", {}, st.bal.join(" + ") + " = " + sum), "   expected ", el("b", {}, expected)),
+        el("div", {}, "in flight: ", el("b", {}, inflight ? st.tasks.map((t, k) => (t.inflight ? "T" + k : null)).filter(Boolean).join(", ") : "none")),
+        el("div", { style: { marginTop: "6px", color: fail ? C.bug : inflight ? C.warn : sum === expected ? C.ok : C.bug, fontWeight: 700 } },
+          fail ? `✕ ${run.failure} at tick ${run.failTick}` : inflight ? "conservation skipped (money in the air)" : sum === expected ? "✓ conserved" : "sum wrong"),
+        ...(i === N && !run.failure ? [el("div", { style: { color: C.ok } }, `all tasks done: ${run.lines.find((l) => l.startsWith("seed="))}`)] : []));
+      lineSpans.forEach((sp, j) => sp.classList.toggle("cur", e ? j === e.line : false));
+      if (i === N) lineSpans.forEach((sp, j) => { if (j > (run.events.at(-1)?.line ?? 0)) sp.classList.add("cur"); });
+      const curSp = e ? lineSpans[e.line] : null;
+      if (curSp) pre.scrollTop = Math.max(0, curSp.offsetTop - pre.offsetTop - 100);
+    },
+  });
+}
+RUNS.forEach((r) => DST.$("#runpick").append(el("button", { "data-k": r.key, onclick: () => showRun(r.key) }, r.label)));
+showRun("bug");
+{
+  const w = R.bug.windows[0], o = w.others[0], net = R.bug.total - R.bug.expected;
+  DST.$("#lostcallout").append(el("strong", {}, `The lost update in seed ${R.bug.seed}, step by step`),
+    `T${w.task} reads acct${w.acct} = ${w.readValue} at t=${w.tRead}. T${o.task} then writes ${o.value} at t=${o.t}. At t=${w.tWrite}, T${w.task} writes ${w.value} (its stale ${w.readValue} minus its amount), so T${o.task}'s write is gone. `,
+    `This run has ${R.bug.windows.length} such windows (red boxes; hover them). In total $${net} is ${net > 0 ? "created" : "destroyed"} (total ${R.bug.total}, expected ${R.bug.expected}). The checker reports it at tick ${R.bug.failTick}, the first tick at which no transfer is mid-flight.`);
+}
+
+// ---------- 03 wait-for graph ----------
+{
+  const run = R.dead, W = 1000, H = 330, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(s("defs", {}, ...[["wa", C.bug], ["ho", C.violet]].map(([id, c]) => s("marker", { id, viewBox: "0 0 10 10", refX: 10, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0L10,5L0,10z", fill: c })))));
+  const cy = 165;
+  // accounts in the middle row; a task that holds a lock sits above that account, the others below the account they wait for
+  const aPos = Array.from({ length: run.accounts }, (_, a) => ({ x: (W * (a + 1)) / (run.accounts + 1), y: cy }));
+  const holds = {}; run.events.filter((e) => e.op === "lock").forEach((e) => (holds[e.task] = e.acct));
+  const slot = {}, tPos = run.tasks.map((_, k) => {
+    const top = holds[k] != null, a = top ? holds[k] : (run.waits.find((w) => w.task === k) || { acct: k % run.accounts }).acct, key = (top ? "t" : "b") + a;
+    const n = (slot[key] = (slot[key] || 0) + 1) - 1;
+    return { x: aPos[a].x + (n ? (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 90 : 0), y: top ? 45 : 285, key, n };
+  });
+  // centre groups of siblings under their account
+  Object.entries(slot).forEach(([key, cnt]) => { if (cnt === 2) tPos.filter((p) => p.key === key).forEach((p) => (p.x -= 45)); });
+  const edges = s("g"), nodes = s("g");
+  svg.append(edges, nodes);
+  const tNode = tPos.map((p, k) => {
+    const c = s("circle", { cx: p.x, cy: p.y, r: 30, fill: C.panel2, stroke: C.accent, "stroke-width": 2 });
+    const tr = run.tasks[k].transfers[0];
+    nodes.append(c, s("text", { x: p.x, y: p.y + 2, "text-anchor": "middle", fill: C.text, "font-size": 14, "font-weight": 700, "font-family": "monospace" }, "T" + k),
+      s("text", { x: p.x, y: p.y + 16, "text-anchor": "middle", fill: C.muted, "font-size": 9.5, "font-family": "monospace" }, `${tr.from}→${tr.to}`));
+    return c;
+  });
+  const aNode = aPos.map((p, a) => {
+    const r = s("rect", { x: p.x - 34, y: p.y - 18, width: 68, height: 36, rx: 6, fill: "#161f31", stroke: C.warn, "stroke-width": 1.5 });
+    nodes.append(r, s("text", { x: p.x, y: p.y + 5, "text-anchor": "middle", fill: C.warn, "font-size": 13, "font-family": "monospace" }, "acct" + a));
+    return r;
+  });
+  const seg = (p, q, rp, rq) => { const dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx, dy); return [p.x + (dx / d) * rp, p.y + (dy / d) * rp, q.x - (dx / d) * rq, q.y - (dy / d) * rq]; };
+  // find the cycle in the task→task graph (task waits for holder)
+  const nextOf = {}; run.waits.forEach((w) => (nextOf[w.task] = w.holder));
+  let cyc = [];
+  for (const start of Object.keys(nextOf).map(Number)) {
+    const seen = []; let k = start;
+    while (k != null && !seen.includes(k)) { seen.push(k); k = nextOf[k]; }
+    if (k != null) { cyc = seen.slice(seen.indexOf(k)); break; }
+  }
+  const inCycle = (w) => cyc.includes(w.task) && cyc.includes(w.holder) && nextOf[w.task] === w.holder;
+  const N = run.events.length;
+  new DST.Player("#wfgplayer", {
+    count: N + 2, speed: 1,
+    label: (i) => (i === 0 ? "start" : i <= N ? `after tick ${i - 1}` : `tick ${run.failTick}: nothing runnable`),
+    onStep(i) {
+      edges.innerHTML = "";
+      const held = run.events.slice(0, Math.min(i, N)).filter((e) => e.op === "lock");
+      for (const h of held) {
+        const [x1, y1, x2, y2] = seg(aPos[h.acct], tPos[h.task], 36, 32);
+        edges.append(s("line", { x1, y1, x2, y2, stroke: C.violet, "stroke-width": 2.2, "marker-end": "url(#ho)" }));
+        edges.append(s("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 6, fill: C.violet, "font-size": 10, "font-family": "monospace", "text-anchor": "middle" }, `held (t=${h.t})`));
+      }
+      if (i === N + 1) for (const w of run.waits) {
+        const [x1, y1, x2, y2] = seg(tPos[w.task], aPos[w.acct], 32, 36), cy_ = inCycle(w);
+        edges.append(s("line", { x1, y1, x2, y2, stroke: C.bug, "stroke-width": cy_ ? 3 : 1.4, "marker-end": "url(#wa)", class: cy_ ? "flow" : null, opacity: cy_ ? 1 : 0.55, "stroke-dasharray": cy_ ? null : "4 4" }));
+      }
+      tNode.forEach((c, k) => c.setAttribute("stroke", i === N + 1 && cyc.includes(k) ? C.bug : i > 0 && i <= N && run.events[i - 1].task === k ? C.yellow : C.accent));
+      tNode.forEach((c, k) => c.classList.toggle("pulse", i === N + 1 && cyc.includes(k)));
+      DST.$("#wfgcap").textContent = i === 0 ? `${run.tasks.length} tasks over ${run.accounts} accounts. Purple arrow = lock held by; red = waits for.`
+        : i <= N ? run.lines[run.events[i - 1].line].trim()
+        : `FAILURE: ${run.failure} at tick ${run.failTick}. Cycle: ${cyc.map((k) => `T${k} → acct${run.waits.find((w) => w.task === k).acct}`).join(" → ")} → T${cyc[0]}. Everyone else queues behind it. Lines printed by print_wait_for(): ${run.waits.map((w) => `T${w.task}→acct${w.acct}(T${w.holder})`).join(", ")}.`;
+    },
+  }).go(N + 1);
+  DST.$("#wfg").append(svg);
+}
+
+// ---------- 04 charts ----------
+{
+  const flags = [["none", "correct", C.ok], ["--bug", "--bug", C.bug], ["--bug-deadlock", "--bug-deadlock", C.warn]];
+  DST.bar("#rate", flags.map(([f, l, c]) => { const [k, n] = rate(f); return { label: l, value: (100 * k) / n, color: c, note: `${k} / ${n}` }; }), { max: 100, fmt: (v, r) => `${v.toFixed(1)}%  ${r.note}`, labelW: 120, width: 520, rowH: 34 });
+  const rows = [];
+  for (const [f, l, c] of flags.slice(1)) for (let n = 2; n <= 5; n++) {
+    const sub = TSV.filter((x) => x.flag === f && x.tasks === n), k = sub.filter((x) => x.result === "FAIL").length;
+    rows.push({ label: `${l} · ${n} tasks`, value: (100 * k) / sub.length, color: c, note: `${k} of ${sub.length} seeds with ${n} tasks fail` });
+  }
+  DST.bar("#bytasks", rows, { max: 100, fmt: (v, r) => `${v.toFixed(0)}%  ${r.note.split(" seeds")[0].replace(" of ", "/")}`, labelW: 170, rowH: 24, width: 560 });
+  const hist = (f) => { const h = {}; TSV.filter((x) => x.flag === f && x.result === "FAIL").forEach((x) => (h[x.ticks] = (h[x.ticks] || 0) + 1)); const mx = Math.max(...Object.keys(h).map(Number)); return Array.from({ length: mx + 1 }, (_, t) => [t, h[t] || 0]); };
+  DST.line("#tickhist", [{ name: "--bug (money_not_conserved etc.)", color: C.bug, points: hist("--bug") }, { name: "--bug-deadlock (deadlock)", color: C.warn, points: hist("--bug-deadlock") }], { step: true, xlabel: "tick of failure", ylabel: "seeds", height: 260 });
+}
+
+// ---------- 05 real threads vs DST ----------
+{
+  const logScale = (v, lo, hi) => lo * Math.pow(hi / lo, v / 100);
+  const fmtT = (ns) => (ns >= 1e6 ? (ns / 1e6).toFixed(ns >= 1e7 ? 0 : 1) + " ms" : ns >= 1e3 ? (ns / 1e3).toFixed(ns >= 1e4 ? 0 : 1) + " µs" : ns.toFixed(0) + " ns");
+  // DST side, from the captured schedule of run 0 --bug
+  const sch = R.bug.schedule, switches = sch.slice(1).filter((v, i) => v !== sch[i]).length;
+  function draw() {
+    const w = logScale(+DST.$("#w").value, 5, 2000), q = logScale(+DST.$("#q").value, 1e5, 1e8), n = Math.round(logScale(+DST.$("#n").value, 10, 1e7));
+    DST.$("#wout").textContent = fmtT(w); DST.$("#qout").textContent = fmtT(q); DST.$("#nout").textContent = n.toLocaleString();
+    const p1 = w / q, pRun = 1 - Math.pow(1 - p1, n);
+    const W = 1000, H = 150, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+    svg.append(s("text", { x: 10, y: 18, fill: C.muted, "font-size": 12 }, `one time slice (${fmtT(q)}) on one core; preemption happens only at its end`));
+    svg.append(s("rect", { x: 10, y: 28, width: W - 20, height: 26, rx: 5, fill: "#18304f" }));
+    const wx = Math.max(1.5, ((W - 20) * w) / q), pos = 10 + (W - 20) * 0.62;
+    svg.append(s("rect", { x: pos, y: 26, width: wx, height: 30, fill: C.bug }));
+    svg.append(s("text", { x: pos + wx + 6, y: 46, fill: C.bug, "font-size": 11, "font-family": "monospace" }, `← read…write window ${fmtT(w)}`));
+    svg.append(s("text", { x: W - 12, y: 72, "text-anchor": "end", fill: C.dim, "font-size": 11, "font-family": "monospace" }, "▲ switch"));
+    // DST strip: captured schedule
+    svg.append(s("text", { x: 10, y: 100, fill: C.muted, "font-size": 12 }, `DST, captured schedule of run ${R.bug.seed} --bug: every tick is a yield point (${switches} switches in ${sch.length - 1} transitions)`));
+    const cw = (W - 20) / sch.length;
+    sch.forEach((k, i) => {
+      svg.append(s("rect", { x: 10 + i * cw, y: 110, width: cw - 2, height: 26, rx: 3, fill: DST.SERIES[k] }));
+      svg.append(s("text", { x: 10 + i * cw + cw / 2, y: 128, "text-anchor": "middle", fill: "#0b0f17", "font-size": 11, "font-weight": 700, "font-family": "monospace" }, "T" + k));
+      if (i && sch[i - 1] !== k) svg.append(s("line", { x1: 9 + i * cw, x2: 9 + i * cw, y1: 106, y2: 140, stroke: C.yellow, "stroke-width": 1.5 }));
+    });
+    DST.$("#window").innerHTML = ""; DST.$("#window").append(svg);
+    const [fb, nb] = rate("--bug");
+    DST.$("#odds").innerHTML = "";
+    DST.$("#odds").append(
+      el("div", { class: "stat" }, el("div", { class: "num", style: { color: C.warn } }, p1 < 1e-4 ? p1.toExponential(1) : (p1 * 100).toFixed(3) + "%"), el("div", { class: "lbl" }, `model: chance one transfer is preempted inside its window (window / slice). Over ${n.toLocaleString()} transfers: ${(pRun * 100).toPrecision(3)}% that it happens at least once. Even then you get a wrong total, not the interleaving.`)),
+      el("div", { class: "stat" }, el("div", { class: "num" }, `${((100 * switches) / (sch.length - 1)).toFixed(0)}%`), el("div", { class: "lbl" }, `captured: share of yield points where the Zig scheduler switched task in run ${R.bug.seed} --bug. Over the first ${nb} seeds, --bug failed ${fb} times, each with a replayable schedule.`)));
+  }
+  ["#w", "#q", "#n"].forEach((id) => DST.$(id).addEventListener("input", draw));
+  draw();
+}
+
+// ---------- 06 JS mini scheduler (re-implementation) ----------
+function jsRun(seed, mode, sticky, verbose) {
+  const root = DST.Rand(seed), wl = DST.Rand(root.int(2 ** 32)), sc = DST.Rand(root.int(2 ** 32));
+  const nolock = mode === "bug", argOrder = mode === "dead";
+  const A = 2 + wl.int(3), nT = 2 + wl.int(4), first = nolock ? "read_from" : "lock_first";
+  const tasks = Array.from({ length: nT }, (_, id) => {
+    const tr = Array.from({ length: 1 + wl.int(3) }, () => { const from = wl.int(A); return { from, to: (from + 1 + wl.int(A - 1)) % A, amount: 1 + wl.int(60) }; });
+    return { id, tr, ti: 0, pc: first, sf: 0, st: 0, fl: false };
+  });
+  const bal = Array(A).fill(100), owner = Array(A).fill(null), log = [], evs = [];
+  const cur = (t) => t.tr[t.ti], order = (t) => { const c = cur(t); return argOrder ? [c.from, c.to] : [Math.min(c.from, c.to), Math.max(c.from, c.to)]; };
+  const wants = (t) => (t.pc === "lock_first" ? order(t)[0] : t.pc === "lock_second" ? order(t)[1] : null);
+  const runnable = (t) => t.pc !== "done" && (wants(t) == null || owner[wants(t)] == null);
+  const fin = (t) => { t.ti++; t.pc = t.ti === t.tr.length ? "done" : first; };
+  const check = () => {
+    if (bal.some((b) => b < 0)) return "negative_balance";
+    if (!tasks.some((t) => t.fl) && bal.reduce((a, b) => a + b, 0) !== 100 * A) return "money_not_conserved";
+    return null;
+  };
+  let tick = 0, fail = null, prev = -1;
+  for (;; tick++) {
+    if ((fail = check())) break;
+    if (tick === 1024) { fail = "too_many_ticks"; break; }
+    const rn = tasks.filter(runnable);
+    if (!rn.length) { if (tasks.some((t) => t.pc !== "done")) fail = "deadlock"; break; }
+    const keep = prev >= 0 && runnable(tasks[prev]) && sticky > 0 && sc.float() < sticky;
+    const t = keep ? tasks[prev] : rn[sc.int(rn.length)]; prev = t.id;
+    const c = cur(t), pc = t.pc; let msg;
+    if (pc === "lock_first" || pc === "lock_second") { const a = wants(t); owner[a] = t.id; t.pc = pc === "lock_first" ? "lock_second" : "read_from"; msg = `lock    acct${a}`; }
+    else if (pc === "read_from") { t.sf = bal[c.from]; t.pc = "read_to"; msg = `read    acct${c.from} = ${t.sf}`; }
+    else if (pc === "read_to") { t.st = bal[c.to]; if (t.sf < c.amount) { nolock ? fin(t) : (t.pc = "unlock"); msg = "insufficient funds, abort"; } else { t.pc = "write_from"; msg = `read    acct${c.to} = ${t.st}`; } }
+    else if (pc === "write_from") { bal[c.from] = t.sf - c.amount; t.fl = true; t.pc = "write_to"; msg = `write   acct${c.from} := ${bal[c.from]}`; }
+    else if (pc === "write_to") { bal[c.to] = t.st + c.amount; t.fl = false; nolock ? fin(t) : (t.pc = "unlock"); msg = `write   acct${c.to} := ${bal[c.to]}`; }
+    else { order(t).forEach((a) => (owner[a] = null)); fin(t); msg = "unlock"; }
+    if (verbose) { log.push(`  t=${String(tick).padStart(3)} T${t.id} ${msg}`); evs.push({ lane: t.id, t: tick, t2: tick + 0.9, color: KCOL[msg.split(" ")[0]] || C.pink, tip: msg }); }
+  }
+  if (verbose) {
+    const head = [`accounts=${A} (balance 100 each) tasks=${nT}`, ...tasks.map((t) => `  T${t.id}: ` + t.tr.map((c) => `[${c.from}->${c.to} $${c.amount}]`).join(" "))];
+    const tail = [`balances: ${bal.join(" ")}  total=${bal.reduce((a, b) => a + b, 0)} expected=${100 * A}`];
+    if (fail) tail.push(`FAILURE: ${fail} at tick ${tick}`);
+    if (fail === "deadlock") tasks.forEach((t) => { const a = wants(t); if (t.pc !== "done" && a != null) tail.push(`  T${t.id} waits for acct${a}, held by T${owner[a]}`); });
+    return { fail, tick, nT, text: [...head, ...log, ...tail].join("\n"), evs };
+  }
+  return { fail, tick };
+}
+function jsShow() {
+  const seed = Math.max(0, Math.floor(+DST.$("#jsseed").value || 0)), mode = DST.$("#jsmode").value, sticky = +DST.$("#jssticky").value;
+  const r = jsRun(seed, mode, sticky, true);
+  DST.$("#jsres").innerHTML = "";
+  DST.$("#jsres").append(el("b", { style: { color: r.fail ? C.bug : C.ok } }, `JS seed=${seed} ticks=${r.tick} ${r.fail ? "FAIL: " + r.fail : "PASS"}`));
+  DST.$("#jslanes").innerHTML = "";
+  if (r.evs.length) DST.lanes("#jslanes", Array.from({ length: r.nT }, (_, k) => "T" + k), r.evs, { tmin: 0, tmax: r.tick, laneH: 26 }).mark(r.tick);
+  DST.$("#jslog").textContent = r.text;
+}
+DST.$("#jsrun").addEventListener("click", jsShow);
+DST.$("#jsnext").addEventListener("click", () => { DST.$("#jsseed").value = +DST.$("#jsseed").value + 1; jsShow(); });
+["#jsmode", "#jssticky"].forEach((id) => DST.$(id).addEventListener("change", jsShow));
+DST.$("#jsseed").addEventListener("change", jsShow);
+jsShow();
+{
+  const S = [0, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 0.995, 0.999];
+  const series = [["bug", "--bug (JS)", C.bug], ["dead", "--bug-deadlock (JS)", C.warn]].map(([m, name, color]) => ({
+    name, color, dots: true,
+    points: S.map((st, i) => { let f = 0; for (let sd = 0; sd < 1000; sd++) if (jsRun(sd, m, st, false).fail) f++; return [i, f / 10, `stickiness ${st}: ${f} / 1000 seeds fail`]; }),
+  }));
+  DST.line("#jssweep", series, { xmin: 0, xmax: S.length - 1, ymin: 0, ymax: 100, xfmt: (i) => S[i] ?? "", yfmt: (v) => v + "%", xlabel: "stickiness (probability of running the previous task again)", ylabel: "failing seeds", height: 260 });
+}
+
+// ---------- 07 determinism ----------
+{
+  const pair = (a, b, title) => {
+    const A = DST.text(a), B = DST.text(b), la = A.trim().split("\n").at(-1), lb = B.trim().split("\n").at(-1);
+    const same = A === B;
+    const card = el("div", { class: "card" }, el("h4", {}, title));
+    DST.term(card, `$ /tmp/dst03 ${title}\n${la}\n$ /tmp/dst03 ${title}   # again\n${lb}`, [[/^\$ /, "p"], [/FAIL$/, "f"]]);
+    card.append(el("div", { class: "callout " + (same ? "ok" : "bug") }, el("strong", {}, same ? "byte-identical" : "DIFFERENT"),
+      `${A.length} bytes, ${A.split("\n").length - 1} lines; both runs print trace=${la.match(/trace=(\w+)/)[1]}. The schedule line is the whole interleaving: ${(A.match(/^schedule.*$/m) || [""])[0]}`));
+    return card;
+  };
+  DST.$("#det").append(pair("log-bug", "log-bug2", "run 0 --bug"), pair("log-dead", "log-dead2", "run 1 --bug-deadlock"));
+  const det = el("details", {}, el("summary", {}, "Raw captured output (all files embedded in this page)"));
+  for (const [id, t] of [["log-bug", "run 0 --bug"], ["log-dead", "run 1 --bug-deadlock"], ["log-ok0", "run 0"], ["log-sweep", "time sweep 1000000"], ["log-sweep-bug", "sweep 1000000 --bug"], ["log-sweep-dead", "sweep 1000000 --bug-deadlock"]]) {
+    det.append(el("h4", {}, "$ /tmp/dst03 " + t));
+    DST.term(det, DST.text(id));
+  }
+  DST.$("#rawlogs").append(det);
+}
+</script>
+</body></html>

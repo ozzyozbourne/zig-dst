@@ -1,0 +1,84 @@
+accounts=3 (balance 100 each) tasks=5
+  T0: [0->2 $32] [0->2 $47] [1->0 $35]
+  T1: [0->1 $33] [0->1 $14] [2->1 $30]
+  T2: [0->2 $8] [1->0 $10] [2->0 $4]
+  T3: [2->1 $59]
+  T4: [1->2 $8]
+  t=  0 T3 lock    acct1
+  t=  1 T3 lock    acct2
+  t=  2 T3 read    acct2 = 100
+  t=  3 T3 read    acct1 = 100
+  t=  4 T1 lock    acct0
+  t=  5 T3 write   acct2 := 41
+  t=  6 T3 write   acct1 := 159
+  t=  7 T3 unlock
+  t=  8 T4 lock    acct1
+  t=  9 T4 lock    acct2
+  t= 10 T4 read    acct1 = 159
+  t= 11 T4 read    acct2 = 41
+  t= 12 T4 write   acct1 := 151
+  t= 13 T4 write   acct2 := 49
+  t= 14 T4 unlock
+  t= 15 T1 lock    acct1
+  t= 16 T1 read    acct0 = 100
+  t= 17 T1 read    acct1 = 151
+  t= 18 T1 write   acct0 := 67
+  t= 19 T1 write   acct1 := 184
+  t= 20 T1 unlock
+  t= 21 T1 lock    acct0
+  t= 22 T1 lock    acct1
+  t= 23 T1 read    acct0 = 67
+  t= 24 T1 read    acct1 = 184
+  t= 25 T1 write   acct0 := 53
+  t= 26 T1 write   acct1 := 198
+  t= 27 T1 unlock
+  t= 28 T0 lock    acct0
+  t= 29 T0 lock    acct2
+  t= 30 T1 lock    acct1
+  t= 31 T0 read    acct0 = 53
+  t= 32 T0 read    acct2 = 49
+  t= 33 T0 write   acct0 := 21
+  t= 34 T0 write   acct2 := 81
+  t= 35 T0 unlock
+  t= 36 T2 lock    acct0
+  t= 37 T2 lock    acct2
+  t= 38 T2 read    acct0 = 21
+  t= 39 T2 read    acct2 = 81
+  t= 40 T2 write   acct0 := 13
+  t= 41 T2 write   acct2 := 89
+  t= 42 T2 unlock
+  t= 43 T2 lock    acct0
+  t= 44 T1 lock    acct2
+  t= 45 T1 read    acct2 = 89
+  t= 46 T1 read    acct1 = 198
+  t= 47 T1 write   acct2 := 59
+  t= 48 T1 write   acct1 := 228
+  t= 49 T1 unlock
+  t= 50 T2 lock    acct1
+  t= 51 T2 read    acct1 = 228
+  t= 52 T2 read    acct0 = 13
+  t= 53 T2 write   acct1 := 218
+  t= 54 T2 write   acct0 := 23
+  t= 55 T2 unlock
+  t= 56 T2 lock    acct0
+  t= 57 T2 lock    acct2
+  t= 58 T2 read    acct2 = 59
+  t= 59 T2 read    acct0 = 23
+  t= 60 T2 write   acct2 := 55
+  t= 61 T2 write   acct0 := 27
+  t= 62 T2 unlock
+  t= 63 T0 lock    acct0
+  t= 64 T0 lock    acct2
+  t= 65 T0 read    acct0 = 27
+  t= 66 T0 insufficient funds, abort
+  t= 67 T0 unlock
+  t= 68 T0 lock    acct0
+  t= 69 T0 lock    acct1
+  t= 70 T0 read    acct1 = 218
+  t= 71 T0 read    acct0 = 27
+  t= 72 T0 write   acct1 := 183
+  t= 73 T0 write   acct0 := 62
+  t= 74 T0 unlock
+schedule (75 ticks, task picked per tick): 3 3 3 3 1 3 3 3 4 4 4 4 4 4 4 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 1 0 0 0 0 0 2 2 2 2 2 2 2 2 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 2 2 2 0 0 0 0 0 0 0 0 0 0 0 0
+balances: 62 183 55  total=300 expected=300
+seed=1 ticks=75 trace=162e10180debd43e PASS

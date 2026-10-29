@@ -1,0 +1,23 @@
+tick   38: crash #1: cache sectors applied=10 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 96%): seq=12@27+2 seq=13@29+3 seq=14@32+2 seq=15@34+3
+  | cache: 27=kept 28=kept 29=kept 30=kept 31=kept 32=kept 33=kept 34=kept 35=kept 36=kept
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   39: crash #2: cache sectors applied=0 dropped=0; recovered 15 records (acked 15, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 93%):
+  | cache:
+  | scan: 15 records in sectors [0,37); last: seq=12@27+2:crc_ok seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok
+  | stop @37: seq=12683262455698676026 want=16 key=74 len=170
+  | bytes: 44 8b 6e 3f 1b 61 c4 ca db 8d 5a e3 7a 05 0f 6e 3a d9 f7 30 01 00 04 b0 4a aa 38 9f 90 26 0c 65
+  | high water: sector 37
+tick   50: crash #3: cache sectors applied=1 dropped=3; recovered 16 records (acked 18, in-flight 0); stop: unexpected seq (never written, or header sector lost)
+  | unsynced (keep 67%): seq=17@38+2 seq=18@40+2
+  | cache: 38=dropped 39=kept 40=dropped 41=dropped
+  | scan: 16 records in sectors [0,38); last: seq=13@29+3:crc_ok seq=14@32+2:crc_ok seq=15@34+3:crc_ok seq=16@37+1:crc_ok
+  | stop @38: seq=3032735385440829629 want=17 key=5 len=50 checksum=9ff4d83ebeaa44ac computed=f02cff221a3558f8 parent=9040f2ae99028dcf want=bc307679f33f64f3
+  | bytes: ac 44 aa be 3e d8 f4 9f cf 8d 02 99 ae f2 40 90 bd 40 f5 d2 c3 70 16 2a 05 32 69 33 dc bc d4 b7
+  | high water: sector 42
+  INVARIANT VIOLATED: durability: acked put seq=17 key=1 was lost (18 acked, 16 recovered)
+seed=0 crashes=3 acked=18 trace=05849ac5c0fa49b0 FAIL

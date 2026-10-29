@@ -1,0 +1,7 @@
+FAIL at seed=3 after 4 seeds: divergence: replica 2 committed op=1 checksum=265ebc233f913bab (client=0 request=5 view=5) but canonical op=1 is checksum=135a3546a0191492 (client=0 request=1)
+Replay with:
+  zig run main.zig -- run 3 --bug-view-change-log
+
+real	0m0.009s
+user	0m0.001s
+sys	0m0.000s

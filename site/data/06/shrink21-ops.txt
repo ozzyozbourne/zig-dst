@@ -1,0 +1,18 @@
+shrink: seed=21 recorded 1000 ops, initial_cap=43
+  op 69: count_mismatch: got=0 want=43
+  truncate after failing op -> 70 ops
+  deleted chunk=17 orig=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 -> 53 ops
+  deleted chunk=4 orig=17,18,19,20 -> 49 ops
+  deleted chunk=2 orig=43,44 -> 47 ops
+  deleted chunk=2 orig=63,64 -> 45 ops
+  deleted chunk=1 orig=21 -> 44 ops
+  round 1: delete -> 44 ops, simplified 45 args
+  deleted chunk=11 orig=22,23,24,25,26,27,28,29,30,31,32 -> 33 ops
+  round 2: delete -> 33 ops, simplified 0 args
+  round 3: delete -> 33 ops, simplified 0 args
+minimal reproduction (33 ops, 360 replays):
+  q = RingQueue.init(32)
+  push(0) x32
+  resize(32)   <- count_mismatch: got=0 want=32
+  kept orig=33,34,35,36,37,38,39,40,41,42,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,65,66,67,68,69
+seed=21 shrunk trace=98ce1d6defe82a39 FAIL

@@ -18,6 +18,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 var bug_enabled = false;
+/// Opt-in extras for the website (off by default; they never touch the trace hash):
+/// --dump prints every step and the cache contents; --no-target disables the
+/// on_deadline/before_deadline advances to measure how much deadline targeting helps.
+var dump_enabled = false;
+var target_enabled = true;
 
 const ms_per_s: u64 = 1000;
 const ms_per_hour: u64 = 3600 * ms_per_s;
@@ -169,7 +174,7 @@ const Advance = enum { small, medium, jump, on_deadline, before_deadline };
 /// almost never does that on its own; a simulator that knows where the edges are does it often.
 fn gen_advance(random: std.Random, model: *const Model, now_ms: u64) struct { Advance, u64 } {
     const roll = random.uintLessThan(u8, 100);
-    if (roll < 30) if (model.slots[random.uintLessThan(u8, key_count)]) |slot| {
+    if (roll < 30 and target_enabled) if (model.slots[random.uintLessThan(u8, key_count)]) |slot| {
         const deadline = slot.put_at_ms + slot.ttl_ms;
         if (deadline > now_ms + 1) {
             if (roll < 20) return .{ .on_deadline, deadline - now_ms };
@@ -249,9 +254,18 @@ fn run_seed(seed: u64, verbose: bool) Result {
             },
         }
         trace.update(std.mem.asBytes(&event));
+        if (dump_enabled) dump_step(seed, step, event, &cache);
         if (!ok) return .{ .ok = false, .trace_hash = trace.final(), .steps = step + 1, .sim_ms = now_ms };
     }
     return .{ .ok = true, .trace_hash = trace.final(), .steps = steps, .sim_ms = time_sim.ticks * TimeSim.tick_ms };
+}
+
+/// --dump line: seed, step, op (1 put, 2 get, 3 evict, 4+kind advance), key, now (before the
+/// step), x (ttl / value got or maxInt / evicted count / ticks), then the cache as key:deadline.
+fn dump_step(seed: u64, step: u32, event: [4]u64, cache: *const TtlCache) void {
+    std.debug.print("  D seed={d} step={d} op={d} key={d} t={d} x={d} cache=", .{ seed, step, event[0], event[1], event[2], event[3] });
+    for (cache.entries[0..cache.len]) |entry| std.debug.print("{d}:{d},", .{ entry.key, entry.deadline_ms });
+    std.debug.print("\n", .{});
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -261,6 +275,8 @@ pub fn main(init: std.process.Init) !void {
     const n = try std.fmt.parseInt(u64, args.next() orelse "100000", 10);
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--bug")) bug_enabled = true;
+        if (std.mem.eql(u8, arg, "--dump")) dump_enabled = true;
+        if (std.mem.eql(u8, arg, "--no-target")) target_enabled = false;
     }
 
     if (std.mem.eql(u8, mode, "run")) {

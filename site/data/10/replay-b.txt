@@ -1,0 +1,46 @@
+
+          SEED=3
+
+          replicas=3
+          clients=1
+          requests_per_client=8
+          request_idle_max=25 ticks
+          one_way_delay_min=2 ticks
+          one_way_delay_max=3 ticks
+          packet_loss_probability=8/100
+          packet_duplicate_probability=9/100
+          partition_mode=isolate_single
+          partition_symmetry=symmetric
+          partition_probability=17/10000
+          unpartition_probability=1/1000
+          partition_stability=108 ticks
+          unpartition_stability=28 ticks
+          write_latency_min=2 ticks
+          write_latency_max=4 ticks
+          crash_probability=9/100000 (x10 while writes are pending)
+          crash_stability=227 ticks
+          restart_probability=13/1000
+          restart_stability=121 ticks
+
+     5  0   / ...    0V   1/__1C   0LV   1Wo  0W!
+     7    partition side=00001 symmetric
+    38  0   / ...    0V   2/__2C   0LV   2Wo  0W!
+    61  0   / ...    0V   3/__3C   0LV   3Wo  0W!
+    78  1 v / .v.    1V   0/__1C   0LV   1Wo  0W!
+    80  2 v \ .vv    1V   0/__1C   0LV   1Wo  0W!
+    83  0   / .vv    0V   4/__4C   0LV   4Wo  0W!
+    92  0   / .vv    0V   5/__5C   0LV   5Wo  0W!
+   116  0 ! # #vv    0V   5/__6C   0LV   5Wo  1W!
+   147  2 v / #vv    2V   0/__1C   0LV   1Wo  0W!
+   150  1 v \ #vv    2V   0/__1C   0LV   1Wo  0W!
+   155  2 / / #v.    2V   0/__1C   2LV   1Wo  1W!
+   158  1 > \ #..    2V   0/__1C   2LV   1Wo  1W!
+   158  2   / #..    2V   1/__1C   2LV   1Wo  0W!
+   165  1   \ #..    2V   1/__1C   2LV   1Wo  0W!
+   195 FAIL: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+   195  2   / #..    2V   2/__2C   2LV   2Wo  0W!
+   195  0 = # #..    0V   5/__6C   0LV   5Wo  0W!
+   195  1 = \ #..    2V   1/__2C   2LV   1Wo  1W!
+   195  2 = / #..    2V   2/__2C   2LV   2Wo  0W!
+reason: divergence: replica 2 committed op=2 checksum=9e0d1a458b510814 (client=0 request=6 view=2) but canonical op=2 is checksum=c37d68ac42d31d31 (client=0 request=2)
+seed=3 ticks=195 commits=5 trace=692aa09c1869a180 FAIL

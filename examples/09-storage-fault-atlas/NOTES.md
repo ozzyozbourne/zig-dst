@@ -235,6 +235,12 @@ received the wrong data, and block 2, which never got its write:
 seed=1 trace=b33ae975aeb47d6b PASS
 ```
 
+## Extra output flags
+These only add output for the visual site (`site/`). They draw nothing from the PRNG and are not hashed, so
+sweeps and trace hashes are the same with or without them.
+
+- `--all-events`: also print every append and client read.
+
 ## Exercises
 
 1. **Break the atlas on purpose.** Make `Sim.eligible` ignore the atlas (`return sim.faults_enabled;`)

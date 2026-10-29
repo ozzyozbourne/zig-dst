@@ -1,0 +1,5 @@
+PASS: 200000 seeds (0 reached >= 32 queued items; deepest queue=18)
+
+real	0m8.263s
+user	0m8.244s
+sys	0m0.016s

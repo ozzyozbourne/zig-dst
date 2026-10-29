@@ -1,0 +1,3 @@
+0c242528b435feacf8e940a5c605deba09bf708ad6763c9e2d768ee63fe00840  seed42-a.txt
+0c242528b435feacf8e940a5c605deba09bf708ad6763c9e2d768ee63fe00840  seed42-b.txt
+cmp: identical (85750 bytes, 888 lines)

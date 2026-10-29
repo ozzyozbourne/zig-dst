@@ -1,0 +1,3145 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>05 · Simulated network — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .seqgrid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 960px) { .seqgrid { grid-template-columns: 1fr; } }
+  .chip { display: inline-block; font: 11px/1.4 var(--mono); padding: 1px 6px; margin: 2px 3px 2px 0; border-radius: 5px; border: 1px solid var(--line); background: var(--panel2); }
+  .chip.req { border-color: #3c4f86; color: #b9c9ff; }
+  .chip.rep { border-color: #1d6a62; color: #8ff0e3; }
+  .chip.dup { border-color: #8a3d78; color: var(--pink); }
+  .qrow { display: grid; grid-template-columns: 58px 1fr; gap: 6px; font: 12px var(--mono); padding: 2px 0; border-bottom: 1px dashed #1c2740; min-height: 24px; }
+  .qrow .p { color: var(--muted); padding-top: 2px; }
+  .panel-h { font: 600 0.78rem var(--sans); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 10px 0 4px; }
+  .bal { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .bal .stat .num { font-size: 1.4rem; }
+  .stat.bad { border-color: var(--bug); box-shadow: 0 0 0 1px var(--bug) inset; }
+  .stat.bad .num { color: var(--bug); }
+  pre.term.mini { max-height: 190px; font-size: 0.72rem; margin: 6px 0 0; }
+  .gauges { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .gauge { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 8px 6px; text-align: center; }
+  .gauge .k { font: 11px var(--mono); color: var(--muted); word-break: break-all; }
+  table.data td.ok { color: var(--ok); } table.data td.bad { color: var(--bug); }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag medium">Medium</span><span class="tag">Example 05</span></div>
+    <h1>A simulated network</h1>
+    <p class="lede">A <em>packet simulator</em> stands in for the network. Every path holds a priority queue of in-flight
+      messages keyed by the tick they become deliverable, and loss, duplication, reordering, full buffers and clogged links are all
+      decisions drawn from one seed. On this network, a server with client sessions has to apply each transfer
+      <strong>exactly once</strong>. Everything below is parsed from real runs of
+      <code>examples/05-simulated-network/main.zig</code>.</p>
+    <div class="grid g4" id="hero-stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>The world around the server</h2>
+    <p>The code under test is <code>Server.on_request</code> (sessions and dedup) and the client's request, retry and reply logic.
+      Everything between them is simulated: time is a tick counter, the network is a set of per-path heaps, and every
+      fault, think time and amount comes from one master PRNG. That PRNG first draws how hostile this seed's network is, then
+      derives a sub-seed for the network and one for each client.</p>
+    <div class="viz" id="arch"></div>
+    <h3>This seed's <code>SEED=</code> block, as gauges</h3>
+    <p>Each needle shows where the seed landed inside the range that <code>run_seed()</code> draws from. Seed 0 gets a lossy,
+      fast network with 4 clients. Seed 1 gets a slow network with no loss and a long timeout.</p>
+    <div class="controls" id="gauge-ctl"></div>
+    <div class="viz"><div class="gauges" id="gauges"></div>
+      <div class="cap">Parsed from the header printed by <code>run 0</code> / <code>run 1</code>. Ranges are the
+        <code>intRangeAtMost</code>/<code>uintAtMost</code> bounds in <code>run_seed()</code>.</div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>Underneath: the packet simulator</h2>
+    <p><code>Network.submit()</code> pushes a packet onto its path's heap with
+      <code>ready_at = now + max(delay_min, Exponential(delay_mean))</code> and a send sequence number that breaks ties. Each tick,
+      <code>Network.receive()</code> pops every packet whose <code>ready_at</code> has passed, unless the path is clogged.
+      <strong>Loss and replay are decided when a packet comes out of the queue, not when it goes in</strong>, which is the same
+      place TigerBeetle decides them, in <code>submit_packet_finish()</code>. A replayed packet is delivered now, and a copy is pushed back with a fresh delay.</p>
+    <div class="viz" id="pipeline"></div>
+    <h3>The delay distribution, with this seed's real parameters</h3>
+    <p>Bars count the <code>delay=</code> of every packet sent during the safety phase of the real run. Dots show the exact
+      distribution of <code>max(min, ⌊Exp(mean)⌋)</code>. The floor comes from <code>std.math.lossyCast</code>, and every
+      draw below the minimum gets clamped up to it. A random delay also reorders: two packets sent in order arrive out of order
+      whenever the second one draws the shorter delay.</p>
+    <div class="controls" id="delay-ctl"></div>
+    <div class="viz" id="delay"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Replay: <code>run 0 --bug-no-dedup</code>, packet by packet</h2>
+    <p>This is the real failing replay, captured with <code>--packets</code>, a flag that only adds log lines (the trace hash
+      is unchanged: <code id="hash-check"></code>). Every arrow is one packet: <span style="color:var(--accent)">requests</span>,
+      <span style="color:var(--accent2)">replies</span>, <span style="color:var(--pink)">network replays</span> (copies),
+      <span style="color:var(--bug)">✕ lost</span>. On the right are the per-path heaps sorted by <code>(ready_at, seq)</code>,
+      the server's session table, and two balances: the server's own, and the checker's sum of the amounts of
+      <em>distinct</em> requests. Step to the end and watch them split.</p>
+    <div class="seqgrid">
+      <div class="viz" id="seq" style="margin:0"></div>
+      <div>
+        <div class="bal"><div class="stat" id="st-bal"><div class="num">0</div><div class="lbl">server.balance</div></div>
+          <div class="stat" id="st-exp"><div class="num">0</div><div class="lbl">checker: Σ distinct requests</div></div></div>
+        <div class="panel-h">server.sessions (last request → cached reply)</div>
+        <table class="data" id="sess" style="margin:4px 0"></table>
+        <div class="panel-h">per-path heaps, in pop order (seq · request · ready_at)</div>
+        <div id="queues"></div>
+        <div class="panel-h">log</div>
+        <div id="minilog"></div>
+      </div>
+    </div>
+    <div id="seq-player"></div>
+    <div class="callout bug" id="seq-callout"><strong>What happens at the end</strong><span id="seq-why"></span></div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>The three-way duplicate decision</h2>
+    <p>A client sends <code>r+1</code> only after it has the reply to <code>r</code>, so a request that reaches the server is new
+      (<code>== session + 1</code>), a repeat of the latest one (<code>==</code>), or older (<code>&lt;</code>). The counts on
+      the branches are how often each one fired in the real correct run of seed 0, with all faults on.</p>
+    <div class="viz" id="flow"></div>
+    <div class="grid g2">
+      <div><h3 style="margin-top:0">Correct: <code>Server.on_request</code></h3>
+<pre class="code" style="white-space:pre-wrap"><span class="kw">if</span> (message.request == session.request + <span class="n">1</span>) {
+<span class="good">    <span class="kw">const</span> reply = server.apply(session, message);</span>
+    ...
+    <span class="kw">return</span> reply;
+}
+<span class="c">// The client protocol (one request in flight) guarantees it never runs ahead.</span>
+assert(message.request &lt;= session.request);
+<span class="kw">if</span> (message.request == session.request) {
+    ...
+<span class="good">    <span class="kw">return</span> session.reply;</span>
+}
+trace_event(<span class="n">9</span>, message.client, message.request, session.request);
+log(tick, <span class="s">"server: ignore old c{d} r{d} (session at r{d})"</span>, ...);
+<span class="good"><span class="kw">return</span> <span class="kw">null</span>;</span></pre></div>
+      <div><h3 style="margin-top:0">The two planted bugs</h3>
+<pre class="code" style="white-space:pre-wrap"><span class="kw">if</span> (bug_no_dedup) {
+    <span class="c">// BUG: "requests are idempotent enough". A retry whose first copy was applied but</span>
+    <span class="c">// whose reply was lost, or a network replay, is applied a second time.</span>
+    ...
+<span class="bad">    <span class="kw">return</span> server.apply(session, message);</span>
+}
+...
+<span class="kw">if</span> (bug_reply_stale) {
+    <span class="c">// BUG: rebuild the reply from the newest state instead of the cached reply.</span>
+    ...
+<span class="bad">    <span class="kw">return</span> .{ .command = .reply, .client = message.client,</span>
+<span class="bad">        .request = message.request, .balance = server.balance };</span>
+}</pre></div>
+    </div>
+    <p><code>--bug-reply-stale</code> keeps balances right and returns wrong replies instead. It needs a second client's
+      transfer to land between the apply and the retry, and the checker catches it because it inspects <em>every</em> reply on
+      the wire, including late duplicates that the client discards:</p>
+    <div id="stale-term"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Safety phase, heal, liveness phase</h2>
+    <p>A network that drops every packet would pass every safety check. So after <code>ticks_max_safety</code>, the run calls
+      <code>transition_to_liveness_mode()</code>, which sets delay to 1 tick and loss and replay to 0 but leaves clogging on,
+      as TigerBeetle does. From then on, every client must get all its replies within 3000 ticks. Seed 1 is a good example: its
+      clients are still mid-workload when the heal comes.</p>
+    <div class="viz" id="phases"></div>
+    <div class="legend" id="phase-legend"></div>
+    <table class="data" id="heal-table"></table>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Across seeds 0–499</h2>
+    <p>Each seed was run three times: correct, <code>--bug-no-dedup</code> and <code>--bug-reply-stale</code>
+      (<code>per-seed.tsv</code>, from the capture script).</p>
+    <div class="grid g2">
+      <div class="viz"><div class="panel-h" style="margin-top:0">failing seeds out of 500</div><div id="ch-fail"></div></div>
+      <div class="viz"><div class="panel-h" style="margin-top:0">--bug-reply-stale failure rate by client count</div><div id="ch-stale"></div>
+        <div class="cap">With one client, nothing else moves the balance between apply and retry, so the recomputed reply is usually right by luck.</div></div>
+    </div>
+    <div class="grid g2">
+      <div class="viz"><div class="panel-h" style="margin-top:0">client events (send / reply / timeout) after the heal</div><div id="ch-heal"></div>
+        <div class="cap" id="heal-cap"></div></div>
+      <div class="viz"><div class="panel-h" style="margin-top:0">the seeds where --bug-no-dedup still passes</div><table class="data" id="nd-pass"></table>
+        <div class="cap" id="nd-cap"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Determinism: the same seed, twice</h2>
+    <p>The capture script runs <code>run 0 --bug-no-dedup</code> twice. The page compares the two captured files in your
+      browser:</p>
+    <div class="grid g2"><div id="det-a"></div><div id="det-b"></div></div>
+    <div class="callout ok" id="det-verdict"></div>
+    <div class="grid g3"><div id="sw0"></div><div id="sw1"></div><div id="sw2"></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>Try it: one path, your seed</h2>
+    <p><strong>A JavaScript re-implementation, for illustration only</strong>. It is not the Zig program and uses a different PRNG
+      (<code>DST.Rand</code>). Sixteen packets go down one path, one per tick. Each gets
+      <code>max(min, ⌊Exp(mean)⌋)</code> of delay, and when it reaches the head of the queue it may be lost or replayed. Lines
+      join send order (left) to arrival order (right). The same inputs always draw the same picture.</p>
+    <div class="controls" id="play-ctl"></div>
+    <div class="viz" id="play"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>How TigerBeetle does this</h2>
+    <div class="grid g2">
+      <div class="card"><h4><a class="file">src/testing/packet_simulator.zig</a> · <code>submit_packet()</code></h4>
+<pre class="code"><span class="kw">if</span> (queue_count + <span class="n">1</span> &gt; self.options.path_maximum_capacity) {
+    <span class="kw">const</span> link_packet = queue.popIndex(self.prng.index(queue.items));
+    ...
+}
+queue.push(self.allocator, .{
+    .ready_at = self.tick_instant().add(self.packet_delay(packet, path)),
+    .packet = packet,
+}) <span class="kw">catch unreachable</span>;</pre>
+        <p class="src">Full path: drop a <em>random</em> in-flight packet, as <code>Network.submit</code> does here.</p></div>
+      <div class="card"><h4><a class="file">src/testing/packet_simulator.zig</a> · <code>submit_packet_finish()</code></h4>
+<pre class="code"><span class="kw">if</span> (self.should_drop()) { ... <span class="kw">return</span>; }
+<span class="kw">if</span> (self.should_replay()) {
+    self.submit_packet(
+        self.packet_clone(link_packet.packet),
+        path,
+    );
+}
+self.packet_deliver(link_packet.packet, path);</pre>
+        <p class="src">Loss and replay are decided at delivery time. The replay is a clone pushed back with a fresh delay.</p></div>
+      <div class="card"><h4><a class="file">src/testing/fuzz.zig</a> · <code>random_int_exponential()</code></h4>
+<pre class="code"><span class="kw">const</span> exp = random.floatExp(f64) * @as(f64, @floatFromInt(avg));
+<span class="kw">return</span> std.math.lossyCast(T, exp);</pre>
+        <p class="src">Used by <code>packet_delay_default()</code>: <code>@max(min.ns, fuzz.random_int_exponential(&amp;self.prng, u64, mean.ns))</code>.
+          <code>Network.exponential</code> here is the same formula.</p></div>
+      <div class="card"><h4><a class="file">src/vsr/replica.zig</a> · <code>ignore_request_message_duplicate()</code></h4>
+<pre class="code"><span class="kw">if</span> (entry.header.request &gt; message.header.request) {
+    log.debug(<span class="s">"{f}: on_request: ignoring older request"</span>, ...);
+} <span class="kw">else if</span> (entry.header.request == message.header.request) {
+    ...  self.on_request_repeat_reply(message, entry);
+} <span class="kw">else if</span> (entry.header.request + <span class="n">1</span> == message.header.request) {</pre>
+        <p class="src">The same three-way table as section 04. The session entry (<code>src/vsr/client_sessions.zig</code>) stores the reply header.</p></div>
+      <div class="card"><h4><a class="file">src/testing/cluster/network.zig</a> · <code>transition_to_liveness_mode()</code></h4>
+<pre class="code">network.packet_simulator.options.one_way_delay_min = .ms(<span class="n">1</span>);
+network.packet_simulator.options.one_way_delay_mean = .ms(<span class="n">1</span>);
+network.packet_simulator.options.packet_loss_probability = Ratio.zero();
+network.packet_simulator.options.packet_replay_probability = Ratio.zero();</pre>
+        <p class="src">Clogging is not turned off. <code>src/vopr.zig</code> draws the options from the seed
+          (<code>.packet_loss_probability = ratio(prng.int_inclusive(u8, 30), 100)</code>) and prints them in its <code>SEED=</code> block.</p></div>
+      <div class="card"><h4><a class="file">src/vsr/client.zig</a></h4>
+        <p>A single <code>request_inflight</code>. <code>on_request_timeout()</code> backs off with <code>request_timeout.backoff(&amp;self.prng)</code>
+          and resends the <em>same</em> message. <code>on_reply()</code> ignores replies whose request number is older than the inflight one.
+          The clients in this example do the same.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">10</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/05-simulated-network</span>
+<span class="p">$ zig run -OReleaseSafe main.zig -- sweep 10000</span>                    # correct code: passes
+<span class="p">$ zig run -OReleaseSafe main.zig -- sweep 10000 --bug-no-dedup</span>     # fails at seed 0
+<span class="p">$ zig run -OReleaseSafe main.zig -- run 0 --bug-no-dedup</span>           # replay; same trace every time
+<span class="p">$ zig run -OReleaseSafe main.zig -- run 0 --bug-no-dedup --packets</span> # + every send/loss/replay/delivery
+<span class="p">$ zig run -OReleaseSafe main.zig -- run 0 --bug-reply-stale</span>
+<span class="p">$ site/tools/capture.sh 05</span>                                         # re-capture everything on this page</pre>
+  </section>
+</main>
+<script type="text/plain" id="log-nd" data-src="data/05/run0-no-dedup-packets.txt">
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    1] pkt: send seq=1 3->0 request c2 r1 delay=1 ready_at=2 queued=1
+  [    2] pkt: deliver seq=1 3->0 request c2 r1
+  [    2] server: apply c2 r1 amount=219 (no dedup)
+  [    2] pkt: send seq=2 0->3 reply c2 r1 delay=1 ready_at=3 queued=1
+  [    3] pkt: deliver seq=2 0->3 reply c2 r1
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] pkt: send seq=3 3->0 request c2 r2 delay=1 ready_at=5 queued=1
+  [    4] client 3: send r1 transfer(244)
+  [    4] pkt: send seq=4 4->0 request c3 r1 delay=1 ready_at=5 queued=1
+  [    5] pkt: deliver seq=3 3->0 request c2 r2
+  [    5] server: apply c2 r2 amount=898 (no dedup)
+  [    5] pkt: send seq=5 0->3 reply c2 r2 delay=2 ready_at=7 queued=1
+  [    5] pkt: deliver seq=4 4->0 request c3 r1
+  [    5] server: apply c3 r1 amount=244 (no dedup)
+  [    5] pkt: send seq=6 0->4 reply c3 r1 delay=2 ready_at=7 queued=1
+  [    7] pkt: deliver seq=5 0->3 reply c2 r2
+  [    7] client 2: reply r2 balance=1117
+  [    7] pkt: deliver seq=6 0->4 reply c3 r1
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    8] pkt: send seq=7 4->0 request c3 r2 delay=1 ready_at=9 queued=1
+  [    9] pkt: deliver seq=7 4->0 request c3 r2
+  [    9] server: apply c3 r2 amount=844 (no dedup)
+  [    9] pkt: send seq=8 0->4 reply c3 r2 delay=3 ready_at=12 queued=1
+  [    9] client 2: send r3 transfer(329)
+  [    9] pkt: send seq=9 3->0 request c2 r3 delay=1 ready_at=10 queued=1
+  [   10] pkt: deliver seq=9 3->0 request c2 r3
+  [   10] server: apply c2 r3 amount=329 (no dedup)
+  [   10] pkt: send seq=10 0->3 reply c2 r3 delay=2 ready_at=12 queued=1
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] pkt: deliver seq=10 0->3 reply c2 r3
+  [   12] client 2: reply r3 balance=2534
+  [   12] pkt: deliver seq=8 0->4 reply c3 r2
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   13] pkt: send seq=11 2->0 request c1 r1 delay=1 ready_at=14 queued=1
+  [   14] pkt: deliver seq=11 2->0 request c1 r1
+  [   14] server: apply c1 r1 amount=730 (no dedup)
+  [   14] pkt: send seq=12 0->2 reply c1 r1 delay=5 ready_at=19 queued=1
+  [   14] client 3: send r3 transfer(13)
+  [   14] pkt: send seq=13 4->0 request c3 r3 delay=4 ready_at=18 queued=1
+  [   16] client 0: send r1 transfer(801)
+  [   16] pkt: send seq=14 1->0 request c0 r1 delay=1 ready_at=17 queued=1
+  [   17] pkt: replay seq=14 1->0 request c0 r1
+  [   17] pkt: send seq=15 1->0 request c0 r1 delay=1 ready_at=18 queued=1
+  [   17] pkt: deliver seq=14 1->0 request c0 r1
+  [   17] server: apply c0 r1 amount=801 (no dedup)
+  [   17] pkt: send seq=16 0->1 reply c0 r1 delay=1 ready_at=18 queued=1
+  [   18] pkt: deliver seq=16 0->1 reply c0 r1
+  [   18] client 0: reply r1 balance=4065
+  [   18] pkt: lost seq=15 1->0 request c0 r1
+  [   18] pkt: deliver seq=13 4->0 request c3 r3
+  [   18] server: apply c3 r3 amount=13 (no dedup)
+  [   18] pkt: send seq=17 0->4 reply c3 r3 delay=5 ready_at=23 queued=1
+  [   18] client 2: send r4 transfer(555)
+  [   18] pkt: send seq=18 3->0 request c2 r4 delay=7 ready_at=25 queued=1
+  [   19] pkt: deliver seq=12 0->2 reply c1 r1
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] pkt: replay seq=17 0->4 reply c3 r3
+  [   23] pkt: send seq=19 0->4 reply c3 r3 delay=2 ready_at=25 queued=1
+  [   23] pkt: deliver seq=17 0->4 reply c3 r3
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   23] pkt: send seq=20 2->0 request c1 r2 delay=4 ready_at=27 queued=1
+  [   25] pkt: replay seq=19 0->4 reply c3 r3
+  [   25] pkt: send seq=21 0->4 reply c3 r3 delay=1 ready_at=26 queued=1
+  [   25] pkt: deliver seq=19 0->4 reply c3 r3
+  [   25] pkt: deliver seq=18 3->0 request c2 r4
+  [   25] server: apply c2 r4 amount=555 (no dedup)
+  [   25] pkt: send seq=22 0->3 reply c2 r4 delay=1 ready_at=26 queued=1
+  [   26] pkt: deliver seq=22 0->3 reply c2 r4
+  [   26] client 2: reply r4 balance=4633
+  [   26] pkt: deliver seq=21 0->4 reply c3 r3
+  [   29] client 2: send r5 transfer(856)
+  [   29] pkt: send seq=23 3->0 request c2 r5 delay=2 ready_at=31 queued=1
+  [   29] client 3: send r4 transfer(436)
+  [   29] pkt: send seq=24 4->0 request c3 r4 delay=2 ready_at=31 queued=1
+  [   31] pkt: deliver seq=23 3->0 request c2 r5
+  [   31] server: apply c2 r5 amount=856 (no dedup)
+  [   31] pkt: send seq=25 0->3 reply c2 r5 delay=1 ready_at=32 queued=1
+  [   31] pkt: deliver seq=24 4->0 request c3 r4
+  [   31] server: apply c3 r4 amount=436 (no dedup)
+  [   31] pkt: send seq=26 0->4 reply c3 r4 delay=1 ready_at=32 queued=1
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] pkt: lost seq=25 0->3 reply c2 r5
+  [   32] pkt: deliver seq=26 0->4 reply c3 r4
+  [   32] client 3: reply r4 balance=5925
+  [   32] pkt: deliver seq=20 2->0 request c1 r2
+  [   32] server: apply c1 r2 amount=860 (no dedup)
+  [   32] pkt: send seq=27 0->2 reply c1 r2 delay=1 ready_at=33 queued=1
+  [   32] client 0: send r2 transfer(455)
+  [   32] pkt: send seq=28 1->0 request c0 r2 delay=2 ready_at=34 queued=1
+  [   33] pkt: deliver seq=27 0->2 reply c1 r2
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   34] pkt: send seq=29 4->0 request c3 r5 delay=2 ready_at=36 queued=1
+  [   36] pkt: deliver seq=29 4->0 request c3 r5
+  [   36] server: apply c3 r5 amount=533 (no dedup)
+  [   36] pkt: send seq=30 0->4 reply c3 r5 delay=2 ready_at=38 queued=1
+  [   37] client 1: send r3 transfer(246)
+  [   37] pkt: send seq=31 2->0 request c1 r3 delay=2 ready_at=39 queued=1
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] pkt: deliver seq=30 0->4 reply c3 r5
+  [   38] client 3: reply r5 balance=7318
+  [   39] pkt: deliver seq=31 2->0 request c1 r3
+  [   39] server: apply c1 r3 amount=246 (no dedup)
+  [   39] pkt: send seq=32 0->2 reply c1 r3 delay=1 ready_at=40 queued=1
+  [   40] pkt: replay seq=32 0->2 reply c1 r3
+  [   40] pkt: send seq=33 0->2 reply c1 r3 delay=1 ready_at=41 queued=1
+  [   40] pkt: deliver seq=32 0->2 reply c1 r3
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   40] pkt: send seq=34 3->0 request c2 r5 delay=10 ready_at=50 queued=1
+  [   41] pkt: replay seq=33 0->2 reply c1 r3
+  [   41] pkt: send seq=35 0->2 reply c1 r3 delay=1 ready_at=42 queued=1
+  [   41] pkt: deliver seq=33 0->2 reply c1 r3
+  [   41] client 3: send r6 transfer(203)
+  [   41] pkt: send seq=36 4->0 request c3 r6 delay=1 ready_at=42 queued=1
+  [   42] pkt: deliver seq=35 0->2 reply c1 r3
+  [   42] pkt: replay seq=28 1->0 request c0 r2
+  [   42] pkt: send seq=37 1->0 request c0 r2 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=28 1->0 request c0 r2
+  [   42] server: apply c0 r2 amount=455 (no dedup)
+  [   42] pkt: send seq=38 0->1 reply c0 r2 delay=3 ready_at=45 queued=1
+  [   42] pkt: replay seq=36 4->0 request c3 r6
+  [   42] pkt: send seq=39 4->0 request c3 r6 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=36 4->0 request c3 r6
+  [   42] server: apply c3 r6 amount=203 (no dedup)
+  [   42] pkt: send seq=40 0->4 reply c3 r6 delay=3 ready_at=45 queued=1
+  [   43] pkt: replay seq=37 1->0 request c0 r2
+  [   43] pkt: send seq=41 1->0 request c0 r2 delay=1 ready_at=44 queued=1
+  [   43] pkt: deliver seq=37 1->0 request c0 r2
+  [   43] server: apply c0 r2 amount=455 (no dedup)
+  [   43] INVARIANT VIOLATED: server balance=8677, sum of distinct requests=8222
+seed=0 ticks=43 trace=d88bc34622415f6f FAIL
+</script>
+<script type="text/plain" id="log-nd-a" data-src="data/05/run0-no-dedup-a.txt">
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    2] server: apply c2 r1 amount=219 (no dedup)
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] client 3: send r1 transfer(244)
+  [    5] server: apply c2 r2 amount=898 (no dedup)
+  [    5] server: apply c3 r1 amount=244 (no dedup)
+  [    7] client 2: reply r2 balance=1117
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    9] server: apply c3 r2 amount=844 (no dedup)
+  [    9] client 2: send r3 transfer(329)
+  [   10] server: apply c2 r3 amount=329 (no dedup)
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] client 2: reply r3 balance=2534
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   14] server: apply c1 r1 amount=730 (no dedup)
+  [   14] client 3: send r3 transfer(13)
+  [   16] client 0: send r1 transfer(801)
+  [   17] server: apply c0 r1 amount=801 (no dedup)
+  [   18] client 0: reply r1 balance=4065
+  [   18] server: apply c3 r3 amount=13 (no dedup)
+  [   18] client 2: send r4 transfer(555)
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   25] server: apply c2 r4 amount=555 (no dedup)
+  [   26] client 2: reply r4 balance=4633
+  [   29] client 2: send r5 transfer(856)
+  [   29] client 3: send r4 transfer(436)
+  [   31] server: apply c2 r5 amount=856 (no dedup)
+  [   31] server: apply c3 r4 amount=436 (no dedup)
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] client 3: reply r4 balance=5925
+  [   32] server: apply c1 r2 amount=860 (no dedup)
+  [   32] client 0: send r2 transfer(455)
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   36] server: apply c3 r5 amount=533 (no dedup)
+  [   37] client 1: send r3 transfer(246)
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] client 3: reply r5 balance=7318
+  [   39] server: apply c1 r3 amount=246 (no dedup)
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   41] client 3: send r6 transfer(203)
+  [   42] server: apply c0 r2 amount=455 (no dedup)
+  [   42] server: apply c3 r6 amount=203 (no dedup)
+  [   43] server: apply c0 r2 amount=455 (no dedup)
+  [   43] INVARIANT VIOLATED: server balance=8677, sum of distinct requests=8222
+seed=0 ticks=43 trace=d88bc34622415f6f FAIL
+</script>
+<script type="text/plain" id="log-nd-b" data-src="data/05/run0-no-dedup-b.txt">
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    2] server: apply c2 r1 amount=219 (no dedup)
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] client 3: send r1 transfer(244)
+  [    5] server: apply c2 r2 amount=898 (no dedup)
+  [    5] server: apply c3 r1 amount=244 (no dedup)
+  [    7] client 2: reply r2 balance=1117
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    9] server: apply c3 r2 amount=844 (no dedup)
+  [    9] client 2: send r3 transfer(329)
+  [   10] server: apply c2 r3 amount=329 (no dedup)
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] client 2: reply r3 balance=2534
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   14] server: apply c1 r1 amount=730 (no dedup)
+  [   14] client 3: send r3 transfer(13)
+  [   16] client 0: send r1 transfer(801)
+  [   17] server: apply c0 r1 amount=801 (no dedup)
+  [   18] client 0: reply r1 balance=4065
+  [   18] server: apply c3 r3 amount=13 (no dedup)
+  [   18] client 2: send r4 transfer(555)
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   25] server: apply c2 r4 amount=555 (no dedup)
+  [   26] client 2: reply r4 balance=4633
+  [   29] client 2: send r5 transfer(856)
+  [   29] client 3: send r4 transfer(436)
+  [   31] server: apply c2 r5 amount=856 (no dedup)
+  [   31] server: apply c3 r4 amount=436 (no dedup)
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] client 3: reply r4 balance=5925
+  [   32] server: apply c1 r2 amount=860 (no dedup)
+  [   32] client 0: send r2 transfer(455)
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   36] server: apply c3 r5 amount=533 (no dedup)
+  [   37] client 1: send r3 transfer(246)
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] client 3: reply r5 balance=7318
+  [   39] server: apply c1 r3 amount=246 (no dedup)
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   41] client 3: send r6 transfer(203)
+  [   42] server: apply c0 r2 amount=455 (no dedup)
+  [   42] server: apply c3 r6 amount=203 (no dedup)
+  [   43] server: apply c0 r2 amount=455 (no dedup)
+  [   43] INVARIANT VIOLATED: server balance=8677, sum of distinct requests=8222
+seed=0 ticks=43 trace=d88bc34622415f6f FAIL
+</script>
+<script type="text/plain" id="log-stale" data-src="data/05/run0-reply-stale.txt">
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    2] server: apply c2 r1 amount=219 balance=219
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] client 3: send r1 transfer(244)
+  [    5] server: apply c2 r2 amount=898 balance=1117
+  [    5] server: apply c3 r1 amount=244 balance=1361
+  [    7] client 2: reply r2 balance=1117
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    9] server: apply c3 r2 amount=844 balance=2205
+  [    9] client 2: send r3 transfer(329)
+  [   10] server: apply c2 r3 amount=329 balance=2534
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] client 2: reply r3 balance=2534
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   14] server: apply c1 r1 amount=730 balance=3264
+  [   14] client 3: send r3 transfer(13)
+  [   16] client 0: send r1 transfer(801)
+  [   17] server: apply c0 r1 amount=801 balance=4065
+  [   18] client 0: reply r1 balance=4065
+  [   18] server: apply c3 r3 amount=13 balance=4078
+  [   18] client 2: send r4 transfer(555)
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   25] server: apply c2 r4 amount=555 balance=4633
+  [   26] client 2: reply r4 balance=4633
+  [   29] client 2: send r5 transfer(856)
+  [   29] client 3: send r4 transfer(436)
+  [   31] server: apply c2 r5 amount=856 balance=5489
+  [   31] server: apply c3 r4 amount=436 balance=5925
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] client 3: reply r4 balance=5925
+  [   32] server: apply c1 r2 amount=860 balance=6785
+  [   32] client 0: send r2 transfer(455)
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   36] server: apply c3 r5 amount=533 balance=7318
+  [   37] client 1: send r3 transfer(246)
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] client 3: reply r5 balance=7318
+  [   39] server: apply c1 r3 amount=246 balance=7564
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   41] client 3: send r6 transfer(203)
+  [   42] server: apply c0 r2 amount=455 balance=8019
+  [   42] server: apply c3 r6 amount=203 balance=8222
+  [   43] server: duplicate c0 r2 -> reply with current balance=8222
+  [   43] server: duplicate c3 r6 -> reply with current balance=8222
+  [   44] client 1: send r4 transfer(302)
+  [   45] client 0: reply r2 balance=8019
+  [   45] INVARIANT VIOLATED: reply c0 r2 says balance=8222, but r2 produced balance=8019
+seed=0 ticks=45 trace=967f8d2b76791c6e FAIL
+</script>
+<script type="text/plain" id="log-run0" data-src="data/05/run0-packets.txt">
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    1] pkt: send seq=1 3->0 request c2 r1 delay=1 ready_at=2 queued=1
+  [    2] pkt: deliver seq=1 3->0 request c2 r1
+  [    2] server: apply c2 r1 amount=219 balance=219
+  [    2] pkt: send seq=2 0->3 reply c2 r1 delay=1 ready_at=3 queued=1
+  [    3] pkt: deliver seq=2 0->3 reply c2 r1
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] pkt: send seq=3 3->0 request c2 r2 delay=1 ready_at=5 queued=1
+  [    4] client 3: send r1 transfer(244)
+  [    4] pkt: send seq=4 4->0 request c3 r1 delay=1 ready_at=5 queued=1
+  [    5] pkt: deliver seq=3 3->0 request c2 r2
+  [    5] server: apply c2 r2 amount=898 balance=1117
+  [    5] pkt: send seq=5 0->3 reply c2 r2 delay=2 ready_at=7 queued=1
+  [    5] pkt: deliver seq=4 4->0 request c3 r1
+  [    5] server: apply c3 r1 amount=244 balance=1361
+  [    5] pkt: send seq=6 0->4 reply c3 r1 delay=2 ready_at=7 queued=1
+  [    7] pkt: deliver seq=5 0->3 reply c2 r2
+  [    7] client 2: reply r2 balance=1117
+  [    7] pkt: deliver seq=6 0->4 reply c3 r1
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    8] pkt: send seq=7 4->0 request c3 r2 delay=1 ready_at=9 queued=1
+  [    9] pkt: deliver seq=7 4->0 request c3 r2
+  [    9] server: apply c3 r2 amount=844 balance=2205
+  [    9] pkt: send seq=8 0->4 reply c3 r2 delay=3 ready_at=12 queued=1
+  [    9] client 2: send r3 transfer(329)
+  [    9] pkt: send seq=9 3->0 request c2 r3 delay=1 ready_at=10 queued=1
+  [   10] pkt: deliver seq=9 3->0 request c2 r3
+  [   10] server: apply c2 r3 amount=329 balance=2534
+  [   10] pkt: send seq=10 0->3 reply c2 r3 delay=2 ready_at=12 queued=1
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] pkt: deliver seq=10 0->3 reply c2 r3
+  [   12] client 2: reply r3 balance=2534
+  [   12] pkt: deliver seq=8 0->4 reply c3 r2
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   13] pkt: send seq=11 2->0 request c1 r1 delay=1 ready_at=14 queued=1
+  [   14] pkt: deliver seq=11 2->0 request c1 r1
+  [   14] server: apply c1 r1 amount=730 balance=3264
+  [   14] pkt: send seq=12 0->2 reply c1 r1 delay=5 ready_at=19 queued=1
+  [   14] client 3: send r3 transfer(13)
+  [   14] pkt: send seq=13 4->0 request c3 r3 delay=4 ready_at=18 queued=1
+  [   16] client 0: send r1 transfer(801)
+  [   16] pkt: send seq=14 1->0 request c0 r1 delay=1 ready_at=17 queued=1
+  [   17] pkt: replay seq=14 1->0 request c0 r1
+  [   17] pkt: send seq=15 1->0 request c0 r1 delay=1 ready_at=18 queued=1
+  [   17] pkt: deliver seq=14 1->0 request c0 r1
+  [   17] server: apply c0 r1 amount=801 balance=4065
+  [   17] pkt: send seq=16 0->1 reply c0 r1 delay=1 ready_at=18 queued=1
+  [   18] pkt: deliver seq=16 0->1 reply c0 r1
+  [   18] client 0: reply r1 balance=4065
+  [   18] pkt: lost seq=15 1->0 request c0 r1
+  [   18] pkt: deliver seq=13 4->0 request c3 r3
+  [   18] server: apply c3 r3 amount=13 balance=4078
+  [   18] pkt: send seq=17 0->4 reply c3 r3 delay=5 ready_at=23 queued=1
+  [   18] client 2: send r4 transfer(555)
+  [   18] pkt: send seq=18 3->0 request c2 r4 delay=7 ready_at=25 queued=1
+  [   19] pkt: deliver seq=12 0->2 reply c1 r1
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] pkt: replay seq=17 0->4 reply c3 r3
+  [   23] pkt: send seq=19 0->4 reply c3 r3 delay=2 ready_at=25 queued=1
+  [   23] pkt: deliver seq=17 0->4 reply c3 r3
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   23] pkt: send seq=20 2->0 request c1 r2 delay=4 ready_at=27 queued=1
+  [   25] pkt: replay seq=19 0->4 reply c3 r3
+  [   25] pkt: send seq=21 0->4 reply c3 r3 delay=1 ready_at=26 queued=1
+  [   25] pkt: deliver seq=19 0->4 reply c3 r3
+  [   25] pkt: deliver seq=18 3->0 request c2 r4
+  [   25] server: apply c2 r4 amount=555 balance=4633
+  [   25] pkt: send seq=22 0->3 reply c2 r4 delay=1 ready_at=26 queued=1
+  [   26] pkt: deliver seq=22 0->3 reply c2 r4
+  [   26] client 2: reply r4 balance=4633
+  [   26] pkt: deliver seq=21 0->4 reply c3 r3
+  [   29] client 2: send r5 transfer(856)
+  [   29] pkt: send seq=23 3->0 request c2 r5 delay=2 ready_at=31 queued=1
+  [   29] client 3: send r4 transfer(436)
+  [   29] pkt: send seq=24 4->0 request c3 r4 delay=2 ready_at=31 queued=1
+  [   31] pkt: deliver seq=23 3->0 request c2 r5
+  [   31] server: apply c2 r5 amount=856 balance=5489
+  [   31] pkt: send seq=25 0->3 reply c2 r5 delay=1 ready_at=32 queued=1
+  [   31] pkt: deliver seq=24 4->0 request c3 r4
+  [   31] server: apply c3 r4 amount=436 balance=5925
+  [   31] pkt: send seq=26 0->4 reply c3 r4 delay=1 ready_at=32 queued=1
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] pkt: lost seq=25 0->3 reply c2 r5
+  [   32] pkt: deliver seq=26 0->4 reply c3 r4
+  [   32] client 3: reply r4 balance=5925
+  [   32] pkt: deliver seq=20 2->0 request c1 r2
+  [   32] server: apply c1 r2 amount=860 balance=6785
+  [   32] pkt: send seq=27 0->2 reply c1 r2 delay=1 ready_at=33 queued=1
+  [   32] client 0: send r2 transfer(455)
+  [   32] pkt: send seq=28 1->0 request c0 r2 delay=2 ready_at=34 queued=1
+  [   33] pkt: deliver seq=27 0->2 reply c1 r2
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   34] pkt: send seq=29 4->0 request c3 r5 delay=2 ready_at=36 queued=1
+  [   36] pkt: deliver seq=29 4->0 request c3 r5
+  [   36] server: apply c3 r5 amount=533 balance=7318
+  [   36] pkt: send seq=30 0->4 reply c3 r5 delay=2 ready_at=38 queued=1
+  [   37] client 1: send r3 transfer(246)
+  [   37] pkt: send seq=31 2->0 request c1 r3 delay=2 ready_at=39 queued=1
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] pkt: deliver seq=30 0->4 reply c3 r5
+  [   38] client 3: reply r5 balance=7318
+  [   39] pkt: deliver seq=31 2->0 request c1 r3
+  [   39] server: apply c1 r3 amount=246 balance=7564
+  [   39] pkt: send seq=32 0->2 reply c1 r3 delay=1 ready_at=40 queued=1
+  [   40] pkt: replay seq=32 0->2 reply c1 r3
+  [   40] pkt: send seq=33 0->2 reply c1 r3 delay=1 ready_at=41 queued=1
+  [   40] pkt: deliver seq=32 0->2 reply c1 r3
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   40] pkt: send seq=34 3->0 request c2 r5 delay=10 ready_at=50 queued=1
+  [   41] pkt: replay seq=33 0->2 reply c1 r3
+  [   41] pkt: send seq=35 0->2 reply c1 r3 delay=1 ready_at=42 queued=1
+  [   41] pkt: deliver seq=33 0->2 reply c1 r3
+  [   41] client 3: send r6 transfer(203)
+  [   41] pkt: send seq=36 4->0 request c3 r6 delay=1 ready_at=42 queued=1
+  [   42] pkt: deliver seq=35 0->2 reply c1 r3
+  [   42] pkt: replay seq=28 1->0 request c0 r2
+  [   42] pkt: send seq=37 1->0 request c0 r2 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=28 1->0 request c0 r2
+  [   42] server: apply c0 r2 amount=455 balance=8019
+  [   42] pkt: send seq=38 0->1 reply c0 r2 delay=3 ready_at=45 queued=1
+  [   42] pkt: replay seq=36 4->0 request c3 r6
+  [   42] pkt: send seq=39 4->0 request c3 r6 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=36 4->0 request c3 r6
+  [   42] server: apply c3 r6 amount=203 balance=8222
+  [   42] pkt: send seq=40 0->4 reply c3 r6 delay=3 ready_at=45 queued=1
+  [   43] pkt: replay seq=37 1->0 request c0 r2
+  [   43] pkt: send seq=41 1->0 request c0 r2 delay=1 ready_at=44 queued=1
+  [   43] pkt: deliver seq=37 1->0 request c0 r2
+  [   43] server: duplicate c0 r2 -> cached reply balance=8019
+  [   43] pkt: send seq=42 0->1 reply c0 r2 delay=2 ready_at=45 queued=2
+  [   43] pkt: replay seq=39 4->0 request c3 r6
+  [   43] pkt: send seq=43 4->0 request c3 r6 delay=6 ready_at=49 queued=1
+  [   43] pkt: deliver seq=39 4->0 request c3 r6
+  [   43] server: duplicate c3 r6 -> cached reply balance=8222
+  [   43] pkt: send seq=44 0->4 reply c3 r6 delay=5 ready_at=48 queued=2
+  [   44] pkt: lost seq=41 1->0 request c0 r2
+  [   44] client 1: send r4 transfer(302)
+  [   44] pkt: send seq=45 2->0 request c1 r4 delay=1 ready_at=45 queued=1
+  [   45] pkt: deliver seq=38 0->1 reply c0 r2
+  [   45] client 0: reply r2 balance=8019
+  [   45] pkt: deliver seq=42 0->1 reply c0 r2
+  [   45] pkt: replay seq=40 0->4 reply c3 r6
+  [   45] pkt: send seq=46 0->4 reply c3 r6 delay=1 ready_at=46 queued=2
+  [   45] pkt: deliver seq=40 0->4 reply c3 r6
+  [   45] client 3: reply r6 balance=8222
+  [   45] pkt: deliver seq=45 2->0 request c1 r4
+  [   45] server: apply c1 r4 amount=302 balance=8524
+  [   45] pkt: send seq=47 0->2 reply c1 r4 delay=1 ready_at=46 queued=1
+  [   46] pkt: deliver seq=47 0->2 reply c1 r4
+  [   46] client 1: reply r4 balance=8524
+  [   46] pkt: deliver seq=46 0->4 reply c3 r6
+  [   48] pkt: deliver seq=44 0->4 reply c3 r6
+  [   49] pkt: replay seq=43 4->0 request c3 r6
+  [   49] pkt: send seq=48 4->0 request c3 r6 delay=1 ready_at=50 queued=1
+  [   49] pkt: deliver seq=43 4->0 request c3 r6
+  [   49] server: duplicate c3 r6 -> cached reply balance=8222
+  [   49] pkt: send seq=49 0->4 reply c3 r6 delay=3 ready_at=52 queued=1
+  [   50] pkt: deliver seq=34 3->0 request c2 r5
+  [   50] server: duplicate c2 r5 -> cached reply balance=5489
+  [   50] pkt: send seq=50 0->3 reply c2 r5 delay=1 ready_at=51 queued=1
+  [   50] pkt: deliver seq=48 4->0 request c3 r6
+  [   50] server: duplicate c3 r6 -> cached reply balance=8222
+  [   50] pkt: send seq=51 0->4 reply c3 r6 delay=1 ready_at=51 queued=2
+  [   50] client 3: send r7 transfer(165)
+  [   50] pkt: send seq=52 4->0 request c3 r7 delay=1 ready_at=51 queued=1
+  [   51] pkt: deliver seq=50 0->3 reply c2 r5
+  [   51] client 2: reply r5 balance=5489
+  [   51] pkt: lost seq=51 0->4 reply c3 r6
+  [   51] pkt: deliver seq=52 4->0 request c3 r7
+  [   51] server: apply c3 r7 amount=165 balance=8689
+  [   51] pkt: send seq=53 0->4 reply c3 r7 delay=1 ready_at=52 queued=2
+  [   52] pkt: deliver seq=49 0->4 reply c3 r6
+  [   52] pkt: deliver seq=53 0->4 reply c3 r7
+  [   52] client 3: reply r7 balance=8689
+  [   57] client 3: send r8 transfer(817)
+  [   57] pkt: send seq=54 4->0 request c3 r8 delay=5 ready_at=62 queued=1
+  [   58] client 1: send r5 transfer(292)
+  [   58] pkt: send seq=55 2->0 request c1 r5 delay=1 ready_at=59 queued=1
+  [   59] pkt: lost seq=55 2->0 request c1 r5
+  [   59] client 2: send r6 transfer(947)
+  [   59] pkt: send seq=56 3->0 request c2 r6 delay=1 ready_at=60 queued=1
+  [   60] pkt: replay seq=56 3->0 request c2 r6
+  [   60] pkt: send seq=57 3->0 request c2 r6 delay=1 ready_at=61 queued=1
+  [   60] pkt: deliver seq=56 3->0 request c2 r6
+  [   60] server: apply c2 r6 amount=947 balance=9636
+  [   60] pkt: send seq=58 0->3 reply c2 r6 delay=4 ready_at=64 queued=1
+  [   61] pkt: lost seq=57 3->0 request c2 r6
+  [   62] pkt: deliver seq=54 4->0 request c3 r8
+  [   62] server: apply c3 r8 amount=817 balance=10453
+  [   62] pkt: send seq=59 0->4 reply c3 r8 delay=11 ready_at=73 queued=1
+  [   63] client 0: send r3 transfer(389)
+  [   63] pkt: send seq=60 1->0 request c0 r3 delay=2 ready_at=65 queued=1
+  [   64] pkt: deliver seq=58 0->3 reply c2 r6
+  [   64] client 2: reply r6 balance=9636
+  [   65] pkt: deliver seq=60 1->0 request c0 r3
+  [   65] server: apply c0 r3 amount=389 balance=10842
+  [   65] pkt: send seq=61 0->1 reply c0 r3 delay=1 ready_at=66 queued=1
+  [   65] client 2: send r7 transfer(979)
+  [   65] pkt: send seq=62 3->0 request c2 r7 delay=1 ready_at=66 queued=1
+  [   66] pkt: deliver seq=61 0->1 reply c0 r3
+  [   66] client 0: reply r3 balance=10842
+  [   66] pkt: lost seq=62 3->0 request c2 r7
+  [   69] client 1: timeout, resend r5 (attempt 1)
+  [   69] pkt: send seq=63 2->0 request c1 r5 delay=1 ready_at=70 queued=1
+  [   70] pkt: lost seq=63 2->0 request c1 r5
+  [   70] client 0: send r4 transfer(795)
+  [   70] pkt: send seq=64 1->0 request c0 r4 delay=1 ready_at=71 queued=1
+  [   70] client 3: timeout, resend r8 (attempt 1)
+  [   70] pkt: send seq=65 4->0 request c3 r8 delay=3 ready_at=73 queued=1
+  [   71] pkt: deliver seq=64 1->0 request c0 r4
+  [   71] server: apply c0 r4 amount=795 balance=11637
+  [   71] pkt: send seq=66 0->1 reply c0 r4 delay=1 ready_at=72 queued=1
+  [   72] net: path 4->0 clogged for 2 ticks
+  [   72] pkt: replay seq=66 0->1 reply c0 r4
+  [   72] pkt: send seq=67 0->1 reply c0 r4 delay=1 ready_at=73 queued=1
+  [   72] pkt: deliver seq=66 0->1 reply c0 r4
+  [   72] client 0: reply r4 balance=11637
+  [   73] pkt: deliver seq=67 0->1 reply c0 r4
+  [   73] pkt: deliver seq=59 0->4 reply c3 r8
+  [   73] client 3: reply r8 balance=10453
+  [   74] pkt: deliver seq=65 4->0 request c3 r8
+  [   74] server: duplicate c3 r8 -> cached reply balance=10453
+  [   74] pkt: send seq=68 0->4 reply c3 r8 delay=4 ready_at=78 queued=1
+  [   78] pkt: replay seq=68 0->4 reply c3 r8
+  [   78] pkt: send seq=69 0->4 reply c3 r8 delay=1 ready_at=79 queued=1
+  [   78] pkt: deliver seq=68 0->4 reply c3 r8
+  [   79] pkt: deliver seq=69 0->4 reply c3 r8
+  [   81] client 2: timeout, resend r7 (attempt 1)
+  [   81] pkt: send seq=70 3->0 request c2 r7 delay=1 ready_at=82 queued=1
+  [   82] pkt: replay seq=70 3->0 request c2 r7
+  [   82] pkt: send seq=71 3->0 request c2 r7 delay=1 ready_at=83 queued=1
+  [   82] pkt: deliver seq=70 3->0 request c2 r7
+  [   82] server: apply c2 r7 amount=979 balance=12616
+  [   82] pkt: send seq=72 0->3 reply c2 r7 delay=11 ready_at=93 queued=1
+  [   83] pkt: deliver seq=71 3->0 request c2 r7
+  [   83] server: duplicate c2 r7 -> cached reply balance=12616
+  [   83] pkt: send seq=73 0->3 reply c2 r7 delay=6 ready_at=89 queued=2
+  [   84] client 0: send r5 transfer(60)
+  [   84] pkt: send seq=74 1->0 request c0 r5 delay=1 ready_at=85 queued=1
+  [   85] pkt: replay seq=74 1->0 request c0 r5
+  [   85] pkt: send seq=75 1->0 request c0 r5 delay=1 ready_at=86 queued=1
+  [   85] pkt: deliver seq=74 1->0 request c0 r5
+  [   85] server: apply c0 r5 amount=60 balance=12676
+  [   85] pkt: send seq=76 0->1 reply c0 r5 delay=1 ready_at=86 queued=1
+  [   86] pkt: replay seq=76 0->1 reply c0 r5
+  [   86] pkt: send seq=77 0->1 reply c0 r5 delay=9 ready_at=95 queued=1
+  [   86] pkt: deliver seq=76 0->1 reply c0 r5
+  [   86] client 0: reply r5 balance=12676
+  [   86] pkt: deliver seq=75 1->0 request c0 r5
+  [   86] server: duplicate c0 r5 -> cached reply balance=12676
+  [   86] pkt: send seq=78 0->1 reply c0 r5 delay=2 ready_at=88 queued=2
+  [   88] pkt: lost seq=78 0->1 reply c0 r5
+  [   89] pkt: deliver seq=73 0->3 reply c2 r7
+  [   89] client 2: reply r7 balance=12616
+  [   93] pkt: deliver seq=72 0->3 reply c2 r7
+  [   95] pkt: deliver seq=77 0->1 reply c0 r5
+  [   95] client 1: timeout, resend r5 (attempt 2)
+  [   95] pkt: send seq=79 2->0 request c1 r5 delay=1 ready_at=96 queued=1
+  [   96] pkt: deliver seq=79 2->0 request c1 r5
+  [   96] server: apply c1 r5 amount=292 balance=12968
+  [   96] pkt: send seq=80 0->2 reply c1 r5 delay=1 ready_at=97 queued=1
+  [   97] pkt: lost seq=80 0->2 reply c1 r5
+  [  102] client 0: send r6 transfer(698)
+  [  102] pkt: send seq=81 1->0 request c0 r6 delay=3 ready_at=105 queued=1
+  [  104] client 2: send r8 transfer(705)
+  [  104] pkt: send seq=82 3->0 request c2 r8 delay=11 ready_at=115 queued=1
+  [  105] pkt: deliver seq=81 1->0 request c0 r6
+  [  105] server: apply c0 r6 amount=698 balance=13666
+  [  105] pkt: send seq=83 0->1 reply c0 r6 delay=2 ready_at=107 queued=1
+  [  107] pkt: deliver seq=83 0->1 reply c0 r6
+  [  107] client 0: reply r6 balance=13666
+  [  108] client 0: send r7 transfer(498)
+  [  108] pkt: send seq=84 1->0 request c0 r7 delay=1 ready_at=109 queued=1
+  [  109] pkt: deliver seq=84 1->0 request c0 r7
+  [  109] server: apply c0 r7 amount=498 balance=14164
+  [  109] pkt: send seq=85 0->1 reply c0 r7 delay=1 ready_at=110 queued=1
+  [  110] pkt: deliver seq=85 0->1 reply c0 r7
+  [  110] client 0: reply r7 balance=14164
+  [  111] client 3: send r9 transfer(644)
+  [  111] pkt: send seq=86 4->0 request c3 r9 delay=2 ready_at=113 queued=1
+  [  113] pkt: deliver seq=86 4->0 request c3 r9
+  [  113] server: apply c3 r9 amount=644 balance=14808
+  [  113] pkt: send seq=87 0->4 reply c3 r9 delay=1 ready_at=114 queued=1
+  [  114] pkt: deliver seq=87 0->4 reply c3 r9
+  [  114] client 3: reply r9 balance=14808
+  [  115] pkt: replay seq=82 3->0 request c2 r8
+  [  115] pkt: send seq=88 3->0 request c2 r8 delay=1 ready_at=116 queued=1
+  [  115] pkt: deliver seq=82 3->0 request c2 r8
+  [  115] server: apply c2 r8 amount=705 balance=15513
+  [  115] pkt: send seq=89 0->3 reply c2 r8 delay=2 ready_at=117 queued=1
+  [  116] pkt: replay seq=88 3->0 request c2 r8
+  [  116] pkt: send seq=90 3->0 request c2 r8 delay=1 ready_at=117 queued=1
+  [  116] pkt: deliver seq=88 3->0 request c2 r8
+  [  116] server: duplicate c2 r8 -> cached reply balance=15513
+  [  116] pkt: send seq=91 0->3 reply c2 r8 delay=1 ready_at=117 queued=2
+  [  117] pkt: deliver seq=89 0->3 reply c2 r8
+  [  117] client 2: reply r8 balance=15513
+  [  117] pkt: replay seq=91 0->3 reply c2 r8
+  [  117] pkt: send seq=92 0->3 reply c2 r8 delay=1 ready_at=118 queued=1
+  [  117] pkt: deliver seq=91 0->3 reply c2 r8
+  [  117] pkt: deliver seq=90 3->0 request c2 r8
+  [  117] server: duplicate c2 r8 -> cached reply balance=15513
+  [  117] pkt: send seq=93 0->3 reply c2 r8 delay=3 ready_at=120 queued=2
+  [  118] pkt: replay seq=92 0->3 reply c2 r8
+  [  118] pkt: send seq=94 0->3 reply c2 r8 delay=5 ready_at=123 queued=2
+  [  118] pkt: deliver seq=92 0->3 reply c2 r8
+  [  120] pkt: deliver seq=93 0->3 reply c2 r8
+  [  123] pkt: lost seq=94 0->3 reply c2 r8
+  [  123] client 3: send r10 transfer(706)
+  [  123] pkt: send seq=95 4->0 request c3 r10 delay=1 ready_at=124 queued=1
+  [  124] pkt: lost seq=95 4->0 request c3 r10
+  [  128] net: path 2->0 clogged for 20 ticks
+  [  131] client 2: send r9 transfer(326)
+  [  131] pkt: send seq=96 3->0 request c2 r9 delay=1 ready_at=132 queued=1
+  [  132] pkt: lost seq=96 3->0 request c2 r9
+  [  136] client 0: send r8 transfer(497)
+  [  136] pkt: send seq=97 1->0 request c0 r8 delay=10 ready_at=146 queued=1
+  [  141] client 1: timeout, resend r5 (attempt 3)
+  [  141] pkt: send seq=98 2->0 request c1 r5 delay=8 ready_at=149 queued=1
+  [  141] client 2: timeout, resend r9 (attempt 1)
+  [  141] pkt: send seq=99 3->0 request c2 r9 delay=1 ready_at=142 queued=1
+  [  141] client 3: timeout, resend r10 (attempt 1)
+  [  141] pkt: send seq=100 4->0 request c3 r10 delay=1 ready_at=142 queued=1
+  [  142] pkt: replay seq=99 3->0 request c2 r9
+  [  142] pkt: send seq=101 3->0 request c2 r9 delay=4 ready_at=146 queued=1
+  [  142] pkt: deliver seq=99 3->0 request c2 r9
+  [  142] server: apply c2 r9 amount=326 balance=15839
+  [  142] pkt: send seq=102 0->3 reply c2 r9 delay=2 ready_at=144 queued=1
+  [  142] pkt: deliver seq=100 4->0 request c3 r10
+  [  142] server: apply c3 r10 amount=706 balance=16545
+  [  142] pkt: send seq=103 0->4 reply c3 r10 delay=2 ready_at=144 queued=1
+  [  144] pkt: replay seq=102 0->3 reply c2 r9
+  [  144] pkt: send seq=104 0->3 reply c2 r9 delay=3 ready_at=147 queued=1
+  [  144] pkt: deliver seq=102 0->3 reply c2 r9
+  [  144] client 2: reply r9 balance=15839
+  [  144] pkt: lost seq=103 0->4 reply c3 r10
+  [  146] pkt: deliver seq=97 1->0 request c0 r8
+  [  146] server: apply c0 r8 amount=497 balance=17042
+  [  146] pkt: send seq=105 0->1 reply c0 r8 delay=1 ready_at=147 queued=1
+  [  146] pkt: deliver seq=101 3->0 request c2 r9
+  [  146] server: duplicate c2 r9 -> cached reply balance=15839
+  [  146] pkt: send seq=106 0->3 reply c2 r9 delay=6 ready_at=152 queued=2
+  [  146] client 0: timeout, resend r8 (attempt 1)
+  [  146] pkt: send seq=107 1->0 request c0 r8 delay=4 ready_at=150 queued=1
+  [  147] pkt: deliver seq=105 0->1 reply c0 r8
+  [  147] client 0: reply r8 balance=17042
+  [  147] pkt: deliver seq=104 0->3 reply c2 r9
+  [  149] pkt: deliver seq=98 2->0 request c1 r5
+  [  149] server: duplicate c1 r5 -> cached reply balance=12968
+  [  149] pkt: send seq=108 0->2 reply c1 r5 delay=1 ready_at=150 queued=1
+  [  150] pkt: deliver seq=108 0->2 reply c1 r5
+  [  150] client 1: reply r5 balance=12968
+  [  150] pkt: replay seq=107 1->0 request c0 r8
+  [  150] pkt: send seq=109 1->0 request c0 r8 delay=1 ready_at=151 queued=1
+  [  150] pkt: deliver seq=107 1->0 request c0 r8
+  [  150] server: duplicate c0 r8 -> cached reply balance=17042
+  [  150] pkt: send seq=110 0->1 reply c0 r8 delay=1 ready_at=151 queued=1
+  [  151] pkt: deliver seq=110 0->1 reply c0 r8
+  [  151] pkt: deliver seq=109 1->0 request c0 r8
+  [  151] server: duplicate c0 r8 -> cached reply balance=17042
+  [  151] pkt: send seq=111 0->1 reply c0 r8 delay=1 ready_at=152 queued=1
+  [  151] client 0: send r9 transfer(846)
+  [  151] pkt: send seq=112 1->0 request c0 r9 delay=1 ready_at=152 queued=1
+  [  152] pkt: deliver seq=111 0->1 reply c0 r8
+  [  152] pkt: replay seq=106 0->3 reply c2 r9
+  [  152] pkt: send seq=113 0->3 reply c2 r9 delay=3 ready_at=155 queued=1
+  [  152] pkt: deliver seq=106 0->3 reply c2 r9
+  [  152] pkt: replay seq=112 1->0 request c0 r9
+  [  152] pkt: send seq=114 1->0 request c0 r9 delay=2 ready_at=154 queued=1
+  [  152] pkt: deliver seq=112 1->0 request c0 r9
+  [  152] server: apply c0 r9 amount=846 balance=17888
+  [  152] pkt: send seq=115 0->1 reply c0 r9 delay=3 ready_at=155 queued=1
+  [  154] pkt: lost seq=114 1->0 request c0 r9
+  [  155] pkt: lost seq=115 0->1 reply c0 r9
+  [  155] pkt: deliver seq=113 0->3 reply c2 r9
+  [  168] client 0: timeout, resend r9 (attempt 1)
+  [  168] pkt: send seq=116 1->0 request c0 r9 delay=5 ready_at=173 queued=1
+  [  168] client 2: send r10 transfer(297)
+  [  168] pkt: send seq=117 3->0 request c2 r10 delay=7 ready_at=175 queued=1
+  [  169] client 3: timeout, resend r10 (attempt 2)
+  [  169] pkt: send seq=118 4->0 request c3 r10 delay=2 ready_at=171 queued=1
+  [  171] pkt: deliver seq=118 4->0 request c3 r10
+  [  171] server: duplicate c3 r10 -> cached reply balance=16545
+  [  171] pkt: send seq=119 0->4 reply c3 r10 delay=1 ready_at=172 queued=1
+  [  172] pkt: lost seq=119 0->4 reply c3 r10
+  [  173] pkt: deliver seq=116 1->0 request c0 r9
+  [  173] server: duplicate c0 r9 -> cached reply balance=17888
+  [  173] pkt: send seq=120 0->1 reply c0 r9 delay=1 ready_at=174 queued=1
+  [  174] pkt: deliver seq=120 0->1 reply c0 r9
+  [  174] client 0: reply r9 balance=17888
+  [  175] pkt: lost seq=117 3->0 request c2 r10
+  [  179] client 0: send r10 transfer(851)
+  [  179] pkt: send seq=121 1->0 request c0 r10 delay=2 ready_at=181 queued=1
+  [  181] pkt: deliver seq=121 1->0 request c0 r10
+  [  181] server: apply c0 r10 amount=851 balance=18739
+  [  181] pkt: send seq=122 0->1 reply c0 r10 delay=1 ready_at=182 queued=1
+  [  182] pkt: deliver seq=122 0->1 reply c0 r10
+  [  182] client 0: reply r10 balance=18739
+  [  182] client 1: send r6 transfer(505)
+  [  182] pkt: send seq=123 2->0 request c1 r6 delay=2 ready_at=184 queued=1
+  [  184] pkt: replay seq=123 2->0 request c1 r6
+  [  184] pkt: send seq=124 2->0 request c1 r6 delay=2 ready_at=186 queued=1
+  [  184] pkt: deliver seq=123 2->0 request c1 r6
+  [  184] server: apply c1 r6 amount=505 balance=19244
+  [  184] pkt: send seq=125 0->2 reply c1 r6 delay=3 ready_at=187 queued=1
+  [  184] client 2: timeout, resend r10 (attempt 1)
+  [  184] pkt: send seq=126 3->0 request c2 r10 delay=1 ready_at=185 queued=1
+  [  185] pkt: deliver seq=126 3->0 request c2 r10
+  [  185] server: apply c2 r10 amount=297 balance=19541
+  [  185] pkt: send seq=127 0->3 reply c2 r10 delay=3 ready_at=188 queued=1
+  [  186] pkt: deliver seq=124 2->0 request c1 r6
+  [  186] server: duplicate c1 r6 -> cached reply balance=19244
+  [  186] pkt: send seq=128 0->2 reply c1 r6 delay=1 ready_at=187 queued=2
+  [  187] pkt: deliver seq=125 0->2 reply c1 r6
+  [  187] client 1: reply r6 balance=19244
+  [  187] pkt: deliver seq=128 0->2 reply c1 r6
+  [  188] pkt: lost seq=127 0->3 reply c2 r10
+  [  189] client 1: send r7 transfer(875)
+  [  189] pkt: send seq=129 2->0 request c1 r7 delay=1 ready_at=190 queued=1
+  [  190] pkt: deliver seq=129 2->0 request c1 r7
+  [  190] server: apply c1 r7 amount=875 balance=20416
+  [  190] pkt: send seq=130 0->2 reply c1 r7 delay=1 ready_at=191 queued=1
+  [  191] pkt: deliver seq=130 0->2 reply c1 r7
+  [  191] client 1: reply r7 balance=20416
+  [  200] client 0: send r11 transfer(780)
+  [  200] pkt: send seq=131 1->0 request c0 r11 delay=2 ready_at=202 queued=1
+  [  202] pkt: replay seq=131 1->0 request c0 r11
+  [  202] pkt: send seq=132 1->0 request c0 r11 delay=1 ready_at=203 queued=1
+  [  202] pkt: deliver seq=131 1->0 request c0 r11
+  [  202] server: apply c0 r11 amount=780 balance=21196
+  [  202] pkt: send seq=133 0->1 reply c0 r11 delay=5 ready_at=207 queued=1
+  [  203] pkt: replay seq=132 1->0 request c0 r11
+  [  203] pkt: send seq=134 1->0 request c0 r11 delay=1 ready_at=204 queued=1
+  [  203] pkt: deliver seq=132 1->0 request c0 r11
+  [  203] server: duplicate c0 r11 -> cached reply balance=21196
+  [  203] pkt: send seq=135 0->1 reply c0 r11 delay=1 ready_at=204 queued=2
+  [  204] pkt: deliver seq=135 0->1 reply c0 r11
+  [  204] client 0: reply r11 balance=21196
+  [  204] pkt: deliver seq=134 1->0 request c0 r11
+  [  204] server: duplicate c0 r11 -> cached reply balance=21196
+  [  204] pkt: send seq=136 0->1 reply c0 r11 delay=2 ready_at=206 queued=2
+  [  206] pkt: deliver seq=136 0->1 reply c0 r11
+  [  207] pkt: deliver seq=133 0->1 reply c0 r11
+  [  210] client 3: timeout, resend r10 (attempt 3)
+  [  210] pkt: send seq=137 4->0 request c3 r10 delay=1 ready_at=211 queued=1
+  [  211] pkt: deliver seq=137 4->0 request c3 r10
+  [  211] server: duplicate c3 r10 -> cached reply balance=16545
+  [  211] pkt: send seq=138 0->4 reply c3 r10 delay=1 ready_at=212 queued=1
+  [  211] client 2: timeout, resend r10 (attempt 2)
+  [  211] pkt: send seq=139 3->0 request c2 r10 delay=2 ready_at=213 queued=1
+  [  212] pkt: deliver seq=138 0->4 reply c3 r10
+  [  212] client 3: reply r10 balance=16545
+  [  213] pkt: deliver seq=139 3->0 request c2 r10
+  [  213] server: duplicate c2 r10 -> cached reply balance=19541
+  [  213] pkt: send seq=140 0->3 reply c2 r10 delay=1 ready_at=214 queued=1
+  [  214] pkt: deliver seq=140 0->3 reply c2 r10
+  [  214] client 2: reply r10 balance=19541
+  [  214] client 1: send r8 transfer(818)
+  [  214] pkt: send seq=141 2->0 request c1 r8 delay=1 ready_at=215 queued=1
+  [  215] pkt: deliver seq=141 2->0 request c1 r8
+  [  215] server: apply c1 r8 amount=818 balance=22014
+  [  215] pkt: send seq=142 0->2 reply c1 r8 delay=1 ready_at=216 queued=1
+  [  216] pkt: deliver seq=142 0->2 reply c1 r8
+  [  216] client 1: reply r8 balance=22014
+  [  218] client 1: send r9 transfer(56)
+  [  218] pkt: send seq=143 2->0 request c1 r9 delay=8 ready_at=226 queued=1
+  [  218] client 3: send r11 transfer(633)
+  [  218] pkt: send seq=144 4->0 request c3 r11 delay=6 ready_at=224 queued=1
+  [  223] client 2: send r11 transfer(631)
+  [  223] pkt: send seq=145 3->0 request c2 r11 delay=10 ready_at=233 queued=1
+  [  224] pkt: deliver seq=144 4->0 request c3 r11
+  [  224] server: apply c3 r11 amount=633 balance=22647
+  [  224] pkt: send seq=146 0->4 reply c3 r11 delay=4 ready_at=228 queued=1
+  [  226] pkt: deliver seq=143 2->0 request c1 r9
+  [  226] server: apply c1 r9 amount=56 balance=22703
+  [  226] pkt: send seq=147 0->2 reply c1 r9 delay=1 ready_at=227 queued=1
+  [  227] pkt: lost seq=147 0->2 reply c1 r9
+  [  228] pkt: deliver seq=146 0->4 reply c3 r11
+  [  228] client 3: reply r11 balance=22647
+  [  229] client 1: timeout, resend r9 (attempt 1)
+  [  229] pkt: send seq=148 2->0 request c1 r9 delay=5 ready_at=234 queued=1
+  [  232] client 3: send r12 transfer(986)
+  [  232] pkt: send seq=149 4->0 request c3 r12 delay=1 ready_at=233 queued=1
+  [  233] pkt: replay seq=145 3->0 request c2 r11
+  [  233] pkt: send seq=150 3->0 request c2 r11 delay=3 ready_at=236 queued=1
+  [  233] pkt: deliver seq=145 3->0 request c2 r11
+  [  233] server: apply c2 r11 amount=631 balance=23334
+  [  233] pkt: send seq=151 0->3 reply c2 r11 delay=1 ready_at=234 queued=1
+  [  233] pkt: deliver seq=149 4->0 request c3 r12
+  [  233] server: apply c3 r12 amount=986 balance=24320
+  [  233] pkt: send seq=152 0->4 reply c3 r12 delay=1 ready_at=234 queued=1
+  [  234] net: path 2->0 clogged for 1 ticks
+  [  234] pkt: deliver seq=151 0->3 reply c2 r11
+  [  234] client 2: reply r11 balance=23334
+  [  234] pkt: deliver seq=152 0->4 reply c3 r12
+  [  234] client 3: reply r12 balance=24320
+  [  235] pkt: deliver seq=148 2->0 request c1 r9
+  [  235] server: duplicate c1 r9 -> cached reply balance=22703
+  [  235] pkt: send seq=153 0->2 reply c1 r9 delay=5 ready_at=240 queued=1
+  [  235] client 2: send r12 transfer(855)
+  [  235] pkt: send seq=154 3->0 request c2 r12 delay=1 ready_at=236 queued=2
+  [  235] client 3: send r13 transfer(59)
+  [  235] pkt: send seq=155 4->0 request c3 r13 delay=5 ready_at=240 queued=1
+  [  236] pkt: deliver seq=150 3->0 request c2 r11
+  [  236] server: duplicate c2 r11 -> cached reply balance=23334
+  [  236] pkt: send seq=156 0->3 reply c2 r11 delay=8 ready_at=244 queued=1
+  [  236] pkt: deliver seq=154 3->0 request c2 r12
+  [  236] server: apply c2 r12 amount=855 balance=25175
+  [  236] pkt: send seq=157 0->3 reply c2 r12 delay=4 ready_at=240 queued=2
+  [  240] pkt: deliver seq=153 0->2 reply c1 r9
+  [  240] client 1: reply r9 balance=22703
+  [  240] pkt: lost seq=157 0->3 reply c2 r12
+  [  240] pkt: deliver seq=155 4->0 request c3 r13
+  [  240] server: apply c3 r13 amount=59 balance=25234
+  [  240] pkt: send seq=158 0->4 reply c3 r13 delay=4 ready_at=244 queued=1
+  [  242] client 1: send r10 transfer(110)
+  [  242] pkt: send seq=159 2->0 request c1 r10 delay=3 ready_at=245 queued=1
+  [  243] client 0: send r12 transfer(169)
+  [  243] pkt: send seq=160 1->0 request c0 r12 delay=2 ready_at=245 queued=1
+  [  244] pkt: deliver seq=156 0->3 reply c2 r11
+  [  244] pkt: deliver seq=158 0->4 reply c3 r13
+  [  244] client 3: reply r13 balance=25234
+  [  245] pkt: deliver seq=160 1->0 request c0 r12
+  [  245] server: apply c0 r12 amount=169 balance=25403
+  [  245] pkt: send seq=161 0->1 reply c0 r12 delay=1 ready_at=246 queued=1
+  [  245] pkt: replay seq=159 2->0 request c1 r10
+  [  245] pkt: send seq=162 2->0 request c1 r10 delay=2 ready_at=247 queued=1
+  [  245] pkt: deliver seq=159 2->0 request c1 r10
+  [  245] server: apply c1 r10 amount=110 balance=25513
+  [  245] pkt: send seq=163 0->2 reply c1 r10 delay=1 ready_at=246 queued=1
+  [  246] pkt: deliver seq=161 0->1 reply c0 r12
+  [  246] client 0: reply r12 balance=25403
+  [  246] pkt: deliver seq=163 0->2 reply c1 r10
+  [  246] client 1: reply r10 balance=25513
+  [  247] pkt: deliver seq=162 2->0 request c1 r10
+  [  247] server: duplicate c1 r10 -> cached reply balance=25513
+  [  247] pkt: send seq=164 0->2 reply c1 r10 delay=1 ready_at=248 queued=1
+  [  248] pkt: deliver seq=164 0->2 reply c1 r10
+  [  250] client 2: timeout, resend r12 (attempt 1)
+  [  250] pkt: send seq=165 3->0 request c2 r12 delay=3 ready_at=253 queued=1
+  [  251] client 0: send r13 transfer(952)
+  [  251] pkt: send seq=166 1->0 request c0 r13 delay=1 ready_at=252 queued=1
+  [  251] client 1: send r11 transfer(77)
+  [  251] pkt: send seq=167 2->0 request c1 r11 delay=2 ready_at=253 queued=1
+  [  252] pkt: deliver seq=166 1->0 request c0 r13
+  [  252] server: apply c0 r13 amount=952 balance=26465
+  [  252] pkt: send seq=168 0->1 reply c0 r13 delay=3 ready_at=255 queued=1
+  [  253] pkt: deliver seq=167 2->0 request c1 r11
+  [  253] server: apply c1 r11 amount=77 balance=26542
+  [  253] pkt: send seq=169 0->2 reply c1 r11 delay=1 ready_at=254 queued=1
+  [  253] pkt: deliver seq=165 3->0 request c2 r12
+  [  253] server: duplicate c2 r12 -> cached reply balance=25175
+  [  253] pkt: send seq=170 0->3 reply c2 r12 delay=2 ready_at=255 queued=1
+  [  254] pkt: deliver seq=169 0->2 reply c1 r11
+  [  254] client 1: reply r11 balance=26542
+  [  255] pkt: deliver seq=168 0->1 reply c0 r13
+  [  255] client 0: reply r13 balance=26465
+  [  255] pkt: replay seq=170 0->3 reply c2 r12
+  [  255] pkt: send seq=171 0->3 reply c2 r12 delay=6 ready_at=261 queued=1
+  [  255] pkt: deliver seq=170 0->3 reply c2 r12
+  [  255] client 2: reply r12 balance=25175
+  [  258] client 3: send r14 transfer(693)
+  [  258] pkt: send seq=172 4->0 request c3 r14 delay=13 ready_at=271 queued=1
+  [  261] pkt: deliver seq=171 0->3 reply c2 r12
+  [  271] pkt: lost seq=172 4->0 request c3 r14
+  [  272] client 0: send r14 transfer(470)
+  [  272] pkt: send seq=173 1->0 request c0 r14 delay=1 ready_at=273 queued=1
+  [  272] client 2: send r13 transfer(555)
+  [  272] pkt: send seq=174 3->0 request c2 r13 delay=4 ready_at=276 queued=1
+  [  273] pkt: deliver seq=173 1->0 request c0 r14
+  [  273] server: apply c0 r14 amount=470 balance=27012
+  [  273] pkt: send seq=175 0->1 reply c0 r14 delay=1 ready_at=274 queued=1
+  [  274] pkt: replay seq=175 0->1 reply c0 r14
+  [  274] pkt: send seq=176 0->1 reply c0 r14 delay=1 ready_at=275 queued=1
+  [  274] pkt: deliver seq=175 0->1 reply c0 r14
+  [  274] client 0: reply r14 balance=27012
+  [  275] pkt: deliver seq=176 0->1 reply c0 r14
+  [  276] pkt: deliver seq=174 3->0 request c2 r13
+  [  276] server: apply c2 r13 amount=555 balance=27567
+  [  276] pkt: send seq=177 0->3 reply c2 r13 delay=2 ready_at=278 queued=1
+  [  276] client 1: send r12 transfer(866)
+  [  276] pkt: send seq=178 2->0 request c1 r12 delay=3 ready_at=279 queued=1
+  [  277] client 3: timeout, resend r14 (attempt 1)
+  [  277] pkt: send seq=179 4->0 request c3 r14 delay=3 ready_at=280 queued=1
+  [  278] pkt: replay seq=177 0->3 reply c2 r13
+  [  278] pkt: send seq=180 0->3 reply c2 r13 delay=7 ready_at=285 queued=1
+  [  278] pkt: deliver seq=177 0->3 reply c2 r13
+  [  278] client 2: reply r13 balance=27567
+  [  279] pkt: deliver seq=178 2->0 request c1 r12
+  [  279] server: apply c1 r12 amount=866 balance=28433
+  [  279] pkt: send seq=181 0->2 reply c1 r12 delay=2 ready_at=281 queued=1
+  [  280] pkt: replay seq=179 4->0 request c3 r14
+  [  280] pkt: send seq=182 4->0 request c3 r14 delay=7 ready_at=287 queued=1
+  [  280] pkt: deliver seq=179 4->0 request c3 r14
+  [  280] server: apply c3 r14 amount=693 balance=29126
+  [  280] pkt: send seq=183 0->4 reply c3 r14 delay=1 ready_at=281 queued=1
+  [  281] pkt: deliver seq=181 0->2 reply c1 r12
+  [  281] client 1: reply r12 balance=28433
+  [  281] pkt: replay seq=183 0->4 reply c3 r14
+  [  281] pkt: send seq=184 0->4 reply c3 r14 delay=1 ready_at=282 queued=1
+  [  281] pkt: deliver seq=183 0->4 reply c3 r14
+  [  281] client 3: reply r14 balance=29126
+  [  282] pkt: deliver seq=184 0->4 reply c3 r14
+  [  283] net: path 0->3 clogged for 0 ticks
+  [  285] pkt: deliver seq=180 0->3 reply c2 r13
+  [  287] pkt: deliver seq=182 4->0 request c3 r14
+  [  287] server: duplicate c3 r14 -> cached reply balance=29126
+  [  287] pkt: send seq=185 0->4 reply c3 r14 delay=1 ready_at=288 queued=1
+  [  288] pkt: deliver seq=185 0->4 reply c3 r14
+  [  292] client 0: send r15 transfer(413)
+  [  292] pkt: send seq=186 1->0 request c0 r15 delay=5 ready_at=297 queued=1
+  [  293] client 1: send r13 transfer(225)
+  [  293] pkt: send seq=187 2->0 request c1 r13 delay=1 ready_at=294 queued=1
+  [  294] pkt: deliver seq=187 2->0 request c1 r13
+  [  294] server: apply c1 r13 amount=225 balance=29351
+  [  294] pkt: send seq=188 0->2 reply c1 r13 delay=3 ready_at=297 queued=1
+  [  297] pkt: deliver seq=188 0->2 reply c1 r13
+  [  297] client 1: reply r13 balance=29351
+  [  297] pkt: deliver seq=186 1->0 request c0 r15
+  [  297] server: apply c0 r15 amount=413 balance=29764
+  [  297] pkt: send seq=189 0->1 reply c0 r15 delay=1 ready_at=298 queued=1
+  [  297] client 1: send r14 transfer(820)
+  [  297] pkt: send seq=190 2->0 request c1 r14 delay=1 ready_at=298 queued=1
+  [  298] pkt: deliver seq=189 0->1 reply c0 r15
+  [  298] client 0: reply r15 balance=29764
+  [  298] pkt: deliver seq=190 2->0 request c1 r14
+  [  298] server: apply c1 r14 amount=820 balance=30584
+  [  298] pkt: send seq=191 0->2 reply c1 r14 delay=1 ready_at=299 queued=1
+  [  299] pkt: deliver seq=191 0->2 reply c1 r14
+  [  299] client 1: reply r14 balance=30584
+  [  299] client 3: send r15 transfer(945)
+  [  299] pkt: send seq=192 4->0 request c3 r15 delay=1 ready_at=300 queued=1
+  [  300] pkt: deliver seq=192 4->0 request c3 r15
+  [  300] server: apply c3 r15 amount=945 balance=31529
+  [  300] pkt: send seq=193 0->4 reply c3 r15 delay=1 ready_at=301 queued=1
+  [  301] pkt: deliver seq=193 0->4 reply c3 r15
+  [  301] client 3: reply r15 balance=31529
+  [  307] client 0: send r16 transfer(336)
+  [  307] pkt: send seq=194 1->0 request c0 r16 delay=1 ready_at=308 queued=1
+  [  308] pkt: deliver seq=194 1->0 request c0 r16
+  [  308] server: apply c0 r16 amount=336 balance=31865
+  [  308] pkt: send seq=195 0->1 reply c0 r16 delay=1 ready_at=309 queued=1
+  [  309] pkt: deliver seq=195 0->1 reply c0 r16
+  [  309] client 0: reply r16 balance=31865
+  [  309] client 2: send r14 transfer(772)
+  [  309] pkt: send seq=196 3->0 request c2 r14 delay=5 ready_at=314 queued=1
+  [  311] net: path 4->0 clogged for 1 ticks
+  [  314] pkt: deliver seq=196 3->0 request c2 r14
+  [  314] server: apply c2 r14 amount=772 balance=32637
+  [  314] pkt: send seq=197 0->3 reply c2 r14 delay=1 ready_at=315 queued=1
+  [  315] pkt: replay seq=197 0->3 reply c2 r14
+  [  315] pkt: send seq=198 0->3 reply c2 r14 delay=4 ready_at=319 queued=1
+  [  315] pkt: deliver seq=197 0->3 reply c2 r14
+  [  315] client 2: reply r14 balance=32637
+  [  316] client 0: send r17 transfer(432)
+  [  316] pkt: send seq=199 1->0 request c0 r17 delay=1 ready_at=317 queued=1
+  [  317] pkt: replay seq=199 1->0 request c0 r17
+  [  317] pkt: send seq=200 1->0 request c0 r17 delay=1 ready_at=318 queued=1
+  [  317] pkt: deliver seq=199 1->0 request c0 r17
+  [  317] server: apply c0 r17 amount=432 balance=33069
+  [  317] pkt: send seq=201 0->1 reply c0 r17 delay=1 ready_at=318 queued=1
+  [  317] client 1: send r15 transfer(712)
+  [  317] pkt: send seq=202 2->0 request c1 r15 delay=5 ready_at=322 queued=1
+  [  317] client 3: send r16 transfer(316)
+  [  317] pkt: send seq=203 4->0 request c3 r16 delay=1 ready_at=318 queued=1
+  [  318] pkt: deliver seq=201 0->1 reply c0 r17
+  [  318] client 0: reply r17 balance=33069
+  [  318] pkt: deliver seq=200 1->0 request c0 r17
+  [  318] server: duplicate c0 r17 -> cached reply balance=33069
+  [  318] pkt: send seq=204 0->1 reply c0 r17 delay=3 ready_at=321 queued=1
+  [  318] pkt: lost seq=203 4->0 request c3 r16
+  [  319] pkt: deliver seq=198 0->3 reply c2 r14
+  [  321] pkt: deliver seq=204 0->1 reply c0 r17
+  [  321] client 0: send r18 transfer(760)
+  [  321] pkt: send seq=205 1->0 request c0 r18 delay=4 ready_at=325 queued=1
+  [  322] pkt: deliver seq=202 2->0 request c1 r15
+  [  322] server: apply c1 r15 amount=712 balance=33781
+  [  322] pkt: send seq=206 0->2 reply c1 r15 delay=1 ready_at=323 queued=1
+  [  323] pkt: deliver seq=206 0->2 reply c1 r15
+  [  323] client 1: reply r15 balance=33781
+  [  325] pkt: lost seq=205 1->0 request c0 r18
+  [  336] client 3: timeout, resend r16 (attempt 1)
+  [  336] pkt: send seq=207 4->0 request c3 r16 delay=6 ready_at=342 queued=1
+  [  337] client 0: timeout, resend r18 (attempt 1)
+  [  337] pkt: send seq=208 1->0 request c0 r18 delay=1 ready_at=338 queued=1
+  [  338] pkt: deliver seq=208 1->0 request c0 r18
+  [  338] server: apply c0 r18 amount=760 balance=34541
+  [  338] pkt: send seq=209 0->1 reply c0 r18 delay=7 ready_at=345 queued=1
+  [  342] pkt: deliver seq=207 4->0 request c3 r16
+  [  342] server: apply c3 r16 amount=316 balance=34857
+  [  342] pkt: send seq=210 0->4 reply c3 r16 delay=3 ready_at=345 queued=1
+  [  345] pkt: lost seq=209 0->1 reply c0 r18
+  [  345] pkt: deliver seq=210 0->4 reply c3 r16
+  [  345] client 3: reply r16 balance=34857
+  [  345] client 3: send r17 transfer(619)
+  [  345] pkt: send seq=211 4->0 request c3 r17 delay=3 ready_at=348 queued=1
+  [  348] pkt: deliver seq=211 4->0 request c3 r17
+  [  348] server: apply c3 r17 amount=619 balance=35476
+  [  348] pkt: send seq=212 0->4 reply c3 r17 delay=6 ready_at=354 queued=1
+  [  354] pkt: deliver seq=212 0->4 reply c3 r17
+  [  354] client 3: reply r17 balance=35476
+  [  356] client 1: send r16 transfer(296)
+  [  356] pkt: send seq=213 2->0 request c1 r16 delay=1 ready_at=357 queued=1
+  [  357] pkt: deliver seq=213 2->0 request c1 r16
+  [  357] server: apply c1 r16 amount=296 balance=35772
+  [  357] pkt: send seq=214 0->2 reply c1 r16 delay=3 ready_at=360 queued=1
+  [  359] net: path 0->4 clogged for 17 ticks
+  [  360] pkt: deliver seq=214 0->2 reply c1 r16
+  [  360] client 1: reply r16 balance=35772
+  [  360] client 1: send r17 transfer(440)
+  [  360] pkt: send seq=215 2->0 request c1 r17 delay=1 ready_at=361 queued=1
+  [  361] pkt: deliver seq=215 2->0 request c1 r17
+  [  361] server: apply c1 r17 amount=440 balance=36212
+  [  361] pkt: send seq=216 0->2 reply c1 r17 delay=1 ready_at=362 queued=1
+  [  362] pkt: deliver seq=216 0->2 reply c1 r17
+  [  362] client 1: reply r17 balance=36212
+  [  362] client 0: timeout, resend r18 (attempt 2)
+  [  362] pkt: send seq=217 1->0 request c0 r18 delay=1 ready_at=363 queued=1
+  [  363] pkt: deliver seq=217 1->0 request c0 r18
+  [  363] server: duplicate c0 r18 -> cached reply balance=34541
+  [  363] pkt: send seq=218 0->1 reply c0 r18 delay=7 ready_at=370 queued=1
+  [  367] client 1: send r18 transfer(251)
+  [  367] pkt: send seq=219 2->0 request c1 r18 delay=1 ready_at=368 queued=1
+  [  368] pkt: deliver seq=219 2->0 request c1 r18
+  [  368] server: apply c1 r18 amount=251 balance=36463
+  [  368] pkt: send seq=220 0->2 reply c1 r18 delay=7 ready_at=375 queued=1
+  [  370] pkt: deliver seq=218 0->1 reply c0 r18
+  [  370] client 0: reply r18 balance=34541
+  [  371] client 3: send r18 transfer(51)
+  [  371] pkt: send seq=221 4->0 request c3 r18 delay=8 ready_at=379 queued=1
+  [  375] pkt: deliver seq=220 0->2 reply c1 r18
+  [  375] client 1: reply r18 balance=36463
+  [  377] client 1: send r19 transfer(662)
+  [  377] pkt: send seq=222 2->0 request c1 r19 delay=4 ready_at=381 queued=1
+  [  379] pkt: deliver seq=221 4->0 request c3 r18
+  [  379] server: apply c3 r18 amount=51 balance=36514
+  [  379] pkt: send seq=223 0->4 reply c3 r18 delay=2 ready_at=381 queued=1
+  [  379] client 2: send r15 transfer(983)
+  [  379] pkt: send seq=224 3->0 request c2 r15 delay=1 ready_at=380 queued=1
+  [  380] pkt: deliver seq=224 3->0 request c2 r15
+  [  380] server: apply c2 r15 amount=983 balance=37497
+  [  380] pkt: send seq=225 0->3 reply c2 r15 delay=3 ready_at=383 queued=1
+  [  381] pkt: deliver seq=223 0->4 reply c3 r18
+  [  381] client 3: reply r18 balance=36514
+  [  381] pkt: deliver seq=222 2->0 request c1 r19
+  [  381] server: apply c1 r19 amount=662 balance=38159
+  [  381] pkt: send seq=226 0->2 reply c1 r19 delay=3 ready_at=384 queued=1
+  [  383] pkt: deliver seq=225 0->3 reply c2 r15
+  [  383] client 2: reply r15 balance=37497
+  [  384] pkt: deliver seq=226 0->2 reply c1 r19
+  [  384] client 1: reply r19 balance=38159
+  [  387] client 1: send r20 transfer(922)
+  [  387] pkt: send seq=227 2->0 request c1 r20 delay=1 ready_at=388 queued=1
+  [  388] pkt: deliver seq=227 2->0 request c1 r20
+  [  388] server: apply c1 r20 amount=922 balance=39081
+  [  388] pkt: send seq=228 0->2 reply c1 r20 delay=1 ready_at=389 queued=1
+  [  389] net: path 0->1 clogged for 33 ticks
+  [  389] pkt: deliver seq=228 0->2 reply c1 r20
+  [  389] client 1: reply r20 balance=39081
+  [  398] net: path 2->0 clogged for 12 ticks
+  [  399] client 1: send r21 transfer(960)
+  [  399] pkt: send seq=229 2->0 request c1 r21 delay=1 ready_at=400 queued=1
+  [  401] client 0: send r19 transfer(12)
+  [  401] pkt: send seq=230 1->0 request c0 r19 delay=1 ready_at=402 queued=1
+  [  402] pkt: deliver seq=230 1->0 request c0 r19
+  [  402] server: apply c0 r19 amount=12 balance=39093
+  [  402] pkt: send seq=231 0->1 reply c0 r19 delay=5 ready_at=407 queued=1
+  [  402] client 3: send r19 transfer(516)
+  [  402] pkt: send seq=232 4->0 request c3 r19 delay=1 ready_at=403 queued=1
+  [  403] pkt: deliver seq=232 4->0 request c3 r19
+  [  403] server: apply c3 r19 amount=516 balance=39609
+  [  403] pkt: send seq=233 0->4 reply c3 r19 delay=2 ready_at=405 queued=1
+  [  405] pkt: deliver seq=233 0->4 reply c3 r19
+  [  405] client 3: reply r19 balance=39609
+  [  410] pkt: deliver seq=229 2->0 request c1 r21
+  [  410] server: apply c1 r21 amount=960 balance=40569
+  [  410] pkt: send seq=234 0->2 reply c1 r21 delay=1 ready_at=411 queued=1
+  [  411] pkt: deliver seq=234 0->2 reply c1 r21
+  [  411] client 1: reply r21 balance=40569
+  [  411] client 1: send r22 transfer(295)
+  [  411] pkt: send seq=235 2->0 request c1 r22 delay=1 ready_at=412 queued=1
+  [  412] pkt: lost seq=235 2->0 request c1 r22
+  [  414] client 3: send r20 transfer(725)
+  [  414] pkt: send seq=236 4->0 request c3 r20 delay=1 ready_at=415 queued=1
+  [  415] pkt: deliver seq=236 4->0 request c3 r20
+  [  415] server: apply c3 r20 amount=725 balance=41294
+  [  415] pkt: send seq=237 0->4 reply c3 r20 delay=2 ready_at=417 queued=1
+  [  416] client 0: timeout, resend r19 (attempt 1)
+  [  416] pkt: send seq=238 1->0 request c0 r19 delay=3 ready_at=419 queued=1
+  [  417] pkt: deliver seq=237 0->4 reply c3 r20
+  [  417] client 3: reply r20 balance=41294
+  [  418] client 3: send r21 transfer(540)
+  [  418] pkt: send seq=239 4->0 request c3 r21 delay=3 ready_at=421 queued=1
+  [  419] pkt: deliver seq=238 1->0 request c0 r19
+  [  419] server: duplicate c0 r19 -> cached reply balance=39093
+  [  419] pkt: send seq=240 0->1 reply c0 r19 delay=1 ready_at=420 queued=2
+  [  421] pkt: deliver seq=239 4->0 request c3 r21
+  [  421] server: apply c3 r21 amount=540 balance=41834
+  [  421] pkt: send seq=241 0->4 reply c3 r21 delay=9 ready_at=430 queued=1
+  [  422] pkt: replay seq=231 0->1 reply c0 r19
+  [  422] pkt: send seq=242 0->1 reply c0 r19 delay=11 ready_at=433 queued=2
+  [  422] pkt: deliver seq=231 0->1 reply c0 r19
+  [  422] client 0: reply r19 balance=39093
+  [  422] pkt: deliver seq=240 0->1 reply c0 r19
+  [  424] net: path 0->2 clogged for 16 ticks
+  [  424] client 2: send r16 transfer(923)
+  [  424] pkt: send seq=243 3->0 request c2 r16 delay=1 ready_at=425 queued=1
+  [  425] pkt: replay seq=243 3->0 request c2 r16
+  [  425] pkt: send seq=244 3->0 request c2 r16 delay=1 ready_at=426 queued=1
+  [  425] pkt: deliver seq=243 3->0 request c2 r16
+  [  425] server: apply c2 r16 amount=923 balance=42757
+  [  425] pkt: send seq=245 0->3 reply c2 r16 delay=1 ready_at=426 queued=1
+  [  425] client 1: timeout, resend r22 (attempt 1)
+  [  425] pkt: send seq=246 2->0 request c1 r22 delay=5 ready_at=430 queued=1
+  [  426] pkt: deliver seq=245 0->3 reply c2 r16
+  [  426] client 2: reply r16 balance=42757
+  [  426] pkt: lost seq=244 3->0 request c2 r16
+  [  426] client 0: send r20 transfer(4)
+  [  426] pkt: send seq=247 1->0 request c0 r20 delay=1 ready_at=427 queued=1
+  [  427] pkt: deliver seq=247 1->0 request c0 r20
+  [  427] server: apply c0 r20 amount=4 balance=42761
+  [  427] pkt: send seq=248 0->1 reply c0 r20 delay=4 ready_at=431 queued=2
+  [  430] pkt: deliver seq=241 0->4 reply c3 r21
+  [  430] client 3: reply r21 balance=41834
+  [  430] pkt: deliver seq=246 2->0 request c1 r22
+  [  430] server: apply c1 r22 amount=295 balance=43056
+  [  430] pkt: send seq=249 0->2 reply c1 r22 delay=8 ready_at=438 queued=1
+  [  431] pkt: deliver seq=248 0->1 reply c0 r20
+  [  431] client 0: reply r20 balance=42761
+  [  432] client 0: send r21 transfer(806)
+  [  432] pkt: send seq=250 1->0 request c0 r21 delay=1 ready_at=433 queued=1
+  [  432] client 3: send r22 transfer(408)
+  [  432] pkt: send seq=251 4->0 request c3 r22 delay=3 ready_at=435 queued=1
+  [  433] pkt: deliver seq=242 0->1 reply c0 r19
+  [  433] pkt: lost seq=250 1->0 request c0 r21
+  [  434] net: path 1->0 clogged for 3 ticks
+  [  435] pkt: lost seq=251 4->0 request c3 r22
+  [  440] pkt: deliver seq=249 0->2 reply c1 r22
+  [  440] client 1: reply r22 balance=43056
+  [  449] client 1: send r23 transfer(232)
+  [  449] pkt: send seq=252 2->0 request c1 r23 delay=2 ready_at=451 queued=1
+  [  450] client 0: timeout, resend r21 (attempt 1)
+  [  450] pkt: send seq=253 1->0 request c0 r21 delay=7 ready_at=457 queued=1
+  [  451] pkt: lost seq=252 2->0 request c1 r23
+  [  451] client 3: timeout, resend r22 (attempt 1)
+  [  451] pkt: send seq=254 4->0 request c3 r22 delay=6 ready_at=457 queued=1
+  [  454] net: path 2->0 clogged for 0 ticks
+  [  457] pkt: replay seq=253 1->0 request c0 r21
+  [  457] pkt: send seq=255 1->0 request c0 r21 delay=4 ready_at=461 queued=1
+  [  457] pkt: deliver seq=253 1->0 request c0 r21
+  [  457] server: apply c0 r21 amount=806 balance=43862
+  [  457] pkt: send seq=256 0->1 reply c0 r21 delay=1 ready_at=458 queued=1
+  [  457] pkt: lost seq=254 4->0 request c3 r22
+  [  458] pkt: deliver seq=256 0->1 reply c0 r21
+  [  458] client 0: reply r21 balance=43862
+  [  459] client 1: timeout, resend r23 (attempt 1)
+  [  459] pkt: send seq=257 2->0 request c1 r23 delay=2 ready_at=461 queued=1
+  [  459] client 2: send r17 transfer(598)
+  [  459] pkt: send seq=258 3->0 request c2 r17 delay=4 ready_at=463 queued=1
+  [  461] pkt: deliver seq=255 1->0 request c0 r21
+  [  461] server: duplicate c0 r21 -> cached reply balance=43862
+  [  461] pkt: send seq=259 0->1 reply c0 r21 delay=1 ready_at=462 queued=1
+  [  461] pkt: replay seq=257 2->0 request c1 r23
+  [  461] pkt: send seq=260 2->0 request c1 r23 delay=2 ready_at=463 queued=1
+  [  461] pkt: deliver seq=257 2->0 request c1 r23
+  [  461] server: apply c1 r23 amount=232 balance=44094
+  [  461] pkt: send seq=261 0->2 reply c1 r23 delay=1 ready_at=462 queued=1
+  [  462] pkt: deliver seq=259 0->1 reply c0 r21
+  [  462] pkt: deliver seq=261 0->2 reply c1 r23
+  [  462] client 1: reply r23 balance=44094
+  [  463] pkt: deliver seq=260 2->0 request c1 r23
+  [  463] server: duplicate c1 r23 -> cached reply balance=44094
+  [  463] pkt: send seq=262 0->2 reply c1 r23 delay=2 ready_at=465 queued=1
+  [  463] pkt: lost seq=258 3->0 request c2 r17
+  [  465] pkt: deliver seq=262 0->2 reply c1 r23
+  [  469] client 1: send r24 transfer(515)
+  [  469] pkt: send seq=263 2->0 request c1 r24 delay=9 ready_at=478 queued=1
+  [  474] client 3: timeout, resend r22 (attempt 2)
+  [  474] pkt: send seq=264 4->0 request c3 r22 delay=1 ready_at=475 queued=1
+  [  475] pkt: deliver seq=264 4->0 request c3 r22
+  [  475] server: apply c3 r22 amount=408 balance=44502
+  [  475] pkt: send seq=265 0->4 reply c3 r22 delay=1 ready_at=476 queued=1
+  [  476] pkt: deliver seq=265 0->4 reply c3 r22
+  [  476] client 3: reply r22 balance=44502
+  [  476] client 2: timeout, resend r17 (attempt 1)
+  [  476] pkt: send seq=266 3->0 request c2 r17 delay=2 ready_at=478 queued=1
+  [  476] client 3: send r23 transfer(109)
+  [  476] pkt: send seq=267 4->0 request c3 r23 delay=4 ready_at=480 queued=1
+  [  478] pkt: replay seq=263 2->0 request c1 r24
+  [  478] pkt: send seq=268 2->0 request c1 r24 delay=1 ready_at=479 queued=1
+  [  478] pkt: deliver seq=263 2->0 request c1 r24
+  [  478] server: apply c1 r24 amount=515 balance=45017
+  [  478] pkt: send seq=269 0->2 reply c1 r24 delay=8 ready_at=486 queued=1
+  [  478] pkt: deliver seq=266 3->0 request c2 r17
+  [  478] server: apply c2 r17 amount=598 balance=45615
+  [  478] pkt: send seq=270 0->3 reply c2 r17 delay=2 ready_at=480 queued=1
+  [  479] pkt: deliver seq=268 2->0 request c1 r24
+  [  479] server: duplicate c1 r24 -> cached reply balance=45017
+  [  479] pkt: send seq=271 0->2 reply c1 r24 delay=2 ready_at=481 queued=2
+  [  480] pkt: replay seq=270 0->3 reply c2 r17
+  [  480] pkt: send seq=272 0->3 reply c2 r17 delay=1 ready_at=481 queued=1
+  [  480] pkt: deliver seq=270 0->3 reply c2 r17
+  [  480] client 2: reply r17 balance=45615
+  [  480] pkt: deliver seq=267 4->0 request c3 r23
+  [  480] server: apply c3 r23 amount=109 balance=45724
+  [  480] pkt: send seq=273 0->4 reply c3 r23 delay=1 ready_at=481 queued=1
+  [  481] pkt: deliver seq=271 0->2 reply c1 r24
+  [  481] client 1: reply r24 balance=45017
+  [  481] pkt: deliver seq=272 0->3 reply c2 r17
+  [  481] pkt: replay seq=273 0->4 reply c3 r23
+  [  481] pkt: send seq=274 0->4 reply c3 r23 delay=2 ready_at=483 queued=1
+  [  481] pkt: deliver seq=273 0->4 reply c3 r23
+  [  481] client 3: reply r23 balance=45724
+  [  481] client 2: send r18 transfer(87)
+  [  481] pkt: send seq=275 3->0 request c2 r18 delay=2 ready_at=483 queued=1
+  [  483] pkt: deliver seq=274 0->4 reply c3 r23
+  [  483] pkt: deliver seq=275 3->0 request c2 r18
+  [  483] server: apply c2 r18 amount=87 balance=45811
+  [  483] pkt: send seq=276 0->3 reply c2 r18 delay=2 ready_at=485 queued=1
+  [  485] pkt: deliver seq=276 0->3 reply c2 r18
+  [  485] client 2: reply r18 balance=45811
+  [  486] pkt: deliver seq=269 0->2 reply c1 r24
+  [  487] client 3: send r24 transfer(173)
+  [  487] pkt: send seq=277 4->0 request c3 r24 delay=5 ready_at=492 queued=1
+  [  488] client 2: send r19 transfer(707)
+  [  488] pkt: send seq=278 3->0 request c2 r19 delay=1 ready_at=489 queued=1
+  [  489] pkt: deliver seq=278 3->0 request c2 r19
+  [  489] server: apply c2 r19 amount=707 balance=46518
+  [  489] pkt: send seq=279 0->3 reply c2 r19 delay=1 ready_at=490 queued=1
+  [  490] pkt: deliver seq=279 0->3 reply c2 r19
+  [  490] client 2: reply r19 balance=46518
+  [  492] pkt: replay seq=277 4->0 request c3 r24
+  [  492] pkt: send seq=280 4->0 request c3 r24 delay=1 ready_at=493 queued=1
+  [  492] pkt: deliver seq=277 4->0 request c3 r24
+  [  492] server: apply c3 r24 amount=173 balance=46691
+  [  492] pkt: send seq=281 0->4 reply c3 r24 delay=2 ready_at=494 queued=1
+  [  493] pkt: deliver seq=280 4->0 request c3 r24
+  [  493] server: duplicate c3 r24 -> cached reply balance=46691
+  [  493] pkt: send seq=282 0->4 reply c3 r24 delay=1 ready_at=494 queued=2
+  [  494] pkt: deliver seq=281 0->4 reply c3 r24
+  [  494] client 3: reply r24 balance=46691
+  [  494] pkt: replay seq=282 0->4 reply c3 r24
+  [  494] pkt: send seq=283 0->4 reply c3 r24 delay=4 ready_at=498 queued=1
+  [  494] pkt: deliver seq=282 0->4 reply c3 r24
+  [  496] net: path 3->0 clogged for 0 ticks
+  [  498] pkt: replay seq=283 0->4 reply c3 r24
+  [  498] pkt: send seq=284 0->4 reply c3 r24 delay=2 ready_at=500 queued=1
+  [  498] pkt: deliver seq=283 0->4 reply c3 r24
+  [  500] pkt: deliver seq=284 0->4 reply c3 r24
+  [  510] client 0: send r22 transfer(221)
+  [  510] pkt: send seq=285 1->0 request c0 r22 delay=1 ready_at=511 queued=1
+  [  511] pkt: deliver seq=285 1->0 request c0 r22
+  [  511] server: apply c0 r22 amount=221 balance=46912
+  [  511] pkt: send seq=286 0->1 reply c0 r22 delay=11 ready_at=522 queued=1
+  [  515] client 2: send r20 transfer(41)
+  [  515] pkt: send seq=287 3->0 request c2 r20 delay=6 ready_at=521 queued=1
+  [  521] pkt: deliver seq=287 3->0 request c2 r20
+  [  521] server: apply c2 r20 amount=41 balance=46953
+  [  521] pkt: send seq=288 0->3 reply c2 r20 delay=1 ready_at=522 queued=1
+  [  522] pkt: deliver seq=286 0->1 reply c0 r22
+  [  522] client 0: reply r22 balance=46912
+  [  522] pkt: deliver seq=288 0->3 reply c2 r20
+  [  522] client 2: reply r20 balance=46953
+  [  522] client 0: send r23 transfer(63)
+  [  522] pkt: send seq=289 1->0 request c0 r23 delay=2 ready_at=524 queued=1
+  [  523] client 2: send r21 transfer(629)
+  [  523] pkt: send seq=290 3->0 request c2 r21 delay=1 ready_at=524 queued=1
+  [  524] pkt: deliver seq=289 1->0 request c0 r23
+  [  524] server: apply c0 r23 amount=63 balance=47016
+  [  524] pkt: send seq=291 0->1 reply c0 r23 delay=1 ready_at=525 queued=1
+  [  524] pkt: deliver seq=290 3->0 request c2 r21
+  [  524] server: apply c2 r21 amount=629 balance=47645
+  [  524] pkt: send seq=292 0->3 reply c2 r21 delay=5 ready_at=529 queued=1
+  [  525] pkt: deliver seq=291 0->1 reply c0 r23
+  [  525] client 0: reply r23 balance=47016
+  [  529] pkt: deliver seq=292 0->3 reply c2 r21
+  [  529] client 2: reply r21 balance=47645
+  [  533] client 0: send r24 transfer(701)
+  [  533] pkt: send seq=293 1->0 request c0 r24 delay=4 ready_at=537 queued=1
+  [  536] client 2: send r22 transfer(822)
+  [  536] pkt: send seq=294 3->0 request c2 r22 delay=1 ready_at=537 queued=1
+  [  537] net: path 2->0 clogged for 1 ticks
+  [  537] pkt: deliver seq=293 1->0 request c0 r24
+  [  537] server: apply c0 r24 amount=701 balance=48346
+  [  537] pkt: send seq=295 0->1 reply c0 r24 delay=10 ready_at=547 queued=1
+  [  537] pkt: deliver seq=294 3->0 request c2 r22
+  [  537] server: apply c2 r22 amount=822 balance=49168
+  [  537] pkt: send seq=296 0->3 reply c2 r22 delay=1 ready_at=538 queued=1
+  [  538] net: path 4->0 clogged for 6 ticks
+  [  538] pkt: deliver seq=296 0->3 reply c2 r22
+  [  538] client 2: reply r22 balance=49168
+  [  539] net: path 0->2 clogged for 7 ticks
+  [  547] pkt: replay seq=295 0->1 reply c0 r24
+  [  547] pkt: send seq=297 0->1 reply c0 r24 delay=5 ready_at=552 queued=1
+  [  547] pkt: deliver seq=295 0->1 reply c0 r24
+  [  547] client 0: reply r24 balance=48346
+  [  552] pkt: deliver seq=297 0->1 reply c0 r24
+  [  567] client 2: send r23 transfer(66)
+  [  567] pkt: send seq=298 3->0 request c2 r23 delay=3 ready_at=570 queued=1
+  [  570] pkt: deliver seq=298 3->0 request c2 r23
+  [  570] server: apply c2 r23 amount=66 balance=49234
+  [  570] pkt: send seq=299 0->3 reply c2 r23 delay=3 ready_at=573 queued=1
+  [  573] net: path 0->3 clogged for 0 ticks
+  [  573] pkt: deliver seq=299 0->3 reply c2 r23
+  [  573] client 2: reply r23 balance=49234
+  [  573] client 2: send r24 transfer(980)
+  [  573] pkt: send seq=300 3->0 request c2 r24 delay=4 ready_at=577 queued=1
+  [  577] pkt: replay seq=300 3->0 request c2 r24
+  [  577] pkt: send seq=301 3->0 request c2 r24 delay=1 ready_at=578 queued=1
+  [  577] pkt: deliver seq=300 3->0 request c2 r24
+  [  577] server: apply c2 r24 amount=980 balance=50214
+  [  577] pkt: send seq=302 0->3 reply c2 r24 delay=1 ready_at=578 queued=1
+  [  578] pkt: deliver seq=302 0->3 reply c2 r24
+  [  578] client 2: reply r24 balance=50214
+  [  578] pkt: deliver seq=301 3->0 request c2 r24
+  [  578] server: duplicate c2 r24 -> cached reply balance=50214
+  [  578] pkt: send seq=303 0->3 reply c2 r24 delay=1 ready_at=579 queued=1
+  [  578] transition_to_liveness_mode: loss=0 replay=0 delay=1
+
+  balance=50214 sent=303 lost=32 replayed=50 capacity_dropped=0 clogs=21
+seed=0 ticks=578 trace=1e84e7c45a1d42c1 PASS
+</script>
+<script type="text/plain" id="log-run1" data-src="data/05/run1-packets.txt">
+
+          SEED=1
+
+          clients=3
+          requests_per_client=20
+          request_timeout=48 ticks
+          ticks_max_safety=380 ticks
+          one_way_delay_mean=10 ticks
+          one_way_delay_min=0 ticks
+          packet_loss_probability=0%
+          packet_replay_probability=6%
+          path_maximum_capacity=17 messages
+          path_clog_duration_mean=13 ticks
+          path_clog_probability=9/1000 per tick
+
+  [    2] client 0: send r1 transfer(152)
+  [    2] pkt: send seq=1 1->0 request c0 r1 delay=4 ready_at=6 queued=1
+  [    5] net: path 2->0 clogged for 3 ticks
+  [    6] pkt: deliver seq=1 1->0 request c0 r1
+  [    6] server: apply c0 r1 amount=152 balance=152
+  [    6] pkt: send seq=2 0->1 reply c0 r1 delay=6 ready_at=12 queued=1
+  [    9] net: path 2->0 clogged for 10 ticks
+  [   10] client 2: send r1 transfer(248)
+  [   10] pkt: send seq=3 3->0 request c2 r1 delay=8 ready_at=18 queued=1
+  [   12] pkt: deliver seq=2 0->1 reply c0 r1
+  [   12] client 0: reply r1 balance=152
+  [   15] net: path 3->0 clogged for 3 ticks
+  [   18] pkt: deliver seq=3 3->0 request c2 r1
+  [   18] server: apply c2 r1 amount=248 balance=400
+  [   18] pkt: send seq=4 0->3 reply c2 r1 delay=32 ready_at=50 queued=1
+  [   19] client 1: send r1 transfer(903)
+  [   19] pkt: send seq=5 2->0 request c1 r1 delay=4 ready_at=23 queued=1
+  [   23] pkt: deliver seq=5 2->0 request c1 r1
+  [   23] server: apply c1 r1 amount=903 balance=1303
+  [   23] pkt: send seq=6 0->2 reply c1 r1 delay=11 ready_at=34 queued=1
+  [   34] net: path 0->2 clogged for 45 ticks
+  [   35] client 0: send r2 transfer(977)
+  [   35] pkt: send seq=7 1->0 request c0 r2 delay=0 ready_at=35 queued=1
+  [   36] pkt: deliver seq=7 1->0 request c0 r2
+  [   36] server: apply c0 r2 amount=977 balance=2280
+  [   36] pkt: send seq=8 0->1 reply c0 r2 delay=1 ready_at=37 queued=1
+  [   37] pkt: deliver seq=8 0->1 reply c0 r2
+  [   37] client 0: reply r2 balance=2280
+  [   44] net: path 0->2 clogged for 2 ticks
+  [   46] pkt: deliver seq=6 0->2 reply c1 r1
+  [   46] client 1: reply r1 balance=1303
+  [   50] pkt: deliver seq=4 0->3 reply c2 r1
+  [   50] client 2: reply r1 balance=400
+  [   54] client 0: send r3 transfer(756)
+  [   54] pkt: send seq=9 1->0 request c0 r3 delay=2 ready_at=56 queued=1
+  [   56] pkt: deliver seq=9 1->0 request c0 r3
+  [   56] server: apply c0 r3 amount=756 balance=3036
+  [   56] pkt: send seq=10 0->1 reply c0 r3 delay=34 ready_at=90 queued=1
+  [   58] net: path 2->0 clogged for 13 ticks
+  [   62] client 2: send r2 transfer(795)
+  [   62] pkt: send seq=11 3->0 request c2 r2 delay=6 ready_at=68 queued=1
+  [   68] pkt: deliver seq=11 3->0 request c2 r2
+  [   68] server: apply c2 r2 amount=795 balance=3831
+  [   68] pkt: send seq=12 0->3 reply c2 r2 delay=4 ready_at=72 queued=1
+  [   68] client 1: send r2 transfer(367)
+  [   68] pkt: send seq=13 2->0 request c1 r2 delay=8 ready_at=76 queued=1
+  [   72] pkt: deliver seq=12 0->3 reply c2 r2
+  [   72] client 2: reply r2 balance=3831
+  [   76] pkt: deliver seq=13 2->0 request c1 r2
+  [   76] server: apply c1 r2 amount=367 balance=4198
+  [   76] pkt: send seq=14 0->2 reply c1 r2 delay=6 ready_at=82 queued=1
+  [   82] pkt: deliver seq=14 0->2 reply c1 r2
+  [   82] client 1: reply r2 balance=4198
+  [   90] net: path 1->0 clogged for 28 ticks
+  [   90] pkt: deliver seq=10 0->1 reply c0 r3
+  [   90] client 0: reply r3 balance=3036
+  [   93] client 0: send r4 transfer(629)
+  [   93] pkt: send seq=15 1->0 request c0 r4 delay=1 ready_at=94 queued=1
+  [   97] net: path 0->2 clogged for 8 ticks
+  [   97] client 1: send r3 transfer(731)
+  [   97] pkt: send seq=16 2->0 request c1 r3 delay=8 ready_at=105 queued=1
+  [  100] client 2: send r3 transfer(277)
+  [  100] pkt: send seq=17 3->0 request c2 r3 delay=0 ready_at=100 queued=1
+  [  101] pkt: deliver seq=17 3->0 request c2 r3
+  [  101] server: apply c2 r3 amount=277 balance=4475
+  [  101] pkt: send seq=18 0->3 reply c2 r3 delay=9 ready_at=110 queued=1
+  [  105] pkt: deliver seq=16 2->0 request c1 r3
+  [  105] server: apply c1 r3 amount=731 balance=5206
+  [  105] pkt: send seq=19 0->2 reply c1 r3 delay=5 ready_at=110 queued=1
+  [  110] pkt: deliver seq=19 0->2 reply c1 r3
+  [  110] client 1: reply r3 balance=5206
+  [  110] pkt: deliver seq=18 0->3 reply c2 r3
+  [  110] client 2: reply r3 balance=4475
+  [  111] client 1: send r4 transfer(924)
+  [  111] pkt: send seq=20 2->0 request c1 r4 delay=2 ready_at=113 queued=1
+  [  113] pkt: deliver seq=20 2->0 request c1 r4
+  [  113] server: apply c1 r4 amount=924 balance=6130
+  [  113] pkt: send seq=21 0->2 reply c1 r4 delay=2 ready_at=115 queued=1
+  [  115] pkt: deliver seq=21 0->2 reply c1 r4
+  [  115] client 1: reply r4 balance=6130
+  [  118] pkt: deliver seq=15 1->0 request c0 r4
+  [  118] server: apply c0 r4 amount=629 balance=6759
+  [  118] pkt: send seq=22 0->1 reply c0 r4 delay=0 ready_at=118 queued=1
+  [  118] client 2: send r4 transfer(486)
+  [  118] pkt: send seq=23 3->0 request c2 r4 delay=26 ready_at=144 queued=1
+  [  119] pkt: deliver seq=22 0->1 reply c0 r4
+  [  119] client 0: reply r4 balance=6759
+  [  124] client 1: send r5 transfer(666)
+  [  124] pkt: send seq=24 2->0 request c1 r5 delay=3 ready_at=127 queued=1
+  [  127] pkt: replay seq=24 2->0 request c1 r5
+  [  127] pkt: send seq=25 2->0 request c1 r5 delay=8 ready_at=135 queued=1
+  [  127] pkt: deliver seq=24 2->0 request c1 r5
+  [  127] server: apply c1 r5 amount=666 balance=7425
+  [  127] pkt: send seq=26 0->2 reply c1 r5 delay=6 ready_at=133 queued=1
+  [  133] pkt: deliver seq=26 0->2 reply c1 r5
+  [  133] client 1: reply r5 balance=7425
+  [  135] pkt: deliver seq=25 2->0 request c1 r5
+  [  135] server: duplicate c1 r5 -> cached reply balance=7425
+  [  135] pkt: send seq=27 0->2 reply c1 r5 delay=16 ready_at=151 queued=1
+  [  136] client 1: send r6 transfer(996)
+  [  136] pkt: send seq=28 2->0 request c1 r6 delay=0 ready_at=136 queued=1
+  [  137] pkt: deliver seq=28 2->0 request c1 r6
+  [  137] server: apply c1 r6 amount=996 balance=8421
+  [  137] pkt: send seq=29 0->2 reply c1 r6 delay=13 ready_at=150 queued=2
+  [  139] client 0: send r5 transfer(717)
+  [  139] pkt: send seq=30 1->0 request c0 r5 delay=39 ready_at=178 queued=1
+  [  144] pkt: deliver seq=23 3->0 request c2 r4
+  [  144] server: apply c2 r4 amount=486 balance=8907
+  [  144] pkt: send seq=31 0->3 reply c2 r4 delay=0 ready_at=144 queued=1
+  [  145] pkt: deliver seq=31 0->3 reply c2 r4
+  [  145] client 2: reply r4 balance=8907
+  [  148] net: path 1->0 clogged for 2 ticks
+  [  150] pkt: deliver seq=29 0->2 reply c1 r6
+  [  150] client 1: reply r6 balance=8421
+  [  151] pkt: deliver seq=27 0->2 reply c1 r5
+  [  151] client 1: send r7 transfer(56)
+  [  151] pkt: send seq=32 2->0 request c1 r7 delay=17 ready_at=168 queued=1
+  [  156] client 2: send r5 transfer(595)
+  [  156] pkt: send seq=33 3->0 request c2 r5 delay=2 ready_at=158 queued=1
+  [  158] pkt: deliver seq=33 3->0 request c2 r5
+  [  158] server: apply c2 r5 amount=595 balance=9502
+  [  158] pkt: send seq=34 0->3 reply c2 r5 delay=28 ready_at=186 queued=1
+  [  168] net: path 0->3 clogged for 20 ticks
+  [  168] pkt: deliver seq=32 2->0 request c1 r7
+  [  168] server: apply c1 r7 amount=56 balance=9558
+  [  168] pkt: send seq=35 0->2 reply c1 r7 delay=11 ready_at=179 queued=1
+  [  178] pkt: deliver seq=30 1->0 request c0 r5
+  [  178] server: apply c0 r5 amount=717 balance=10275
+  [  178] pkt: send seq=36 0->1 reply c0 r5 delay=8 ready_at=186 queued=1
+  [  179] pkt: deliver seq=35 0->2 reply c1 r7
+  [  179] client 1: reply r7 balance=9558
+  [  184] net: path 2->0 clogged for 7 ticks
+  [  186] net: path 0->3 clogged for 1 ticks
+  [  186] pkt: deliver seq=36 0->1 reply c0 r5
+  [  186] client 0: reply r5 balance=10275
+  [  187] pkt: deliver seq=34 0->3 reply c2 r5
+  [  187] client 2: reply r5 balance=9502
+  [  187] client 1: send r8 transfer(512)
+  [  187] pkt: send seq=37 2->0 request c1 r8 delay=3 ready_at=190 queued=1
+  [  190] client 0: send r6 transfer(957)
+  [  190] pkt: send seq=38 1->0 request c0 r6 delay=40 ready_at=230 queued=1
+  [  191] pkt: deliver seq=37 2->0 request c1 r8
+  [  191] server: apply c1 r8 amount=512 balance=10787
+  [  191] pkt: send seq=39 0->2 reply c1 r8 delay=11 ready_at=202 queued=1
+  [  192] client 2: send r6 transfer(405)
+  [  192] pkt: send seq=40 3->0 request c2 r6 delay=8 ready_at=200 queued=1
+  [  200] pkt: deliver seq=40 3->0 request c2 r6
+  [  200] server: apply c2 r6 amount=405 balance=11192
+  [  200] pkt: send seq=41 0->3 reply c2 r6 delay=2 ready_at=202 queued=1
+  [  201] net: path 2->0 clogged for 1 ticks
+  [  202] pkt: deliver seq=39 0->2 reply c1 r8
+  [  202] client 1: reply r8 balance=10787
+  [  202] pkt: deliver seq=41 0->3 reply c2 r6
+  [  202] client 2: reply r6 balance=11192
+  [  202] client 1: send r9 transfer(18)
+  [  202] pkt: send seq=42 2->0 request c1 r9 delay=6 ready_at=208 queued=1
+  [  205] client 2: send r7 transfer(778)
+  [  205] pkt: send seq=43 3->0 request c2 r7 delay=2 ready_at=207 queued=1
+  [  207] pkt: deliver seq=43 3->0 request c2 r7
+  [  207] server: apply c2 r7 amount=778 balance=11970
+  [  207] pkt: send seq=44 0->3 reply c2 r7 delay=1 ready_at=208 queued=1
+  [  208] pkt: deliver seq=44 0->3 reply c2 r7
+  [  208] client 2: reply r7 balance=11970
+  [  208] pkt: deliver seq=42 2->0 request c1 r9
+  [  208] server: apply c1 r9 amount=18 balance=11988
+  [  208] pkt: send seq=45 0->2 reply c1 r9 delay=3 ready_at=211 queued=1
+  [  211] pkt: deliver seq=45 0->2 reply c1 r9
+  [  211] client 1: reply r9 balance=11988
+  [  211] client 1: send r10 transfer(527)
+  [  211] pkt: send seq=46 2->0 request c1 r10 delay=3 ready_at=214 queued=1
+  [  211] client 2: send r8 transfer(699)
+  [  211] pkt: send seq=47 3->0 request c2 r8 delay=2 ready_at=213 queued=1
+  [  213] pkt: deliver seq=47 3->0 request c2 r8
+  [  213] server: apply c2 r8 amount=699 balance=12687
+  [  213] pkt: send seq=48 0->3 reply c2 r8 delay=17 ready_at=230 queued=1
+  [  214] pkt: deliver seq=46 2->0 request c1 r10
+  [  214] server: apply c1 r10 amount=527 balance=13214
+  [  214] pkt: send seq=49 0->2 reply c1 r10 delay=16 ready_at=230 queued=1
+  [  227] net: path 1->0 clogged for 20 ticks
+  [  230] pkt: deliver seq=49 0->2 reply c1 r10
+  [  230] client 1: reply r10 balance=13214
+  [  230] pkt: deliver seq=48 0->3 reply c2 r8
+  [  230] client 2: reply r8 balance=12687
+  [  241] client 1: send r11 transfer(557)
+  [  241] pkt: send seq=50 2->0 request c1 r11 delay=1 ready_at=242 queued=1
+  [  242] pkt: deliver seq=50 2->0 request c1 r11
+  [  242] server: apply c1 r11 amount=557 balance=13771
+  [  242] pkt: send seq=51 0->2 reply c1 r11 delay=4 ready_at=246 queued=1
+  [  245] net: path 0->1 clogged for 26 ticks
+  [  246] pkt: deliver seq=51 0->2 reply c1 r11
+  [  246] client 1: reply r11 balance=13771
+  [  247] pkt: deliver seq=38 1->0 request c0 r6
+  [  247] server: apply c0 r6 amount=957 balance=14728
+  [  247] pkt: send seq=52 0->1 reply c0 r6 delay=18 ready_at=265 queued=1
+  [  250] client 0: timeout, resend r6 (attempt 1)
+  [  250] pkt: send seq=53 1->0 request c0 r6 delay=0 ready_at=250 queued=1
+  [  251] pkt: replay seq=53 1->0 request c0 r6
+  [  251] pkt: send seq=54 1->0 request c0 r6 delay=8 ready_at=259 queued=1
+  [  251] pkt: deliver seq=53 1->0 request c0 r6
+  [  251] server: duplicate c0 r6 -> cached reply balance=14728
+  [  251] pkt: send seq=55 0->1 reply c0 r6 delay=7 ready_at=258 queued=2
+  [  252] client 2: send r9 transfer(466)
+  [  252] pkt: send seq=56 3->0 request c2 r9 delay=1 ready_at=253 queued=1
+  [  253] pkt: deliver seq=56 3->0 request c2 r9
+  [  253] server: apply c2 r9 amount=466 balance=15194
+  [  253] pkt: send seq=57 0->3 reply c2 r9 delay=22 ready_at=275 queued=1
+  [  257] net: path 1->0 clogged for 12 ticks
+  [  257] net: path 2->0 clogged for 10 ticks
+  [  259] client 1: send r12 transfer(679)
+  [  259] pkt: send seq=58 2->0 request c1 r12 delay=8 ready_at=267 queued=1
+  [  267] pkt: deliver seq=58 2->0 request c1 r12
+  [  267] server: apply c1 r12 amount=679 balance=15873
+  [  267] pkt: send seq=59 0->2 reply c1 r12 delay=10 ready_at=277 queued=1
+  [  269] net: path 1->0 clogged for 17 ticks
+  [  271] pkt: deliver seq=55 0->1 reply c0 r6
+  [  271] client 0: reply r6 balance=14728
+  [  271] pkt: deliver seq=52 0->1 reply c0 r6
+  [  271] client 0: send r7 transfer(200)
+  [  271] pkt: send seq=60 1->0 request c0 r7 delay=3 ready_at=274 queued=2
+  [  275] pkt: deliver seq=57 0->3 reply c2 r9
+  [  275] client 2: reply r9 balance=15194
+  [  277] pkt: deliver seq=59 0->2 reply c1 r12
+  [  277] client 1: reply r12 balance=15873
+  [  284] client 1: send r13 transfer(335)
+  [  284] pkt: send seq=61 2->0 request c1 r13 delay=7 ready_at=291 queued=1
+  [  286] pkt: deliver seq=54 1->0 request c0 r6
+  [  286] server: duplicate c0 r6 -> cached reply balance=14728
+  [  286] pkt: send seq=62 0->1 reply c0 r6 delay=0 ready_at=286 queued=1
+  [  286] pkt: deliver seq=60 1->0 request c0 r7
+  [  286] server: apply c0 r7 amount=200 balance=16073
+  [  286] pkt: send seq=63 0->1 reply c0 r7 delay=29 ready_at=315 queued=2
+  [  287] pkt: deliver seq=62 0->1 reply c0 r6
+  [  289] net: path 1->0 clogged for 2 ticks
+  [  291] pkt: deliver seq=61 2->0 request c1 r13
+  [  291] server: apply c1 r13 amount=335 balance=16408
+  [  291] pkt: send seq=64 0->2 reply c1 r13 delay=1 ready_at=292 queued=1
+  [  292] net: path 3->0 clogged for 2 ticks
+  [  292] pkt: deliver seq=64 0->2 reply c1 r13
+  [  292] client 1: reply r13 balance=16408
+  [  306] client 2: send r10 transfer(448)
+  [  306] pkt: send seq=65 3->0 request c2 r10 delay=4 ready_at=310 queued=1
+  [  310] pkt: deliver seq=65 3->0 request c2 r10
+  [  310] server: apply c2 r10 amount=448 balance=16856
+  [  310] pkt: send seq=66 0->3 reply c2 r10 delay=2 ready_at=312 queued=1
+  [  312] pkt: deliver seq=66 0->3 reply c2 r10
+  [  312] client 2: reply r10 balance=16856
+  [  315] pkt: deliver seq=63 0->1 reply c0 r7
+  [  315] client 0: reply r7 balance=16073
+  [  315] client 1: send r14 transfer(936)
+  [  315] pkt: send seq=67 2->0 request c1 r14 delay=3 ready_at=318 queued=1
+  [  316] client 2: send r11 transfer(214)
+  [  316] pkt: send seq=68 3->0 request c2 r11 delay=5 ready_at=321 queued=1
+  [  318] pkt: deliver seq=67 2->0 request c1 r14
+  [  318] server: apply c1 r14 amount=936 balance=17792
+  [  318] pkt: send seq=69 0->2 reply c1 r14 delay=2 ready_at=320 queued=1
+  [  319] net: path 0->1 clogged for 8 ticks
+  [  319] client 0: send r8 transfer(799)
+  [  319] pkt: send seq=70 1->0 request c0 r8 delay=1 ready_at=320 queued=1
+  [  320] pkt: deliver seq=69 0->2 reply c1 r14
+  [  320] client 1: reply r14 balance=17792
+  [  320] pkt: deliver seq=70 1->0 request c0 r8
+  [  320] server: apply c0 r8 amount=799 balance=18591
+  [  320] pkt: send seq=71 0->1 reply c0 r8 delay=2 ready_at=322 queued=1
+  [  321] pkt: deliver seq=68 3->0 request c2 r11
+  [  321] server: apply c2 r11 amount=214 balance=18805
+  [  321] pkt: send seq=72 0->3 reply c2 r11 delay=15 ready_at=336 queued=1
+  [  327] pkt: deliver seq=71 0->1 reply c0 r8
+  [  327] client 0: reply r8 balance=18591
+  [  330] client 0: send r9 transfer(849)
+  [  330] pkt: send seq=73 1->0 request c0 r9 delay=23 ready_at=353 queued=1
+  [  333] client 1: send r15 transfer(492)
+  [  333] pkt: send seq=74 2->0 request c1 r15 delay=1 ready_at=334 queued=1
+  [  334] pkt: replay seq=74 2->0 request c1 r15
+  [  334] pkt: send seq=75 2->0 request c1 r15 delay=8 ready_at=342 queued=1
+  [  334] pkt: deliver seq=74 2->0 request c1 r15
+  [  334] server: apply c1 r15 amount=492 balance=19297
+  [  334] pkt: send seq=76 0->2 reply c1 r15 delay=30 ready_at=364 queued=1
+  [  336] pkt: deliver seq=72 0->3 reply c2 r11
+  [  336] client 2: reply r11 balance=18805
+  [  337] client 2: send r12 transfer(715)
+  [  337] pkt: send seq=77 3->0 request c2 r12 delay=0 ready_at=337 queued=1
+  [  338] pkt: deliver seq=77 3->0 request c2 r12
+  [  338] server: apply c2 r12 amount=715 balance=20012
+  [  338] pkt: send seq=78 0->3 reply c2 r12 delay=14 ready_at=352 queued=1
+  [  342] pkt: deliver seq=75 2->0 request c1 r15
+  [  342] server: duplicate c1 r15 -> cached reply balance=19297
+  [  342] pkt: send seq=79 0->2 reply c1 r15 delay=12 ready_at=354 queued=2
+  [  352] pkt: deliver seq=78 0->3 reply c2 r12
+  [  352] client 2: reply r12 balance=20012
+  [  353] pkt: deliver seq=73 1->0 request c0 r9
+  [  353] server: apply c0 r9 amount=849 balance=20861
+  [  353] pkt: send seq=80 0->1 reply c0 r9 delay=17 ready_at=370 queued=1
+  [  354] pkt: deliver seq=79 0->2 reply c1 r15
+  [  354] client 1: reply r15 balance=19297
+  [  355] net: path 0->1 clogged for 10 ticks
+  [  361] client 1: send r16 transfer(798)
+  [  361] pkt: send seq=81 2->0 request c1 r16 delay=18 ready_at=379 queued=1
+  [  364] pkt: deliver seq=76 0->2 reply c1 r15
+  [  366] client 2: send r13 transfer(812)
+  [  366] pkt: send seq=82 3->0 request c2 r13 delay=1 ready_at=367 queued=1
+  [  367] pkt: replay seq=82 3->0 request c2 r13
+  [  367] pkt: send seq=83 3->0 request c2 r13 delay=0 ready_at=367 queued=1
+  [  367] pkt: deliver seq=82 3->0 request c2 r13
+  [  367] server: apply c2 r13 amount=812 balance=21673
+  [  367] pkt: send seq=84 0->3 reply c2 r13 delay=12 ready_at=379 queued=1
+  [  367] pkt: deliver seq=83 3->0 request c2 r13
+  [  367] server: duplicate c2 r13 -> cached reply balance=21673
+  [  367] pkt: send seq=85 0->3 reply c2 r13 delay=12 ready_at=379 queued=2
+  [  370] net: path 3->0 clogged for 9 ticks
+  [  370] pkt: replay seq=80 0->1 reply c0 r9
+  [  370] pkt: send seq=86 0->1 reply c0 r9 delay=7 ready_at=377 queued=1
+  [  370] pkt: deliver seq=80 0->1 reply c0 r9
+  [  370] client 0: reply r9 balance=20861
+  [  377] pkt: deliver seq=86 0->1 reply c0 r9
+  [  379] pkt: deliver seq=84 0->3 reply c2 r13
+  [  379] client 2: reply r13 balance=21673
+  [  379] pkt: replay seq=85 0->3 reply c2 r13
+  [  379] pkt: send seq=87 0->3 reply c2 r13 delay=23 ready_at=402 queued=1
+  [  379] pkt: deliver seq=85 0->3 reply c2 r13
+  [  379] pkt: deliver seq=81 2->0 request c1 r16
+  [  379] server: apply c1 r16 amount=798 balance=22471
+  [  379] pkt: send seq=88 0->2 reply c1 r16 delay=10 ready_at=389 queued=1
+  [  380] client 2: send r14 transfer(984)
+  [  380] pkt: send seq=89 3->0 request c2 r14 delay=23 ready_at=403 queued=1
+  [  380] transition_to_liveness_mode: loss=0 replay=0 delay=1
+  [  386] client 0: send r10 transfer(418)
+  [  386] pkt: send seq=90 1->0 request c0 r10 delay=1 ready_at=387 queued=1
+  [  387] pkt: deliver seq=90 1->0 request c0 r10
+  [  387] server: apply c0 r10 amount=418 balance=22889
+  [  387] pkt: send seq=91 0->1 reply c0 r10 delay=1 ready_at=388 queued=1
+  [  388] pkt: deliver seq=91 0->1 reply c0 r10
+  [  388] client 0: reply r10 balance=22889
+  [  388] client 0: send r11 transfer(790)
+  [  388] pkt: send seq=92 1->0 request c0 r11 delay=1 ready_at=389 queued=1
+  [  389] pkt: deliver seq=88 0->2 reply c1 r16
+  [  389] client 1: reply r16 balance=22471
+  [  389] pkt: deliver seq=92 1->0 request c0 r11
+  [  389] server: apply c0 r11 amount=790 balance=23679
+  [  389] pkt: send seq=93 0->1 reply c0 r11 delay=1 ready_at=390 queued=1
+  [  389] client 1: send r17 transfer(348)
+  [  389] pkt: send seq=94 2->0 request c1 r17 delay=1 ready_at=390 queued=1
+  [  390] net: path 1->0 clogged for 0 ticks
+  [  390] pkt: deliver seq=93 0->1 reply c0 r11
+  [  390] client 0: reply r11 balance=23679
+  [  390] pkt: deliver seq=94 2->0 request c1 r17
+  [  390] server: apply c1 r17 amount=348 balance=24027
+  [  390] pkt: send seq=95 0->2 reply c1 r17 delay=1 ready_at=391 queued=1
+  [  391] pkt: deliver seq=95 0->2 reply c1 r17
+  [  391] client 1: reply r17 balance=24027
+  [  397] client 1: send r18 transfer(909)
+  [  397] pkt: send seq=96 2->0 request c1 r18 delay=1 ready_at=398 queued=1
+  [  398] pkt: deliver seq=96 2->0 request c1 r18
+  [  398] server: apply c1 r18 amount=909 balance=24936
+  [  398] pkt: send seq=97 0->2 reply c1 r18 delay=1 ready_at=399 queued=1
+  [  399] pkt: deliver seq=97 0->2 reply c1 r18
+  [  399] client 1: reply r18 balance=24936
+  [  399] client 0: send r12 transfer(827)
+  [  399] pkt: send seq=98 1->0 request c0 r12 delay=1 ready_at=400 queued=1
+  [  400] pkt: deliver seq=98 1->0 request c0 r12
+  [  400] server: apply c0 r12 amount=827 balance=25763
+  [  400] pkt: send seq=99 0->1 reply c0 r12 delay=1 ready_at=401 queued=1
+  [  401] pkt: deliver seq=99 0->1 reply c0 r12
+  [  401] client 0: reply r12 balance=25763
+  [  402] pkt: deliver seq=87 0->3 reply c2 r13
+  [  402] client 1: send r19 transfer(583)
+  [  402] pkt: send seq=100 2->0 request c1 r19 delay=1 ready_at=403 queued=1
+  [  403] pkt: deliver seq=100 2->0 request c1 r19
+  [  403] server: apply c1 r19 amount=583 balance=26346
+  [  403] pkt: send seq=101 0->2 reply c1 r19 delay=1 ready_at=404 queued=1
+  [  403] pkt: deliver seq=89 3->0 request c2 r14
+  [  403] server: apply c2 r14 amount=984 balance=27330
+  [  403] pkt: send seq=102 0->3 reply c2 r14 delay=2 ready_at=405 queued=1
+  [  404] pkt: deliver seq=101 0->2 reply c1 r19
+  [  404] client 1: reply r19 balance=26346
+  [  405] pkt: deliver seq=102 0->3 reply c2 r14
+  [  405] client 2: reply r14 balance=27330
+  [  405] client 2: send r15 transfer(53)
+  [  405] pkt: send seq=103 3->0 request c2 r15 delay=1 ready_at=406 queued=1
+  [  406] net: path 0->2 clogged for 20 ticks
+  [  406] pkt: deliver seq=103 3->0 request c2 r15
+  [  406] server: apply c2 r15 amount=53 balance=27383
+  [  406] pkt: send seq=104 0->3 reply c2 r15 delay=2 ready_at=408 queued=1
+  [  407] net: path 0->2 clogged for 4 ticks
+  [  407] client 0: send r13 transfer(61)
+  [  407] pkt: send seq=105 1->0 request c0 r13 delay=2 ready_at=409 queued=1
+  [  408] pkt: deliver seq=104 0->3 reply c2 r15
+  [  408] client 2: reply r15 balance=27383
+  [  409] pkt: deliver seq=105 1->0 request c0 r13
+  [  409] server: apply c0 r13 amount=61 balance=27444
+  [  409] pkt: send seq=106 0->1 reply c0 r13 delay=1 ready_at=410 queued=1
+  [  410] pkt: deliver seq=106 0->1 reply c0 r13
+  [  410] client 0: reply r13 balance=27444
+  [  415] client 0: send r14 transfer(534)
+  [  415] pkt: send seq=107 1->0 request c0 r14 delay=1 ready_at=416 queued=1
+  [  416] pkt: deliver seq=107 1->0 request c0 r14
+  [  416] server: apply c0 r14 amount=534 balance=27978
+  [  416] pkt: send seq=108 0->1 reply c0 r14 delay=3 ready_at=419 queued=1
+  [  417] client 2: send r16 transfer(290)
+  [  417] pkt: send seq=109 3->0 request c2 r16 delay=1 ready_at=418 queued=1
+  [  418] pkt: deliver seq=109 3->0 request c2 r16
+  [  418] server: apply c2 r16 amount=290 balance=28268
+  [  418] pkt: send seq=110 0->3 reply c2 r16 delay=1 ready_at=419 queued=1
+  [  419] pkt: deliver seq=108 0->1 reply c0 r14
+  [  419] client 0: reply r14 balance=27978
+  [  419] pkt: deliver seq=110 0->3 reply c2 r16
+  [  419] client 2: reply r16 balance=28268
+  [  421] net: path 2->0 clogged for 3 ticks
+  [  423] net: path 0->1 clogged for 4 ticks
+  [  425] client 2: send r17 transfer(469)
+  [  425] pkt: send seq=111 3->0 request c2 r17 delay=1 ready_at=426 queued=1
+  [  426] pkt: deliver seq=111 3->0 request c2 r17
+  [  426] server: apply c2 r17 amount=469 balance=28737
+  [  426] pkt: send seq=112 0->3 reply c2 r17 delay=1 ready_at=427 queued=1
+  [  426] client 0: send r15 transfer(249)
+  [  426] pkt: send seq=113 1->0 request c0 r15 delay=1 ready_at=427 queued=1
+  [  427] pkt: deliver seq=112 0->3 reply c2 r17
+  [  427] client 2: reply r17 balance=28737
+  [  427] pkt: deliver seq=113 1->0 request c0 r15
+  [  427] server: apply c0 r15 amount=249 balance=28986
+  [  427] pkt: send seq=114 0->1 reply c0 r15 delay=1 ready_at=428 queued=1
+  [  428] pkt: deliver seq=114 0->1 reply c0 r15
+  [  428] client 0: reply r15 balance=28986
+  [  429] client 0: send r16 transfer(342)
+  [  429] pkt: send seq=115 1->0 request c0 r16 delay=1 ready_at=430 queued=1
+  [  430] pkt: deliver seq=115 1->0 request c0 r16
+  [  430] server: apply c0 r16 amount=342 balance=29328
+  [  430] pkt: send seq=116 0->1 reply c0 r16 delay=1 ready_at=431 queued=1
+  [  431] pkt: deliver seq=116 0->1 reply c0 r16
+  [  431] client 0: reply r16 balance=29328
+  [  431] client 1: send r20 transfer(158)
+  [  431] pkt: send seq=117 2->0 request c1 r20 delay=1 ready_at=432 queued=1
+  [  432] pkt: deliver seq=117 2->0 request c1 r20
+  [  432] server: apply c1 r20 amount=158 balance=29486
+  [  432] pkt: send seq=118 0->2 reply c1 r20 delay=1 ready_at=433 queued=1
+  [  433] pkt: deliver seq=118 0->2 reply c1 r20
+  [  433] client 1: reply r20 balance=29486
+  [  437] client 2: send r18 transfer(473)
+  [  437] pkt: send seq=119 3->0 request c2 r18 delay=1 ready_at=438 queued=1
+  [  438] pkt: deliver seq=119 3->0 request c2 r18
+  [  438] server: apply c2 r18 amount=473 balance=29959
+  [  438] pkt: send seq=120 0->3 reply c2 r18 delay=1 ready_at=439 queued=1
+  [  438] client 0: send r17 transfer(651)
+  [  438] pkt: send seq=121 1->0 request c0 r17 delay=2 ready_at=440 queued=1
+  [  439] pkt: deliver seq=120 0->3 reply c2 r18
+  [  439] client 2: reply r18 balance=29959
+  [  440] pkt: deliver seq=121 1->0 request c0 r17
+  [  440] server: apply c0 r17 amount=651 balance=30610
+  [  440] pkt: send seq=122 0->1 reply c0 r17 delay=1 ready_at=441 queued=1
+  [  440] client 2: send r19 transfer(975)
+  [  440] pkt: send seq=123 3->0 request c2 r19 delay=1 ready_at=441 queued=1
+  [  441] pkt: deliver seq=122 0->1 reply c0 r17
+  [  441] client 0: reply r17 balance=30610
+  [  441] pkt: deliver seq=123 3->0 request c2 r19
+  [  441] server: apply c2 r19 amount=975 balance=31585
+  [  441] pkt: send seq=124 0->3 reply c2 r19 delay=2 ready_at=443 queued=1
+  [  443] pkt: deliver seq=124 0->3 reply c2 r19
+  [  443] client 2: reply r19 balance=31585
+  [  445] net: path 1->0 clogged for 4 ticks
+  [  446] client 0: send r18 transfer(922)
+  [  446] pkt: send seq=125 1->0 request c0 r18 delay=1 ready_at=447 queued=1
+  [  447] client 2: send r20 transfer(773)
+  [  447] pkt: send seq=126 3->0 request c2 r20 delay=2 ready_at=449 queued=1
+  [  449] pkt: deliver seq=125 1->0 request c0 r18
+  [  449] server: apply c0 r18 amount=922 balance=32507
+  [  449] pkt: send seq=127 0->1 reply c0 r18 delay=1 ready_at=450 queued=1
+  [  449] pkt: deliver seq=126 3->0 request c2 r20
+  [  449] server: apply c2 r20 amount=773 balance=33280
+  [  449] pkt: send seq=128 0->3 reply c2 r20 delay=2 ready_at=451 queued=1
+  [  450] pkt: deliver seq=127 0->1 reply c0 r18
+  [  450] client 0: reply r18 balance=32507
+  [  451] pkt: deliver seq=128 0->3 reply c2 r20
+  [  451] client 2: reply r20 balance=33280
+  [  454] net: path 0->3 clogged for 4 ticks
+  [  460] net: path 0->3 clogged for 5 ticks
+  [  463] client 0: send r19 transfer(197)
+  [  463] pkt: send seq=129 1->0 request c0 r19 delay=6 ready_at=469 queued=1
+  [  469] pkt: deliver seq=129 1->0 request c0 r19
+  [  469] server: apply c0 r19 amount=197 balance=33477
+  [  469] pkt: send seq=130 0->1 reply c0 r19 delay=1 ready_at=470 queued=1
+  [  470] pkt: deliver seq=130 0->1 reply c0 r19
+  [  470] client 0: reply r19 balance=33477
+  [  495] net: path 2->0 clogged for 10 ticks
+  [  496] client 0: send r20 transfer(95)
+  [  496] pkt: send seq=131 1->0 request c0 r20 delay=2 ready_at=498 queued=1
+  [  498] pkt: deliver seq=131 1->0 request c0 r20
+  [  498] server: apply c0 r20 amount=95 balance=33572
+  [  498] pkt: send seq=132 0->1 reply c0 r20 delay=4 ready_at=502 queued=1
+  [  502] pkt: deliver seq=132 0->1 reply c0 r20
+  [  502] client 0: reply r20 balance=33572
+
+  balance=33572 sent=132 lost=0 replayed=6 capacity_dropped=0 clogs=32
+seed=1 ticks=502 trace=aa766ae1e337aea9 PASS
+</script>
+<script type="text/plain" id="log-sweep" data-src="data/05/sweep.txt">
+PASS: 10000 seeds
+
+real	0m0.954s
+user	0m0.858s
+sys	0m0.092s
+</script>
+<script type="text/plain" id="log-sweep-nd" data-src="data/05/sweep-no-dedup.txt">
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug-no-dedup
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-sweep-rs" data-src="data/05/sweep-reply-stale.txt">
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug-reply-stale
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="tsv-seeds" data-src="data/05/per-seed.tsv">
+seed	clients	loss_pct	replay_pct	delay_mean	pass_correct	pass_no_dedup	pass_reply_stale	heal_tick	client_events_after_heal	ticks
+0	4	13	17	3	1	0	0	578	0	578
+1	3	0	6	10	1	0	0	380	44	502
+2	1	20	4	13	1	0	1	841	0	841
+3	1	6	30	4	1	0	0	295	0	295
+4	1	25	44	12	1	0	1	652	25	766
+5	1	15	40	12	1	0	0	376	44	722
+6	3	28	10	9	1	0	0	994	12	1283
+7	1	15	7	9	1	0	1	1099	0	1099
+8	3	9	6	14	1	0	0	823	1	879
+9	4	19	19	4	1	0	0	557	167	1578
+10	3	12	13	7	1	0	0	361	68	551
+11	3	11	48	12	1	0	0	1264	0	1264
+12	4	9	14	4	1	0	0	750	0	750
+13	4	0	3	6	1	1	1	140	0	140
+14	1	20	28	7	1	0	1	1378	24	1717
+15	1	13	15	5	1	0	1	366	0	366
+16	2	22	20	13	1	0	0	773	70	1414
+17	1	23	47	13	1	0	1	256	5	291
+18	1	6	2	14	1	0	0	647	0	647
+19	1	23	1	8	1	0	1	1275	0	1275
+20	3	4	32	14	1	0	0	1016	3	1051
+21	2	29	1	11	1	0	0	1492	27	1626
+22	3	26	25	6	1	0	0	293	22	413
+23	1	17	7	11	1	0	0	1136	0	1136
+24	4	12	46	9	1	0	0	415	61	512
+25	1	4	25	8	1	0	0	462	0	462
+26	2	3	25	14	1	0	0	335	78	571
+27	3	19	5	15	1	0	0	1201	37	1352
+28	1	30	24	10	1	0	1	458	6	495
+29	1	24	9	15	1	0	1	539	0	539
+30	2	13	12	9	1	0	0	662	2	666
+31	1	7	30	6	1	0	1	901	0	901
+32	2	2	18	14	1	0	0	283	0	283
+33	4	13	28	9	1	0	0	721	0	721
+34	4	2	49	8	1	0	0	248	0	248
+35	4	3	13	4	1	0	0	379	0	379
+36	2	25	33	11	1	0	0	1155	19	1308
+37	4	24	0	8	1	0	0	1020	19	1509
+38	3	0	12	9	1	0	0	975	8	1344
+39	3	21	22	15	1	0	0	823	88	1028
+40	3	23	31	4	1	0	0	397	0	397
+41	4	25	48	13	1	0	0	970	0	970
+42	3	10	13	10	1	0	0	1898	0	1898
+43	2	4	15	7	1	0	0	783	0	783
+44	2	9	24	15	1	0	0	792	0	792
+45	3	3	11	15	1	0	0	979	84	1436
+46	2	28	20	9	1	0	0	677	0	677
+47	2	1	24	15	1	0	0	755	9	818
+48	4	28	44	8	1	0	0	1283	2	1374
+49	1	10	3	12	1	0	1	946	7	985
+50	1	20	38	13	1	0	1	631	0	631
+51	1	18	34	3	1	0	0	1233	0	1233
+52	4	0	41	7	1	0	0	765	0	765
+53	1	1	30	6	1	0	1	448	5	470
+54	2	12	40	5	1	0	0	587	44	763
+55	4	15	23	5	1	0	0	631	80	1143
+56	4	21	46	10	1	0	0	1024	0	1024
+57	3	27	10	13	1	0	0	973	0	973
+58	4	22	10	14	1	0	0	227	151	533
+59	4	0	33	3	1	0	0	223	72	372
+60	4	6	49	14	1	0	0	1012	0	1012
+61	3	7	41	4	1	0	0	787	0	787
+62	4	26	25	8	1	0	0	633	4	759
+63	1	14	14	11	1	0	1	403	28	595
+64	2	11	5	13	1	0	0	1027	0	1027
+65	3	19	10	4	1	0	0	1032	35	1213
+66	3	3	6	15	1	0	0	1049	0	1049
+67	2	18	28	15	1	0	0	1419	0	1419
+68	4	28	18	4	1	0	0	511	63	874
+69	4	12	23	15	1	0	0	928	0	928
+70	3	25	24	12	1	0	0	340	140	1119
+71	4	13	47	15	1	0	0	729	21	808
+72	1	25	13	5	1	0	1	1285	20	1438
+73	3	9	36	11	1	0	0	468	0	468
+74	3	25	20	8	1	0	0	628	6	638
+75	4	25	11	15	1	0	0	925	127	1330
+76	3	29	35	5	1	0	0	1631	11	1722
+77	3	20	42	9	1	0	0	1295	0	1295
+78	1	13	44	13	1	0	1	372	0	372
+79	4	12	36	3	1	0	0	593	0	593
+80	1	16	8	14	1	0	1	1993	18	2186
+81	3	26	9	8	1	0	0	1000	56	1155
+82	2	27	1	14	1	0	0	1396	14	1482
+83	4	21	23	8	1	0	0	568	0	568
+84	2	26	0	4	1	0	0	1471	12	1726
+85	4	26	5	15	1	0	0	1906	19	2092
+86	1	1	30	6	1	0	0	640	0	640
+87	4	11	26	15	1	0	0	499	42	744
+88	2	24	20	6	1	0	0	681	76	1129
+89	4	12	12	4	1	0	0	606	0	606
+90	3	1	17	15	1	0	0	191	0	191
+91	4	27	37	5	1	0	0	725	106	1059
+92	1	1	19	15	1	0	0	1408	11	1645
+93	2	4	19	9	1	0	1	248	38	454
+94	2	29	43	3	1	0	0	1288	0	1288
+95	2	8	46	10	1	0	0	1293	0	1293
+96	4	30	42	9	1	0	0	1388	0	1388
+97	3	13	22	7	1	0	0	375	0	375
+98	2	30	17	8	1	0	0	735	0	735
+99	3	11	13	9	1	0	0	1080	18	1334
+100	4	13	30	7	1	0	0	1697	6	1754
+101	3	8	16	7	1	0	0	1197	28	1392
+102	1	22	37	9	1	0	1	1482	33	1798
+103	2	8	20	5	1	0	0	589	0	589
+104	1	11	12	10	1	0	1	375	33	551
+105	1	12	8	14	1	1	1	215	0	215
+106	2	29	14	15	1	0	0	1186	6	1247
+107	2	2	14	14	1	0	0	827	0	827
+108	2	23	26	10	1	0	0	785	54	1111
+109	4	11	0	6	1	0	0	451	181	1171
+110	2	4	45	8	1	0	0	190	0	190
+111	1	2	5	15	1	0	1	430	22	559
+112	4	26	20	15	1	0	0	413	107	857
+113	1	10	1	5	1	0	1	525	0	525
+114	1	21	40	11	1	0	1	1194	7	1245
+115	4	29	42	9	1	0	0	507	84	689
+116	3	1	20	6	1	0	0	756	0	756
+117	2	15	17	7	1	0	0	384	0	384
+118	3	22	49	4	1	0	0	714	0	714
+119	2	10	17	5	1	0	0	308	9	365
+120	2	26	39	10	1	0	0	853	4	990
+121	4	19	41	8	1	0	0	447	12	573
+122	1	19	10	8	1	0	1	163	0	163
+123	2	14	43	10	1	0	0	1399	44	1689
+124	2	30	13	12	1	0	0	284	101	596
+125	1	18	33	9	1	0	1	1414	1	1445
+126	3	20	38	8	1	0	0	732	103	1029
+127	3	14	33	6	1	0	0	580	6	699
+128	1	10	12	14	1	0	1	568	1	601
+129	1	11	31	6	1	0	0	482	0	482
+130	1	9	26	15	1	0	0	1426	6	1544
+131	4	19	22	3	1	0	0	522	35	785
+132	4	4	1	10	1	0	0	1150	0	1150
+133	1	15	34	13	1	0	0	942	0	942
+134	2	6	41	10	1	0	0	899	0	899
+135	4	26	2	5	1	0	0	1140	0	1140
+136	3	23	21	9	1	0	0	652	64	997
+137	2	9	29	14	1	0	0	671	0	671
+138	1	29	29	3	1	0	1	782	6	979
+139	4	29	40	8	1	0	0	1148	94	1472
+140	3	27	46	13	1	0	0	1693	90	2806
+141	2	7	35	13	1	0	0	379	29	538
+142	4	10	34	15	1	0	0	748	0	748
+143	4	5	9	10	1	0	0	936	44	1280
+144	4	27	8	15	1	0	0	1579	8	1807
+145	1	5	36	11	1	0	0	1238	0	1238
+146	2	23	42	11	1	0	0	1352	9	1410
+147	2	15	10	15	1	0	0	1017	39	1236
+148	4	21	24	3	1	0	0	682	132	1201
+149	4	23	35	13	1	0	0	463	160	798
+150	1	11	43	14	1	0	0	1719	5	1806
+151	3	9	13	13	1	0	0	321	133	947
+152	2	25	42	13	1	0	0	1954	19	2096
+153	1	27	38	13	1	0	1	381	46	742
+154	4	5	39	3	1	0	0	1225	0	1225
+155	2	20	48	13	1	0	0	605	36	1230
+156	3	4	29	10	1	0	0	884	0	884
+157	4	2	40	8	1	0	0	616	1	624
+158	2	24	40	10	1	0	0	988	12	1027
+159	1	15	25	13	1	0	1	1099	11	1186
+160	1	27	18	9	1	0	1	403	7	488
+161	4	24	36	6	1	0	0	303	218	1266
+162	3	18	13	3	1	0	0	208	26	330
+163	1	20	35	13	1	0	1	499	17	624
+164	1	25	38	7	1	0	1	786	35	993
+165	2	14	16	14	1	0	0	1292	1	1323
+166	2	25	48	8	1	0	0	822	0	822
+167	1	28	9	5	1	0	1	1000	17	1097
+168	3	5	47	14	1	0	0	1009	65	1258
+169	1	27	21	14	1	0	0	1131	0	1131
+170	4	29	29	13	1	0	0	1523	161	2419
+171	3	19	50	5	1	0	0	649	57	1131
+172	2	0	30	14	1	0	0	224	0	224
+173	3	15	38	15	1	0	0	602	0	602
+174	2	13	7	6	1	0	0	653	0	653
+175	3	9	49	13	1	0	0	639	79	791
+176	4	25	39	15	1	0	0	747	136	1004
+177	2	14	42	14	1	0	0	1418	31	1678
+178	1	29	29	14	1	0	1	510	0	510
+179	4	28	34	7	1	0	0	1874	28	2249
+180	3	30	30	6	1	0	0	1408	138	2388
+181	2	0	46	6	1	0	0	322	0	322
+182	3	21	16	6	1	0	0	355	53	608
+183	1	21	31	12	1	0	1	348	14	458
+184	3	18	25	3	1	0	0	535	13	596
+185	1	9	38	5	1	0	1	454	0	454
+186	3	20	38	3	1	0	0	1816	14	2127
+187	2	30	5	11	1	0	0	1623	0	1623
+188	3	0	45	3	1	0	0	611	19	835
+189	3	16	36	14	1	0	0	1268	0	1268
+190	3	4	20	9	1	0	0	353	0	353
+191	3	7	3	15	1	0	0	675	65	878
+192	2	15	44	11	1	0	0	395	91	890
+193	3	21	39	12	1	0	0	670	18	799
+194	1	4	39	4	1	0	0	545	0	545
+195	4	28	13	9	1	0	0	1162	86	1657
+196	3	2	1	14	1	0	0	255	42	425
+197	2	29	15	3	1	0	0	449	38	667
+198	3	19	18	4	1	0	0	1006	29	1306
+199	3	20	19	15	1	0	0	1691	1	1712
+200	1	11	32	8	1	0	0	536	0	536
+201	2	19	7	7	1	0	1	682	0	682
+202	2	22	38	7	1	0	0	362	40	550
+203	3	0	1	9	1	0	0	591	0	591
+204	1	20	42	7	1	0	1	613	22	847
+205	3	10	0	14	1	0	0	1183	57	1407
+206	2	28	12	4	1	0	0	343	17	445
+207	1	3	14	11	1	0	1	940	0	940
+208	2	30	37	13	1	0	0	481	0	481
+209	2	24	18	3	1	0	0	995	30	1169
+210	1	18	20	8	1	0	1	729	0	729
+211	1	6	28	9	1	0	1	1236	0	1236
+212	2	13	29	6	1	0	0	612	0	612
+213	1	22	32	5	1	1	1	201	44	492
+214	2	6	23	5	1	0	0	631	0	631
+215	4	13	17	6	1	0	0	1500	17	1828
+216	4	22	44	13	1	0	0	995	0	995
+217	3	18	12	4	1	0	0	334	95	598
+218	2	1	11	3	1	0	0	701	0	701
+219	1	14	26	13	1	0	1	474	50	917
+220	2	21	4	10	1	0	0	524	0	524
+221	4	23	22	15	1	0	0	1036	151	1451
+222	1	15	8	4	1	0	1	329	0	329
+223	3	11	27	11	1	0	0	438	0	438
+224	3	27	20	14	1	0	0	947	39	1164
+225	3	26	27	8	1	0	0	666	0	666
+226	2	12	8	5	1	0	0	1397	21	1680
+227	2	8	18	4	1	0	0	939	0	939
+228	1	1	22	15	1	0	0	399	0	399
+229	4	0	32	10	1	0	0	1138	17	1313
+230	1	28	2	3	1	0	1	1408	0	1408
+231	4	24	45	7	1	0	0	1121	2	1129
+232	1	16	12	13	1	0	1	1815	7	2168
+233	1	23	29	4	1	0	1	692	0	692
+234	2	1	9	6	1	0	0	586	0	586
+235	4	0	47	4	1	0	0	499	0	499
+236	1	4	2	5	1	0	1	129	0	129
+237	4	4	34	8	1	0	0	461	0	461
+238	3	11	41	9	1	0	0	798	61	1497
+239	2	27	35	14	1	0	0	1187	52	1533
+240	2	17	24	7	1	0	0	699	0	699
+241	3	24	6	10	1	0	0	823	0	823
+242	2	22	8	7	1	0	0	1117	0	1117
+243	2	23	29	5	1	0	0	185	0	185
+244	4	5	50	13	1	0	0	243	3	262
+245	1	3	33	3	1	0	1	123	0	123
+246	4	0	5	3	1	0	0	470	44	689
+247	2	25	20	11	1	0	0	761	0	761
+248	1	9	6	9	1	1	1	294	25	397
+249	4	12	6	10	1	0	0	356	66	446
+250	1	12	35	4	1	0	0	1191	0	1191
+251	4	12	24	14	1	0	0	549	0	549
+252	2	15	21	9	1	0	0	708	54	1034
+253	1	24	4	5	1	0	1	776	0	776
+254	2	16	36	9	1	0	0	1162	0	1162
+255	1	0	7	12	1	0	0	754	0	754
+256	2	12	10	8	1	0	0	1100	0	1100
+257	2	4	48	8	1	0	0	400	0	400
+258	2	6	4	12	1	0	0	461	52	928
+259	2	0	20	13	1	0	0	212	98	681
+260	1	11	18	13	1	0	1	231	16	335
+261	2	21	34	6	1	0	0	413	53	587
+262	2	24	26	6	1	0	0	893	0	893
+263	3	2	43	11	1	0	0	377	2	400
+264	2	8	7	4	1	0	0	536	59	1345
+265	4	24	50	4	1	0	0	1325	0	1325
+266	1	11	15	12	1	0	1	457	24	605
+267	2	30	16	11	1	0	0	712	53	907
+268	1	27	39	14	1	0	1	800	0	800
+269	4	4	28	6	1	0	0	274	4	304
+270	4	28	5	6	1	0	0	526	67	1471
+271	1	7	39	9	1	0	1	200	28	287
+272	2	19	7	11	1	0	0	754	8	796
+273	3	18	16	15	1	0	0	1551	0	1551
+274	4	19	9	12	1	0	0	1072	86	1650
+275	1	12	38	7	1	0	0	764	0	764
+276	1	25	32	5	1	0	1	1838	21	2280
+277	3	9	19	13	1	0	0	1256	73	2089
+278	4	5	42	5	1	0	0	930	0	930
+279	1	12	30	7	1	0	1	254	45	523
+280	3	17	5	11	1	0	0	1762	38	2000
+281	1	7	14	15	1	0	0	813	0	813
+282	2	0	4	13	1	0	0	397	0	397
+283	3	24	47	8	1	0	0	1401	84	1883
+284	1	23	2	8	1	0	1	1713	6	1939
+285	2	7	16	14	1	0	0	252	88	824
+286	3	21	13	3	1	0	0	886	86	1110
+287	2	4	9	9	1	0	0	218	0	218
+288	3	10	49	12	1	0	0	1160	0	1160
+289	3	6	29	6	1	0	0	463	0	463
+290	2	1	6	5	1	0	0	783	7	811
+291	1	21	20	9	1	0	1	364	19	478
+292	4	5	22	15	1	0	0	631	0	631
+293	2	4	19	10	1	0	0	969	0	969
+294	2	25	1	3	1	0	0	1145	0	1145
+295	1	19	28	11	1	0	1	271	25	421
+296	4	10	21	5	1	0	0	1560	0	1560
+297	2	21	3	7	1	0	0	1452	10	1570
+298	2	28	6	15	1	0	0	1075	49	1362
+299	1	14	24	14	1	0	1	787	26	1076
+300	4	1	17	7	1	0	0	265	145	544
+301	2	17	44	5	1	0	0	879	55	1424
+302	3	12	47	6	1	0	0	1443	0	1443
+303	3	22	14	3	1	0	1	775	0	775
+304	3	18	49	8	1	0	0	921	34	1019
+305	3	27	5	10	1	0	0	673	80	830
+306	3	29	32	8	1	0	0	1904	18	2166
+307	2	9	8	3	1	0	0	374	0	374
+308	3	22	42	7	1	0	0	409	0	409
+309	4	4	3	12	1	0	0	358	74	584
+310	4	4	10	4	1	0	0	264	0	264
+311	2	7	21	9	1	0	0	327	75	924
+312	3	8	10	3	1	0	0	546	0	546
+313	3	10	16	14	1	0	0	600	0	600
+314	3	8	3	10	1	0	0	652	0	652
+315	2	11	3	14	1	0	0	505	0	505
+316	1	6	20	3	1	0	1	271	0	271
+317	2	15	9	6	1	0	0	1854	8	2058
+318	2	19	34	5	1	0	0	750	0	750
+319	1	6	11	8	1	0	0	539	5	562
+320	2	9	3	4	1	0	0	634	0	634
+321	4	14	36	8	1	0	0	327	42	769
+322	4	28	35	15	1	0	0	387	220	1078
+323	2	29	25	5	1	0	0	1541	0	1541
+324	4	26	7	4	1	0	0	1272	46	1529
+325	2	21	0	6	1	0	0	1478	0	1478
+326	1	7	36	4	1	0	1	324	41	827
+327	1	28	34	8	1	0	1	1317	14	1379
+328	3	29	42	7	1	0	0	895	51	1245
+329	2	7	27	3	1	0	0	782	0	782
+330	2	6	8	15	1	0	0	389	45	694
+331	3	11	12	14	1	0	0	1384	0	1384
+332	4	18	30	9	1	0	0	1194	0	1194
+333	3	6	3	7	1	0	0	1640	15	1844
+334	4	9	14	11	1	0	0	511	141	816
+335	3	4	25	4	1	0	0	282	0	282
+336	2	16	23	8	1	0	0	1221	77	1911
+337	4	19	38	13	1	0	0	1027	0	1027
+338	4	30	31	8	1	0	0	623	40	923
+339	1	26	13	5	1	1	1	362	44	629
+340	3	28	23	11	1	0	0	414	94	797
+341	1	21	42	12	1	0	0	733	7	762
+342	4	24	18	14	1	0	0	876	59	1125
+343	2	3	11	4	1	0	0	226	6	269
+344	4	19	35	13	1	0	0	1407	0	1407
+345	3	8	20	9	1	0	0	943	15	1058
+346	3	29	5	14	1	0	0	954	0	954
+347	2	23	22	8	1	0	0	1249	9	1393
+348	2	16	25	7	1	0	0	1467	17	1541
+349	3	22	21	5	1	0	0	422	15	526
+350	4	1	15	12	1	0	0	600	0	600
+351	4	7	16	14	1	0	0	1460	84	1816
+352	4	18	28	5	1	0	0	585	161	955
+353	3	24	13	3	1	0	0	1894	10	2033
+354	3	12	13	6	1	0	0	898	0	898
+355	2	6	28	6	1	0	0	1416	0	1416
+356	3	16	6	11	1	0	0	478	62	1273
+357	2	28	12	6	1	0	0	469	38	689
+358	2	24	17	12	1	0	0	609	63	784
+359	1	0	44	4	1	0	1	83	0	83
+360	2	26	0	3	1	0	0	773	34	1079
+361	4	0	20	12	1	0	0	520	72	712
+362	2	14	2	3	1	0	0	846	47	1225
+363	4	24	24	11	1	0	0	1213	0	1213
+364	3	19	13	12	1	0	0	229	60	672
+365	3	15	46	4	1	0	0	1783	0	1783
+366	1	2	40	7	1	0	1	242	40	602
+367	3	21	16	10	1	0	0	1723	58	2174
+368	2	29	7	13	1	0	0	658	74	1144
+369	4	26	20	15	1	0	0	260	187	976
+370	4	22	35	14	1	0	0	742	132	1511
+371	1	30	45	4	1	0	1	1460	16	1716
+372	2	17	39	14	1	0	0	1241	15	1519
+373	1	17	38	14	1	0	0	355	2	409
+374	3	21	48	12	1	0	0	1101	22	1390
+375	1	2	45	6	1	0	0	646	0	646
+376	3	10	2	9	1	0	0	567	11	641
+377	4	30	23	4	1	0	0	291	17	536
+378	1	30	30	10	1	0	1	1795	2	1824
+379	4	1	6	11	1	0	0	296	0	296
+380	1	20	37	13	1	0	1	248	0	248
+381	2	15	3	13	1	0	0	1196	55	1572
+382	1	22	36	4	1	0	1	441	28	641
+383	4	5	46	7	1	0	0	486	0	486
+384	2	11	41	9	1	0	0	233	62	602
+385	3	2	19	7	1	0	0	377	0	377
+386	2	26	30	15	1	0	0	429	91	1499
+387	4	24	31	6	1	0	0	1150	22	1278
+388	3	1	5	6	1	0	0	401	0	401
+389	3	27	26	3	1	0	0	718	19	1199
+390	1	29	0	14	1	0	1	273	54	627
+391	1	5	6	9	1	0	1	402	0	402
+392	3	13	12	9	1	0	0	1047	36	1228
+393	1	26	47	6	1	0	0	587	12	731
+394	3	22	39	7	1	0	0	925	39	1399
+395	3	18	38	3	1	0	0	1659	25	2274
+396	2	25	13	5	1	0	0	616	84	1026
+397	1	23	2	6	1	0	1	1003	52	1437
+398	2	23	35	15	1	0	0	1512	14	1720
+399	4	9	3	12	1	0	0	1630	21	1992
+400	2	18	14	5	1	0	0	276	56	484
+401	1	26	19	4	1	0	0	264	0	264
+402	4	26	4	6	1	0	0	465	56	706
+403	4	4	16	10	1	0	0	542	91	752
+404	4	22	43	5	1	0	0	1133	33	1538
+405	3	30	42	14	1	0	0	1165	32	1342
+406	2	29	49	4	1	0	0	1729	38	1945
+407	2	17	21	3	1	0	1	167	0	167
+408	4	5	10	5	1	0	0	529	0	529
+409	3	26	40	14	1	0	0	911	0	911
+410	4	2	17	13	1	0	0	760	0	760
+411	2	4	27	12	1	0	0	688	36	885
+412	1	10	46	5	1	0	1	377	10	521
+413	3	12	10	11	1	0	0	609	18	691
+414	4	28	6	10	1	0	0	1009	212	2010
+415	2	17	45	4	1	0	0	344	13	699
+416	4	26	2	15	1	0	0	1566	14	1970
+417	3	5	23	4	1	0	0	375	17	412
+418	2	2	1	11	1	0	0	477	0	477
+419	2	3	40	3	1	0	0	447	0	447
+420	3	21	12	13	1	0	0	1258	34	1545
+421	1	27	1	11	1	0	1	1993	32	2323
+422	3	19	2	11	1	0	0	446	32	891
+423	3	16	19	15	1	0	0	420	145	1267
+424	4	2	26	14	1	0	0	929	6	1037
+425	3	8	21	14	1	0	0	527	0	527
+426	4	4	17	13	1	0	0	791	0	791
+427	3	12	42	4	1	0	0	1265	0	1265
+428	1	22	44	13	1	1	1	174	0	174
+429	1	28	26	13	1	0	1	952	32	1260
+430	2	15	2	10	1	0	0	361	60	642
+431	3	9	1	13	1	0	0	434	0	434
+432	2	19	32	14	1	0	0	428	42	703
+433	2	15	9	4	1	0	0	264	0	264
+434	3	8	7	8	1	0	0	450	0	450
+435	1	5	23	9	1	0	1	808	0	808
+436	4	16	12	9	1	0	0	1857	6	2003
+437	4	7	4	10	1	0	0	639	0	639
+438	4	9	2	14	1	0	0	314	0	314
+439	3	20	29	7	1	0	0	360	0	360
+440	4	25	8	10	1	0	0	241	187	689
+441	3	0	7	8	1	0	0	1115	0	1115
+442	4	2	17	9	1	0	0	1294	0	1294
+443	4	21	1	7	1	0	0	1108	47	1493
+444	4	12	0	15	1	0	0	1112	0	1112
+445	4	20	2	4	1	0	0	586	31	945
+446	3	3	10	9	1	0	0	717	36	802
+447	1	8	24	15	1	0	0	1159	0	1159
+448	1	7	26	15	1	0	0	935	11	1018
+449	1	23	3	14	1	0	1	937	0	937
+450	2	14	34	8	1	0	0	909	0	909
+451	1	9	38	5	1	0	0	764	0	764
+452	3	3	29	14	1	0	0	370	0	370
+453	3	15	9	12	1	0	0	707	0	707
+454	4	15	5	9	1	0	0	690	0	690
+455	2	0	24	9	1	0	0	1111	0	1111
+456	4	28	24	4	1	0	0	1542	29	2047
+457	1	17	25	10	1	0	1	450	16	618
+458	4	10	7	5	1	0	0	916	14	1008
+459	3	8	33	10	1	0	0	592	52	752
+460	2	25	50	10	1	0	0	1551	49	1967
+461	2	13	46	11	1	0	0	587	12	666
+462	3	20	14	15	1	0	0	291	115	493
+463	4	24	12	11	1	0	0	510	18	746
+464	2	29	37	8	1	0	0	1240	27	1522
+465	1	19	2	14	1	0	0	574	46	930
+466	4	4	1	3	1	0	0	646	0	646
+467	3	18	16	5	1	0	0	257	75	814
+468	2	5	29	13	1	0	0	635	0	635
+469	4	10	46	4	1	0	0	1320	0	1320
+470	2	12	9	5	1	0	0	1608	18	2075
+471	2	12	25	15	1	0	0	1415	0	1415
+472	3	12	2	14	1	0	0	597	94	962
+473	4	14	22	3	1	0	0	1697	0	1697
+474	4	20	37	4	1	0	0	881	0	881
+475	1	27	15	5	1	0	1	516	0	516
+476	1	30	46	10	1	0	0	615	0	615
+477	1	12	26	11	1	0	1	495	54	1123
+478	2	8	6	7	1	0	0	1304	3	1319
+479	2	29	32	14	1	0	0	1920	64	3067
+480	3	6	18	3	1	0	0	199	0	199
+481	3	18	48	8	1	0	0	804	18	1103
+482	4	23	42	14	1	0	0	1481	136	2041
+483	1	13	16	12	1	0	1	557	17	626
+484	2	19	45	9	1	0	0	913	0	913
+485	2	3	49	10	1	0	1	197	0	197
+486	1	2	8	6	1	0	1	667	0	667
+487	1	13	46	5	1	0	0	866	21	1278
+488	1	3	35	8	1	0	1	286	0	286
+489	4	29	16	10	1	0	0	770	0	770
+490	1	22	23	11	1	0	0	1775	12	2246
+491	3	16	3	5	1	0	0	1071	0	1071
+492	4	24	16	9	1	0	0	1350	6	1666
+493	1	4	17	10	1	0	1	1174	0	1174
+494	1	14	17	5	1	0	1	415	0	415
+495	3	19	11	13	1	0	0	1285	2	1540
+496	4	14	50	8	1	0	0	259	21	355
+497	3	28	24	15	1	0	0	1803	3	1857
+498	1	29	46	8	1	0	1	790	0	790
+499	4	1	18	7	1	0	0	267	0	267
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex05" });
+const { C, el, s, tip } = DST;
+
+// ---------------------------------------------------------------- parsing the real logs
+function parseRun(text) {
+  const header = {}, lines = [];
+  let final = null, healIdx = -1;
+  for (const raw of text.split("\n")) {
+    let m;
+    if ((m = raw.match(/^\s*\[\s*(\d+)\] (.*)$/))) {
+      const t = +m[1], msg = m[2], e = { t, msg, raw, i: lines.length };
+      if ((m = msg.match(/^pkt: (\w+) seq=(\d+) (\d+)->(\d+) (request|reply) c(\d+) r(\d+)(?: delay=(\d+) ready_at=(\d+) queued=(\d+))?/)))
+        Object.assign(e, { kind: "pkt", op: m[1], seq: +m[2], src: +m[3], dst: +m[4], cmd: m[5], c: +m[6], r: +m[7], delay: m[8] && +m[8], ready: m[9] && +m[9], queued: m[10] && +m[10] });
+      else if ((m = msg.match(/^client (\d+): send r(\d+) transfer\((\d+)\)/))) Object.assign(e, { kind: "send", c: +m[1], r: +m[2], amount: +m[3] });
+      else if ((m = msg.match(/^client (\d+): timeout, resend r(\d+) \(attempt (\d+)\)/))) Object.assign(e, { kind: "timeout", c: +m[1], r: +m[2], attempt: +m[3] });
+      else if ((m = msg.match(/^client (\d+): reply r(\d+) balance=(\d+)/))) Object.assign(e, { kind: "reply", c: +m[1], r: +m[2], balance: +m[3] });
+      else if ((m = msg.match(/^server: apply c(\d+) r(\d+) amount=(\d+)(?: balance=(\d+))?/))) Object.assign(e, { kind: "apply", c: +m[1], r: +m[2], amount: +m[3], balance: m[4] && +m[4] });
+      else if ((m = msg.match(/^server: duplicate c(\d+) r(\d+) -> (cached reply|reply with current) balance=(\d+)/))) Object.assign(e, { kind: "dup", c: +m[1], r: +m[2], how: m[3], balance: +m[4] });
+      else if ((m = msg.match(/^server: ignore old c(\d+) r(\d+)/))) Object.assign(e, { kind: "ignore", c: +m[1], r: +m[2] });
+      else if ((m = msg.match(/^net: path (\d+)->(\d+) clogged for (\d+) ticks/))) Object.assign(e, { kind: "clog", src: +m[1], dst: +m[2], dur: +m[3] });
+      else if (/^transition_to_liveness_mode/.test(msg)) { e.kind = "heal"; healIdx = lines.length; }
+      else if (/VIOLATED/.test(msg)) e.kind = "violation";
+      else e.kind = "other";
+      lines.push(e);
+    } else if ((m = raw.match(/^\s+(\w+)=(\d+)/)) && !lines.length) header[m[1]] = +m[2];
+    else if ((m = raw.match(/^seed=(\d+) ticks=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/))) final = { seed: +m[1], ticks: +m[2], trace: m[3], verdict: m[4] };
+    else if ((m = raw.match(/^\s+balance=(\d+) sent=(\d+) lost=(\d+) replayed=(\d+) capacity_dropped=(\d+) clogs=(\d+)/)))
+      header.stats = { balance: +m[1], sent: +m[2], lost: +m[3], replayed: +m[4], capacity_dropped: +m[5], clogs: +m[6] };
+  }
+  return { header, lines, final, healIdx, text };
+}
+// Every packet's life: sent -> delivered | lost | capacity-dropped | still in flight.
+function packetsOf(run) {
+  const P = new Map(); let pendingReplay = null;
+  for (const e of run.lines) {
+    if (e.kind !== "pkt") continue;
+    if (e.op === "send") {
+      P.set(e.seq, { seq: e.seq, src: e.src, dst: e.dst, cmd: e.cmd, c: e.c, r: e.r, t0: e.t, i0: e.i, delay: e.delay, ready: e.ready, fate: "inflight", t1: null, i1: Infinity, replayOf: pendingReplay });
+      pendingReplay = null;
+    } else {
+      const p = P.get(e.seq);
+      if (e.op === "replay") { pendingReplay = e.seq; p.replayed = true; continue; }
+      p.fate = e.op === "deliver" ? "deliver" : e.op; p.t1 = e.t; p.i1 = e.i;
+    }
+  }
+  return [...P.values()];
+}
+const tsv = (id) => { const [h, ...rows] = DST.text(id).trim().split("\n"); const k = h.split("\t"); return rows.map((r) => Object.fromEntries(r.split("\t").map((v, i) => [k[i], v === "" ? null : +v]))); };
+
+const ND = parseRun(DST.text("log-nd")), ND_A = parseRun(DST.text("log-nd-a"));
+const RUN0 = parseRun(DST.text("log-run0")), RUN1 = parseRun(DST.text("log-run1")), STALE = parseRun(DST.text("log-stale"));
+const SEEDS = tsv("tsv-seeds");
+const pname = (p, nc) => (p === 0 ? "S" : "c" + (p - 1));
+
+// hero stats
+{
+  const fails = (k) => SEEDS.filter((r) => !r[k]).length;
+  const stats = [
+    [RUN0.header.stats.sent, `packets sent in the correct run of seed 0 (${RUN0.header.stats.lost} lost, ${RUN0.header.stats.replayed} replayed)`],
+    [ND.final.ticks, `ticks until --bug-no-dedup breaks the balance at seed 0`],
+    [`${fails("pass_no_dedup")}/${SEEDS.length}`, "seeds 0–499 that catch --bug-no-dedup"],
+    [`${fails("pass_correct")}/${SEEDS.length}`, "seeds that fail with the correct code"],
+  ];
+  for (const [n, l] of stats) DST.$("#hero-stats").append(el("div", { class: "stat" }, el("div", { class: "num" }, String(n)), el("div", { class: "lbl" }, l)));
+}
+
+// ---------------------------------------------------------------- 01 architecture
+{
+  const W = 1100, H = 330, svg = s("svg", { viewBox: `0 -4 ${W} ${H + 4}` });
+  const box = (x, y, w, h, title, sub, col, dashed) => {
+    svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: "#121b2c", stroke: col, "stroke-width": 1.5, "stroke-dasharray": dashed ? "5 4" : null }));
+    svg.append(s("text", { x: x + w / 2, y: y + 20, "text-anchor": "middle", fill: col, "font-size": 13, "font-weight": 700, "font-family": "monospace" }, title));
+    (sub || []).forEach((t, i) => svg.append(s("text", { x: x + w / 2, y: y + 38 + i * 15, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, t)));
+  };
+  const arrow = (x1, y1, x2, y2, col, cls) => svg.append(s("path", { d: `M${x1},${y1} L${x2},${y2}`, stroke: col, "stroke-width": 1.6, fill: "none", class: cls || null, "marker-end": "url(#ah)" }));
+  svg.append(s("defs", {}, s("marker", { id: "ah", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: C.dim }))));
+  const h = ND.header;
+  box(20, 20, 170, 70, `SEED=${ND_A.final.seed}`, ["master DefaultPrng"], C.yellow);
+  box(20, 120, 170, 190, "options", [`clients=${h.clients}`, `requests=${h.requests_per_client}`, `timeout=${h.request_timeout}`, `safety=${h.ticks_max_safety} ticks`, `loss=${h.packet_loss_probability}%`, `replay=${h.packet_replay_probability}%`, `delay μ=${h.one_way_delay_mean} min=${h.one_way_delay_min}`, `capacity=${h.path_maximum_capacity}`], C.yellow, true);
+  arrow(105, 90, 105, 118, C.yellow);
+  // clients
+  for (let i = 0; i < h.clients; i++) {
+    const y = 20 + i * 76;
+    box(250, y, 170, 62, `client ${i}`, ["Client.tick / on_reply", "own PRNG sub-seed"], C.accent);
+    arrow(190, 50, 248, y + 31, C.dim);
+  }
+  // network
+  box(480, 20, 330, 290, "packet simulator (simulated)", [], C.violet, true);
+  for (let i = 0; i < h.clients; i++) {
+    const y = 52 + i * 64;
+    svg.append(s("text", { x: 496, y: y + 12, fill: C.muted, "font-size": 10, "font-family": "monospace" }, `c${i}→S`));
+    svg.append(s("text", { x: 496, y: y + 36, fill: C.muted, "font-size": 10, "font-family": "monospace" }, `S→c${i}`));
+    for (let k = 0; k < 7; k++) {
+      svg.append(s("rect", { x: 545 + k * 26, y: y, width: 22, height: 16, rx: 3, fill: k < 3 - (i % 3) ? "#3c4f86" : "#18233a", stroke: C.line }));
+      svg.append(s("rect", { x: 545 + k * 26, y: y + 24, width: 22, height: 16, rx: 3, fill: k < 1 + (i % 2) ? "#1d6a62" : "#18233a", stroke: C.line }));
+    }
+    arrow(420, 20 + i * 76 + 31, 490, y + 18, C.accent, "flow");
+  }
+  svg.append(s("text", { x: 645, y: 302, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, "heap per path, key (ready_at, seq) · loss/replay at pop · clog per tick"));
+  svg.append(s("path", { d: "M190,32 C260,-6 560,-6 640,18", stroke: C.dim, "stroke-width": 1.6, fill: "none", "marker-end": "url(#ah)" }));
+  svg.append(s("text", { x: 330, y: 326, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, "random.int(u64) → network seed, then one seed per client"));
+  // server
+  box(870, 80, 210, 150, "server (real code)", ["Server.on_request", "balance", "sessions[c] = {request,", "  cached reply}"], C.accent2);
+  arrow(810, 120, 868, 140, C.accent, "flow");
+  arrow(868, 175, 810, 195, C.accent2, "flow");
+  box(870, 250, 210, 60, "checker (oracle)", ["after every delivery"], C.ok, true);
+  DST.$("#arch").append(svg);
+  DST.$("#arch").append(el("div", { class: "cap" }, "Solid boxes run the real logic under test. Dashed boxes are simulated or oracle. Values are from seed 0's SEED= block. The queue fills are only illustrative; section 03 shows the real heaps."));
+}
+
+// gauges
+{
+  const ranges = { clients: [1, 4], requests_per_client: [5, 30], request_timeout: [10, 60], ticks_max_safety: [200, 2000], one_way_delay_mean: [3, 15], one_way_delay_min: [0, 3],
+    packet_loss_probability: [0, 30], packet_replay_probability: [0, 50], path_maximum_capacity: [2, 20], path_clog_duration_mean: [0, 100], path_clog_probability: [0, 10] };
+  const unit = { packet_loss_probability: "%", packet_replay_probability: "%", path_clog_probability: "‰", request_timeout: "t", ticks_max_safety: "t", one_way_delay_mean: "t", one_way_delay_min: "t", path_clog_duration_mean: "t" };
+  const runs = { 0: RUN0, 1: RUN1 };
+  const ctl = DST.$("#gauge-ctl");
+  function draw(seed) {
+    ctl.querySelectorAll("button").forEach((b) => b.classList.toggle("on", +b.dataset.s === seed));
+    const g = DST.$("#gauges"); g.innerHTML = "";
+    for (const [k, [lo, hi]] of Object.entries(ranges)) {
+      const v = runs[seed].header[k], f = (v - lo) / (hi - lo), a = Math.PI * (1 - f);
+      const svg = s("svg", { viewBox: "0 0 120 90" });
+      const arc = (f0, f1, col, w) => { const a0 = Math.PI * (1 - f0), a1 = Math.PI * (1 - f1);
+        return s("path", { d: `M${60 + 46 * Math.cos(a0)},${56 - 46 * Math.sin(a0)} A46,46 0 0 1 ${60 + 46 * Math.cos(a1)},${56 - 46 * Math.sin(a1)}`, stroke: col, "stroke-width": w, fill: "none", "stroke-linecap": "round" }); };
+      svg.append(arc(0, 1, "#1f2a40", 8));
+      const hot = /loss|replay|clog/.test(k);
+      if (f > 0.001) svg.append(arc(0, f, hot ? (f > 0.5 ? C.bug : C.warn) : C.accent2, 8));
+      const needle = s("line", { x1: 60, y1: 56, x2: 60 + 34 * Math.cos(a), y2: 56 - 34 * Math.sin(a), stroke: C.text, "stroke-width": 2, "stroke-linecap": "round" });
+      svg.append(needle, s("circle", { cx: 60, cy: 56, r: 3.5, fill: C.text }));
+      svg.append(s("text", { x: 60, y: 84, "text-anchor": "middle", fill: C.text, "font-size": 16, "font-weight": 700, "font-family": "monospace" }, v + (unit[k] || "")));
+      svg.append(s("text", { x: 14, y: 68, "text-anchor": "middle", fill: C.dim, "font-size": 8, "font-family": "monospace" }, lo), s("text", { x: 106, y: 68, "text-anchor": "middle", fill: C.dim, "font-size": 8, "font-family": "monospace" }, hi));
+      g.append(el("div", { class: "gauge" }, svg, el("div", { class: "k" }, k)));
+    }
+  }
+  for (const sd of [0, 1]) ctl.append(el("button", { "data-s": sd, onclick: () => draw(sd) }, `SEED=${sd}`));
+  draw(0);
+}
+
+// ---------------------------------------------------------------- 02 pipeline + delay histogram
+{
+  const st = RUN0.header.stats, W = 1100, H = 190, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const node = (x, w, title, sub, col) => {
+    svg.append(s("rect", { x, y: 50, width: w, height: 74, rx: 10, fill: "#121b2c", stroke: col, "stroke-width": 1.5 }));
+    svg.append(s("text", { x: x + w / 2, y: 74, "text-anchor": "middle", fill: col, "font-size": 13, "font-weight": 700, "font-family": "monospace" }, title));
+    sub.forEach((t, i) => svg.append(s("text", { x: x + w / 2, y: 94 + i * 15, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, t)));
+  };
+  const ar = (x1, x2, y, col, label) => { svg.append(s("path", { d: `M${x1},${y} L${x2},${y}`, stroke: col, "stroke-width": 2, class: "flow", "marker-end": "url(#ah2)" })); if (label) svg.append(s("text", { x: (x1 + x2) / 2, y: y - 8, "text-anchor": "middle", fill: col, "font-size": 11, "font-family": "monospace" }, label)); };
+  svg.append(s("defs", {}, s("marker", { id: "ah2", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: C.muted }))));
+  node(10, 180, "submit()", ["full? drop random one", `ready_at = now + delay`], C.accent);
+  node(250, 210, "heap (ready_at, seq)", ["capacity " + RUN0.header.path_maximum_capacity, "clogged? → wait"], C.violet);
+  node(520, 170, "pop: lost?", [`p = ${RUN0.header.packet_loss_probability}%`, `${st.lost} lost`], C.bug);
+  node(750, 170, "replay?", [`p = ${RUN0.header.packet_replay_probability}%`, `${st.replayed} copies`], C.pink);
+  node(980, 110, "deliver", ["→ server or", "client"], C.ok);
+  ar(190, 248, 87, C.muted, `${st.sent} sent`); ar(460, 518, 87, C.muted, "ready"); ar(690, 748, 87, C.muted, "kept"); ar(920, 978, 87, C.muted, "");
+  svg.append(s("path", { d: "M835,124 C835,175 355,175 355,126", stroke: C.pink, "stroke-width": 1.6, fill: "none", "stroke-dasharray": "5 4", "marker-end": "url(#ah2)" }));
+  svg.append(s("text", { x: 595, y: 172, "text-anchor": "middle", fill: C.pink, "font-size": 11, "font-family": "monospace" }, "copy pushed back with a fresh delay"));
+  svg.append(s("text", { x: 605, y: 30, "text-anchor": "middle", fill: C.bug, "font-size": 11, "font-family": "monospace" }, "✕ gone"));
+  svg.append(s("path", { d: "M605,48 L605,36", stroke: C.bug, "stroke-width": 1.5 }));
+  svg.append(s("text", { x: 10, y: 20, fill: C.dim, "font-size": 11, "font-family": "monospace" }, `counts: correct run of seed 0 — capacity_dropped=${st.capacity_dropped}, clogs=${st.clogs}`));
+  DST.$("#pipeline").append(svg);
+
+  const ctl = DST.$("#delay-ctl");
+  function draw(run, label) {
+    ctl.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.textContent === label));
+    const box = DST.$("#delay"); box.innerHTML = "";
+    const lim = run.healIdx < 0 ? Infinity : run.healIdx;
+    const ds = run.lines.filter((e) => e.kind === "pkt" && e.op === "send" && e.i < lim).map((e) => e.delay);
+    const mn = run.header.one_way_delay_min, mu = run.header.one_way_delay_mean, maxD = Math.max(...ds);
+    const counts = Array(maxD + 1).fill(0); ds.forEach((d) => counts[d]++);
+    const pmf = (k) => (k < mn ? 0 : k === mn ? 1 - Math.exp(-(mn + 1) / mu) : Math.exp(-k / mu) - Math.exp(-(k + 1) / mu));
+    const W = 1060, H = 260, m = { l: 50, r: 10, t: 16, b: 34 }, bw = (W - m.l - m.r) / (maxD + 1);
+    const ymax = Math.max(...counts, ...counts.map((_, k) => pmf(k) * ds.length)) * 1.08;
+    const Y = (v) => H - m.b - (v / ymax) * (H - m.t - m.b), svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+    for (let v = 0; v <= ymax; v += Math.max(5, Math.round(ymax / 5 / 5) * 5)) { svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: C.line })); svg.append(s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", fill: C.dim, "font-size": 11, "font-family": "monospace" }, v)); }
+    counts.forEach((c, k) => {
+      const r = s("rect", { x: m.l + k * bw + 2, y: Y(c), width: bw - 4, height: H - m.b - Y(c), rx: 3, fill: k === mn ? C.warn : C.accent, opacity: 0.85 });
+      tip(r, `delay=${k} ticks: ${c} packets (expected ${(pmf(k) * ds.length).toFixed(1)})`); svg.append(r);
+      if (bw > 14 || k % 5 === 0) svg.append(s("text", { x: m.l + k * bw + bw / 2, y: H - m.b + 15, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, k));
+      const e = pmf(k) * ds.length; if (e > 0) svg.append(s("circle", { cx: m.l + k * bw + bw / 2, cy: Y(e), r: 4, fill: C.yellow }));
+    });
+    svg.append(s("text", { x: (W + m.l) / 2, y: H - 4, "text-anchor": "middle", fill: C.muted, "font-size": 12 }, "delay (ticks)"));
+    box.append(svg, el("div", { class: "legend" }, el("span", {}, el("i", { class: "sw", style: { background: C.accent } }), `${ds.length} real sends (safety phase)`),
+      el("span", {}, el("i", { class: "sw", style: { background: C.warn } }), `clamped to delay_min=${mn}`),
+      el("span", {}, el("i", { class: "sw", style: { background: C.yellow, borderRadius: "50%" } }), `exact pmf of max(${mn}, ⌊Exp(${mu})⌋) × ${ds.length}`)));
+    const mean = ds.reduce((a, b) => a + b, 0) / ds.length;
+    box.append(el("div", { class: "cap" }, `${label}: observed mean ${mean.toFixed(2)} ticks, max ${maxD}. Reordering: ${reorders(run)} pairs of consecutive sends on the same path arrived in the opposite order.`));
+  }
+  function reorders(run) {
+    const lim = run.healIdx < 0 ? Infinity : run.healIdx, last = {}; let n = 0;
+    for (const p of packetsOf(run)) { if (p.i0 >= lim || p.fate !== "deliver") continue; const k = p.src + ">" + p.dst; if (last[k] && last[k].t1 > p.t1) n++; last[k] = p; }
+    return n;
+  }
+  ctl.append(el("button", { onclick: () => draw(RUN0, "seed 0") }, "seed 0"), el("button", { onclick: () => draw(RUN1, "seed 1") }, "seed 1"));
+  draw(RUN0, "seed 0");
+}
+
+// ---------------------------------------------------------------- 03 sequence diagram replay
+{
+  const run = ND, P = packetsOf(run), nc = run.header.clients, L = run.lines;
+  DST.$("#hash-check").textContent = run.final.trace === ND_A.final.trace ? `trace=${run.final.trace}, same as without --packets` : `MISMATCH ${run.final.trace} vs ${ND_A.final.trace}`;
+  const order = []; for (let i = 0; i < nc; i++) order.push(i + 1); order.splice(Math.ceil(nc / 2), 0, 0);
+  const W = 700, top = 46, tH = 15.5, maxT = run.final.ticks + 3, H = top + maxT * tH + 14;
+  const X = (p) => 60 + (order.indexOf(p) * (W - 100)) / (order.length - 1), Y = (t) => top + t * tH;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  for (let t = 0; t <= maxT; t += 5) { svg.append(s("line", { x1: 30, x2: W - 10, y1: Y(t), y2: Y(t), stroke: "#16203a" })); svg.append(s("text", { x: 26, y: Y(t) + 4, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, t)); }
+  svg.append(s("text", { x: 4, y: 14, fill: C.dim, "font-size": 10, "font-family": "monospace" }, "tick"));
+  for (const p of order) {
+    svg.append(s("line", { x1: X(p), x2: X(p), y1: top - 6, y2: H - 6, stroke: p === 0 ? C.accent2 : "#33415f", "stroke-width": p === 0 ? 2 : 1.2 }));
+    svg.append(s("rect", { x: X(p) - 30, y: 6, width: 60, height: 24, rx: 6, fill: "#151d2c", stroke: p === 0 ? C.accent2 : C.accent }));
+    svg.append(s("text", { x: X(p), y: 22, "text-anchor": "middle", fill: C.text, "font-size": 12, "font-weight": 700, "font-family": "monospace" }, p === 0 ? "server" : `client ${p - 1}`));
+  }
+  const gArrows = s("g"), gMarks = s("g"); svg.append(gArrows, gMarks);
+  const curLine = s("line", { x1: 30, x2: W - 10, stroke: C.yellow, "stroke-width": 1, opacity: 0.7 }); svg.append(curLine);
+  const viol = run.lines.find((e) => e.kind === "violation");
+  const violBand = s("rect", { x: 30, y: Y(viol.t) - 6, width: W - 40, height: 12, fill: C.bug, opacity: 0, rx: 3 }); gMarks.append(violBand);
+  const colOf = (p) => (p.replayOf != null ? C.pink : p.cmd === "request" ? C.accent : C.accent2);
+  const vis = P.map((p) => {
+    const ln = s("line", { stroke: colOf(p), "stroke-width": 1.8, "stroke-dasharray": p.replayOf != null ? "4 3" : null });
+    const hit = s("line", { stroke: "transparent", "stroke-width": 9 });
+    const dot = s("circle", { r: 3.6, fill: colOf(p) });
+    const x = s("text", { "text-anchor": "middle", fill: C.bug, "font-size": 14, "font-weight": 700 }, "✕");
+    tip(hit, () => `seq=${p.seq} ${pname(p.src)}→${pname(p.dst)} ${p.cmd} c${p.c} r${p.r}\nsent t=${p.t0} delay=${p.delay} ready_at=${p.ready}\n` +
+      (p.replayOf != null ? `network replay (copy of seq=${p.replayOf})\n` : "") + (p.fate === "inflight" ? "still in flight at the end" : `${p.fate} at t=${p.t1}`) + (p.replayed ? "\nreplayed when delivered" : ""));
+    gArrows.append(ln, hit, dot, x);
+    return { p, ln, hit, dot, x };
+  });
+  // server-side marks: applies (green squares)
+  const marks = run.lines.filter((e) => e.kind === "apply").map((e) => {
+    const r = s("rect", { x: X(0) - 5, y: Y(e.t) - 5, width: 10, height: 10, rx: 2, fill: C.ok, opacity: 0 });
+    tip(r, e.raw.trim()); gMarks.append(r); return { e, r };
+  });
+  DST.$("#seq").append(svg);
+
+  // derived state from the log, step by step
+  const amounts = {}; for (const e of L) if (e.kind === "send") amounts[e.c + ":" + e.r] = e.amount;
+  const state = []; { // state after line i
+    let bal = 0, exp = 0; const maxSeen = Array(nc).fill(0), sess = Array.from({ length: nc }, () => ({ r: 0, reply: null, n: 0 }));
+    for (const e of L) {
+      // Checker.on_request_delivered runs on delivery, check_balance right after on_request: in this
+      // no-dedup run every delivered request has an apply line, so update both together there.
+      if (e.kind === "apply") { if (e.r === maxSeen[e.c] + 1) { maxSeen[e.c] = e.r; exp += amounts[e.c + ":" + e.r]; } bal += e.amount; sess[e.c] = { r: e.r, reply: bal, n: sess[e.c].n + 1, t: e.t }; }
+      state.push({ bal, exp, sess: sess.map((x) => ({ ...x })) });
+    }
+  }
+  const lastSt = state[state.length - 1], vm = viol.msg.match(/balance=(\d+), sum of distinct requests=(\d+)/);
+  const sessT = DST.$("#sess"), qBox = DST.$("#queues"), mini = DST.$("#minilog");
+  const paths = []; for (let c = 1; c <= nc; c++) paths.push([c, 0], [0, c]);
+  function step(i) {
+    const e = L[i], t = e.t;
+    curLine.setAttribute("y1", Y(t)); curLine.setAttribute("y2", Y(t));
+    for (const v of vis) {
+      const p = v.p, show = p.i0 <= i;
+      for (const n of [v.ln, v.hit, v.dot, v.x]) n.style.display = show ? "" : "none";
+      if (!show) continue;
+      const x0 = X(p.src), y0 = Y(p.t0), x1 = X(p.dst);
+      let fx, fy, done = p.i1 <= i;
+      if (done) {
+        const frac = p.fate === "deliver" ? 1 : 0.8;
+        fx = x0 + (x1 - x0) * frac; fy = y0 + (Y(p.t1) - y0) * frac;
+      } else {
+        const f = p.ready > p.t0 ? Math.max(0, Math.min(1, (t - p.t0) / (p.ready - p.t0))) : 1;
+        fx = x0 + (x1 - x0) * f * 0.97; fy = y0 + (Y(p.ready) - y0) * f * 0.97;
+      }
+      for (const n of [v.ln, v.hit]) { n.setAttribute("x1", x0); n.setAttribute("y1", y0); n.setAttribute("x2", fx); n.setAttribute("y2", fy); }
+      v.ln.setAttribute("stroke", done && p.fate !== "deliver" ? C.bug : colOf(p));
+      v.ln.setAttribute("opacity", done ? 0.75 : 1);
+      v.dot.setAttribute("cx", fx); v.dot.setAttribute("cy", fy); v.dot.style.display = done ? "none" : "";
+      v.x.setAttribute("x", fx); v.x.setAttribute("y", fy + 5); v.x.style.display = done && p.fate !== "deliver" ? "" : "none";
+    }
+    for (const m of marks) m.r.setAttribute("opacity", m.e.i <= i ? 1 : 0);
+    const isViol = e.kind === "violation";
+    violBand.setAttribute("opacity", isViol ? 0.25 : 0);
+    // balances
+    const S = state[i];
+    DST.$("#st-bal .num").textContent = S.bal; DST.$("#st-exp .num").textContent = S.exp;
+    DST.$("#st-bal").classList.toggle("bad", S.bal !== S.exp);
+    // sessions
+    sessT.innerHTML = "<tr><th>client</th><th class=num>last request</th><th class=num>cached reply</th><th class=num>applies</th></tr>";
+    S.sess.forEach((x, c) => { const prev = i ? state[i - 1].sess[c] : { n: 0 }; const changed = x.n !== prev.n;
+      sessT.append(el("tr", { style: changed ? { background: "rgba(61,220,132,.13)" } : null }, el("td", {}, `c${c}`), el("td", { class: "num" }, x.r ? "r" + x.r : "—"), el("td", { class: "num" }, x.reply == null ? "—" : `balance=${x.reply}`), el("td", { class: "num" }, x.n))); });
+    // per-path heaps
+    qBox.innerHTML = "";
+    for (const [a, b] of paths) {
+      const q = P.filter((p) => p.src === a && p.dst === b && p.i0 <= i && p.i1 > i).sort((u, w) => u.ready - w.ready || u.seq - w.seq);
+      qBox.append(el("div", { class: "qrow" }, el("span", { class: "p" }, `${pname(a)}→${pname(b)}`),
+        el("span", {}, q.map((p) => el("span", { class: "chip " + (p.replayOf != null ? "dup" : p.cmd === "request" ? "req" : "rep") }, `#${p.seq} r${p.r} @${p.ready}`)))));
+    }
+    // log
+    mini.innerHTML = "";
+    const pre = DST.term(mini, L.slice(Math.max(0, i - 8), i + 1).map((x) => x.raw).join("\n"), [[/VIOLATED/, "f"], [/server: apply/, "k"], [/lost|replay/, "f"]]);
+    pre.classList.add("mini"); pre.scrollTop = 1e6;
+  }
+  new DST.Player("#seq-player", { count: L.length, onStep: step, speed: 6, label: (i) => `line ${i + 1}/${L.length} · tick ${L[i].t}` });
+  // the explanation, all from the log
+  const lastApplies = run.lines.filter((e) => e.kind === "apply").slice(-3);
+  const dupPkt = P.find((p) => p.dst === 0 && p.fate === "deliver" && p.t1 === viol.t && p.replayOf != null);
+  DST.$("#seq-why").textContent = ` ${lastApplies.map((e) => `[${e.t}] apply c${e.c} r${e.r} +${e.amount}`).join(", ")}. ` +
+    (dupPkt ? `The last one came from packet #${dupPkt.seq}, a network replay of #${dupPkt.replayOf}: c${dupPkt.c} r${dupPkt.r} had already been applied at tick ${P.find((p) => p.seq === dupPkt.replayOf).t1}. ` : "") +
+    `With dedup off, the server adds the amount again. Its balance becomes ${lastSt.bal}, but the distinct requests only sum to ${lastSt.exp}. The log line says "${viol.msg}". ` +
+    (vm && +vm[1] === lastSt.bal && +vm[2] === lastSt.exp ? "The two balances above are recomputed from the apply and deliver lines, and they match it." : "(recomputed balances do NOT match the log!)");
+}
+
+// ---------------------------------------------------------------- 04 flowchart
+{
+  const cnt = (k) => RUN0.lines.filter((e) => e.kind === k).length;
+  const nApply = cnt("apply"), nDup = cnt("dup"), nIgn = cnt("ignore"), nReq = RUN0.lines.filter((e) => e.kind === "pkt" && e.op === "deliver" && e.dst === 0).length;
+  const W = 1100, H = 250, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(s("defs", {}, s("marker", { id: "ah3", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: C.muted }))));
+  const rect = (x, y, w, h, t, sub, col) => { svg.append(s("rect", { x, y, width: w, height: h, rx: 10, fill: "#121b2c", stroke: col, "stroke-width": 1.6 }));
+    svg.append(s("text", { x: x + w / 2, y: y + h / 2 - (sub ? 4 : -4), "text-anchor": "middle", fill: col, "font-size": 13, "font-weight": 700, "font-family": "monospace" }, t));
+    if (sub) svg.append(s("text", { x: x + w / 2, y: y + h / 2 + 14, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, sub)); };
+  const dia = (cx, cy, t) => { svg.append(s("path", { d: `M${cx},${cy - 40} L${cx + 115},${cy} L${cx},${cy + 40} L${cx - 115},${cy} Z`, fill: "#16203a", stroke: C.warn, "stroke-width": 1.6 }));
+    svg.append(s("text", { x: cx, y: cy + 4, "text-anchor": "middle", fill: C.warn, "font-size": 12, "font-family": "monospace" }, t)); };
+  const ar = (d, lbl, lx, ly, col) => { svg.append(s("path", { d, stroke: col || C.muted, "stroke-width": 1.6, fill: "none", "marker-end": "url(#ah3)" })); if (lbl) svg.append(s("text", { x: lx, y: ly, fill: col || C.muted, "font-size": 12, "font-family": "monospace", "font-weight": 700 }, lbl)); };
+  rect(10, 90, 170, 60, "request (c, r)", `${nReq} delivered`, C.accent);
+  dia(330, 120, "r == session + 1 ?"); dia(640, 120, "r == session ?");
+  rect(250, 190, 160, 50, "apply + cache reply", `${nApply}×`, C.ok);
+  rect(560, 190, 160, 50, "resend cached reply", `${nDup}×`, C.accent2);
+  rect(830, 95, 250, 50, "ignore older request", `${nIgn}× (client moved on)`, C.dim);
+  ar("M180,120 L213,120"); ar("M445,120 L523,120", "no", 470, 112); ar("M755,120 L828,120", "no", 778, 112);
+  ar("M330,160 L330,188", "yes", 338, 180, C.ok); ar("M640,160 L640,188", "yes", 648, 180, C.accent2);
+  svg.append(s("text", { x: 10, y: 24, fill: C.dim, "font-size": 11, "font-family": "monospace" }, `counts: correct code, seed 0 (${RUN0.final.verdict}, trace=${RUN0.final.trace}); r > session + 1 cannot happen (assert)`));
+  svg.append(s("text", { x: 830, y: 180, fill: C.bug, "font-size": 11, "font-family": "monospace" }, "--bug-no-dedup: skips both diamonds"));
+  svg.append(s("text", { x: 830, y: 198, fill: C.bug, "font-size": 11, "font-family": "monospace" }, "--bug-reply-stale: 'r == session'"));
+  svg.append(s("text", { x: 830, y: 214, fill: C.bug, "font-size": 11, "font-family": "monospace" }, "  and '<' reply with current balance"));
+  DST.$("#flow").append(svg);
+  const tail = STALE.text.trim().split("\n").filter((l) => !/^\s*$/.test(l));
+  const k = tail.findIndex((l) => /VIOLATED/.test(l));
+  DST.term("#stale-term", tail.slice(Math.max(0, k - 8)).join("\n"), [[/VIOLATED|FAIL/, "f"], [/duplicate/, "hl"], [/server: apply/, "k"]]);
+}
+
+// ---------------------------------------------------------------- 05 phases timeline (seed 1)
+{
+  const run = RUN1, nc = run.header.clients, healT = run.lines[run.healIdx].t, endT = run.final.ticks;
+  const lanes = [...Array(nc).keys()].map((c) => `client ${c}`).concat(["server", "network"]);
+  const ev = [];
+  for (const e of run.lines) {
+    if (e.kind === "send") ev.push({ lane: e.c, t: e.t, color: C.accent, r: 3, tip: e.raw.trim() });
+    else if (e.kind === "reply") ev.push({ lane: e.c, t: e.t, color: C.ok, r: 3, tip: e.raw.trim() });
+    else if (e.kind === "timeout") ev.push({ lane: e.c, t: e.t, kind: "x", color: C.warn, tip: e.raw.trim() });
+    else if (e.kind === "apply") ev.push({ lane: nc, t: e.t, color: C.accent2, r: 2.5, tip: e.raw.trim() });
+    else if (e.kind === "dup") ev.push({ lane: nc, t: e.t, color: C.pink, r: 3, tip: e.raw.trim() });
+    else if (e.kind === "clog" && e.dur > 0) ev.push({ lane: nc + 1, t: e.t, t2: e.t + e.dur, color: C.violet, tip: e.raw.trim() });
+    else if (e.kind === "pkt" && (e.op === "lost" || e.op === "replay")) ev.push({ lane: nc + 1, t: e.t, color: e.op === "lost" ? C.bug : C.pink, r: 3, tip: e.raw.trim() });
+  }
+  const tl = DST.lanes("#phases", lanes, ev, { tmin: 0, tmax: endT, width: 1100, tlabel: "tick", laneH: 32 });
+  const H = +tl.svg.getAttribute("viewBox").split(" ")[3];
+  const band = (t0, t1, col, label) => {
+    const r = s("rect", { x: tl.x(t0), y: 18, width: tl.x(t1) - tl.x(t0), height: H - 44, fill: col, opacity: 0.07, "pointer-events": "none" });
+    tl.svg.insertBefore(r, tl.svg.firstChild);
+    tl.svg.append(s("text", { x: (tl.x(t0) + tl.x(t1)) / 2, y: 13, "text-anchor": "middle", fill: col, "font-size": 11, "font-family": "monospace", "font-weight": 700 }, label));
+  };
+  band(0, healT, C.bug, `safety phase · all faults · 0..${healT}`);
+  band(healT, endT, C.ok, `liveness · ${endT - healT} ticks`);
+  tl.svg.append(s("line", { x1: tl.x(healT), x2: tl.x(healT), y1: 18, y2: H - 26, stroke: C.yellow, "stroke-width": 2, "stroke-dasharray": "4 3" }));
+  tl.svg.append(s("text", { x: tl.x(healT) + 4, y: H - 30, fill: C.yellow, "font-size": 10, "font-family": "monospace" }, "heal"));
+  const lg = DST.$("#phase-legend");
+  for (const [c, t] of [[C.accent, "client send"], [C.ok, "reply accepted"], [C.warn, "✕ timeout → resend"], [C.accent2, "server apply"], [C.pink, "duplicate / network replay"], [C.violet, "path clogged"], [C.bug, "packet lost"]])
+    lg.append(el("span", {}, el("i", { class: "sw", style: { background: c } }), t));
+  const after = run.lines.filter((e) => e.i > run.healIdx && /^(send|reply|timeout)$/.test(e.kind)).length;
+  const h = run.header;
+  const ht = DST.$("#heal-table");
+  ht.innerHTML = "<tr><th>option (seed 1)</th><th class=num>safety phase</th><th class=num>after transition_to_liveness_mode()</th></tr>";
+  for (const [k, a, b] of [["one_way_delay_mean", h.one_way_delay_mean, 1], ["one_way_delay_min", h.one_way_delay_min, 1], ["packet_loss_probability", h.packet_loss_probability + "%", "0%"], ["packet_replay_probability", h.packet_replay_probability + "%", "0%"], ["path_clog_probability", h.path_clog_probability + "‰", h.path_clog_probability + "‰ (kept)"]])
+    ht.append(el("tr", {}, el("td", {}, el("code", {}, k)), el("td", { class: "num" }, a), el("td", { class: "num" }, b)));
+  ht.append(el("tr", {}, el("td", { colspan: 3, style: { color: "var(--muted)" } }, `Heal at tick ${healT} (= ticks_max_safety=${h.ticks_max_safety}). ${after} client events happen after it, and the run ends at tick ${endT} with ${run.final.verdict} (budget 3000 ticks).`)));
+}
+
+// ---------------------------------------------------------------- 06 charts over seeds
+{
+  const N = SEEDS.length, f = (k) => SEEDS.filter((r) => !r[k]).length;
+  DST.bar("#ch-fail", [
+    { label: "correct code", value: f("pass_correct"), color: C.ok },
+    { label: "--bug-no-dedup", value: f("pass_no_dedup"), color: C.bug },
+    { label: "--bug-reply-stale", value: f("pass_reply_stale"), color: C.warn },
+  ], { max: N, labelW: 170, width: 560, fmt: (v) => `${v}/${N} (${((100 * v) / N).toFixed(1)}%)` });
+  const rows = [1, 2, 3, 4].map((c) => { const g = SEEDS.filter((r) => r.clients === c), k = g.filter((r) => !r.pass_reply_stale).length;
+    return { label: `${c} client${c > 1 ? "s" : ""}: ${k}/${g.length} fail`, value: g.length ? (100 * k) / g.length : 0, color: [C.accent, C.violet, C.pink, C.warn][c - 1], note: `${k} of ${g.length} seeds with ${c} client(s) fail` }; });
+  DST.bar("#ch-stale", rows, { max: 100, labelW: 190, width: 560, fmt: (v) => `${v.toFixed(1)}%` });
+  const buckets = [["0", (v) => v === 0], ["1–10", (v) => v >= 1 && v <= 10], ["11–50", (v) => v > 10 && v <= 50], ["51–100", (v) => v > 50 && v <= 100], ["> 100", (v) => v > 100]];
+  DST.bar("#ch-heal", buckets.map(([l, p], i) => ({ label: l + " events", value: SEEDS.filter((r) => p(r.client_events_after_heal)).length, color: i ? C.accent2 : C.dim })), { labelW: 120, width: 560, fmt: (v) => `${v} seeds` });
+  const act = SEEDS.filter((r) => r.client_events_after_heal > 0).length;
+  DST.$("#heal-cap").textContent = `${act} of ${N} seeds still had clients sending, retrying or receiving after the heal, so the liveness phase does real work. In the other ${N - act}, the workload finished before ticks_max_safety.`;
+  const t = DST.$("#nd-pass");
+  t.innerHTML = "<tr><th class=num>seed</th><th class=num>clients</th><th class=num>loss</th><th class=num>replay</th><th class=num>delay μ</th></tr>";
+  const ndp = SEEDS.filter((r) => r.pass_no_dedup), one = ndp.filter((r) => r.clients === 1).length;
+  DST.$("#nd-cap").textContent = `In these ${ndp.length} seeds no request happened to reach the server twice. ${one} of them have a single client, so there are few packets to lose or replay.`;
+  for (const r of ndp) t.append(el("tr", {}, el("td", { class: "num" }, r.seed), el("td", { class: "num" }, r.clients), el("td", { class: "num" }, r.loss_pct + "%"), el("td", { class: "num" }, r.replay_pct + "%"), el("td", { class: "num" }, r.delay_mean)));
+}
+
+// ---------------------------------------------------------------- 07 determinism
+{
+  const a = DST.text("log-nd-a"), b = DST.text("log-nd-b"), A = parseRun(a), B = parseRun(b);
+  const tailOf = (x) => x.trim().split("\n").slice(-5).join("\n");
+  const rules = [[/VIOLATED|FAIL/, "f"], [/trace=/, "k"]];
+  DST.$("#det-a").append(el("div", { class: "panel-h" }, "capture a: run0-no-dedup-a.txt")); DST.term("#det-a", tailOf(a), rules);
+  DST.$("#det-b").append(el("div", { class: "panel-h" }, "capture b: run0-no-dedup-b.txt")); DST.term("#det-b", tailOf(b), rules);
+  const same = a === b;
+  DST.$("#det-verdict").className = "callout " + (same ? "ok" : "bug");
+  DST.$("#det-verdict").append(el("strong", {}, same ? "Byte-for-byte identical" : "DIFFERENT"),
+    `${a.trimEnd().split("\n").length} lines each, trace=${A.final.trace} vs trace=${B.final.trace}. The --packets capture in section 03 has the same trace, ${ND.final.trace}. Logging is not part of the hash, but every send, loss, replay and delivery is.`);
+  DST.term("#sw0", "$ main sweep 10000\n" + DST.text("log-sweep").trim());
+  DST.term("#sw1", "$ main sweep 10000 --bug-no-dedup\n" + DST.text("log-sweep-nd").trim());
+  DST.term("#sw2", "$ main sweep 10000 --bug-reply-stale\n" + DST.text("log-sweep-rs").trim());
+}
+
+// ---------------------------------------------------------------- 08 JS playground (illustration only)
+{
+  const ctl = DST.$("#play-ctl");
+  const inp = (lbl, v, w) => { const i = el("input", { type: "number", value: v, style: { width: (w || 70) + "px" } }); ctl.append(el("label", {}, lbl + " "), i); return i; };
+  const iSeed = inp("seed", 42, 90), iMean = inp("delay μ", 6), iMin = inp("min", 1), iLoss = inp("loss %", 15), iRep = inp("replay %", 20);
+  ctl.append(el("button", { class: "primary", onclick: draw }, "simulate"));
+  for (const i of [iSeed, iMean, iMin, iLoss, iRep]) i.addEventListener("input", draw);
+  function draw() {
+    const R = DST.Rand(+iSeed.value || 0), mean = Math.max(0, +iMean.value), mn = Math.max(0, +iMin.value), loss = +iLoss.value, rep = +iRep.value;
+    const exp = () => (mean ? Math.floor(-Math.log(1 - R.float()) * mean) : 0);
+    const heap = [], out = []; let seq = 0, now = 0;
+    const push = (id, copy) => heap.push({ id, copy, ready: now + Math.max(mn, exp()), seq: ++seq, sent: now });
+    for (now = 0; now < 200 && (now < 16 || heap.length); now++) {
+      if (now < 16) push(now, false);
+      heap.sort((a, b) => a.ready - b.ready || a.seq - b.seq);
+      while (heap.length && heap[0].ready <= now) {
+        const p = heap.shift();
+        if (R.int(100) < loss) { out.push({ ...p, lost: true, at: now }); continue; }
+        if (R.int(100) < rep) push(p.id, true);
+        out.push({ ...p, at: now });
+      }
+    }
+    const box = DST.$("#play"); box.innerHTML = "";
+    const delivered = out.filter((p) => !p.lost), W = 1100, rowH = 16, H = Math.max(16, delivered.length) * rowH + 60;
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+    svg.append(s("text", { x: 150, y: 16, "text-anchor": "middle", fill: C.muted, "font-size": 12 }, "send order (tick)"), s("text", { x: 900, y: 16, "text-anchor": "middle", fill: C.muted, "font-size": 12 }, "arrival order (tick)"));
+    const ly = (i) => 34 + i * rowH;
+    for (let i = 0; i < 16; i++) svg.append(s("text", { x: 150, y: ly(i) + 4, "text-anchor": "middle", fill: C.text, "font-size": 11, "font-family": "monospace" }, `#${i} @${i}`));
+    let inv = 0;
+    delivered.forEach((p, k) => {
+      const col = p.copy ? C.pink : C.accent2;
+      if (k && !p.copy && delivered.slice(0, k).some((q) => !q.copy && q.id > p.id)) inv++;
+      svg.append(s("path", { d: `M190,${ly(p.id)} C520,${ly(p.id)} 520,${ly(k)} 850,${ly(k)}`, stroke: col, fill: "none", "stroke-width": 1.4, opacity: 0.85, "stroke-dasharray": p.copy ? "4 3" : null }));
+      svg.append(s("text", { x: 900, y: ly(k) + 4, "text-anchor": "middle", fill: col, "font-size": 11, "font-family": "monospace" }, `#${p.id}${p.copy ? " (dup)" : ""} @${p.at}`));
+    });
+    for (const p of out.filter((p) => p.lost)) svg.append(s("text", { x: 320, y: ly(p.id) + 5, fill: C.bug, "font-size": 12, "font-family": "monospace" }, `✕ lost @${p.at}`));
+    box.append(svg, el("div", { class: "cap" }, `JS illustration: ${delivered.length} deliveries (${delivered.filter((p) => p.copy).length} duplicates), ${out.filter((p) => p.lost).length} lost, ${inv} originals overtaken by a later send.`));
+  }
+  draw();
+}
+</script>
+</body></html>

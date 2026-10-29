@@ -1,0 +1,5 @@
+  step 24 t=5665ms: clock +17971879ms (jump)
+  step 26 t=17977544ms: clock +36561947ms (jump)
+  step 93 t=54552913ms: clock +305ms (on_deadline)
+  step 99 t=54553218ms: get(8) = 856363089, want null (deadline 54553218ms)
+seed=43 steps=100 simulated=54553218ms trace=3895ccdfbbf7c6f1 FAIL

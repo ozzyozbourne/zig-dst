@@ -1,0 +1,30 @@
+    pub fn transition_to_liveness_mode(simulator: *Simulator, core: Core) void {
+        log.debug("transition_to_liveness_mode: core={b}", .{core.bits});
+        assert(simulator.core.count() == 0);
+        defer assert(simulator.core.count() > 0);
+
+        simulator.core = core;
+
+        var it = core.iterate();
+        while (it.next()) |replica_index| {
+            const fault = false;
+            if (simulator.cluster.replica_health[replica_index] == .down) {
+                simulator.replica_restart(@intCast(replica_index), fault);
+            }
+
+            const replica_health = simulator.cluster.replica_health[replica_index];
+            if (replica_health == .up and replica_health.up.paused) {
+                simulator.cluster.replica_unpause(@intCast(replica_index));
+            }
+
+            simulator.cluster.storages[replica_index].transition_to_liveness_mode();
+        }
+
+        simulator.cluster.network.transition_to_liveness_mode(simulator.core);
+        simulator.options.replica_crash_probability = Ratio.zero();
+        simulator.options.replica_restart_probability = Ratio.zero();
+        simulator.options.replica_reformat_probability = Ratio.zero();
+        simulator.options.replica_pause_probability = Ratio.zero();
+        simulator.options.replica_release_advance_probability = Ratio.zero();
+        simulator.options.replica_release_catchup_probability = Ratio.zero();
+    }

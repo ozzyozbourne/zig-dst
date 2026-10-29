@@ -1,0 +1,2908 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>07 · Linearizability checker — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .tree-wrap { overflow-x: auto; }
+  .lin-explain { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); min-height: 3.2em; }
+  .lin-explain b { color: var(--text); }
+  .verdict { font-family: var(--mono); font-weight: 700; padding: 6px 12px; border-radius: 8px; display: inline-block; }
+  .verdict.ok { color: var(--ok); border: 1px solid #1f5c3b; background: rgba(61,220,132,.08); }
+  .verdict.bad { color: var(--bug); border: 1px solid #6b2032; background: rgba(255,92,122,.08); }
+  .side { font-family: var(--mono); font-size: 0.8rem; }
+  .side table.data td, .side table.data th { padding: 4px 8px; }
+  .loglist { max-height: 330px; overflow: auto; position: relative; }
+  .loglist .tl-row { grid-template-columns: 54px 1fr; }
+  .loglist .tl-row.cur { background: rgba(245,230,99,.08); }
+  .loglist .tl-row.fut { opacity: .35; }
+  #checker svg { touch-action: none; user-select: none; }
+  pre.code { font-size: 0.74rem; }
+</style>
+</head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag medium">Medium–Hard</span><span class="tag">Example 07</span><span class="tag">oracle · history · Wing &amp; Gong</span></div>
+    <h1>Linearizability checker</h1>
+    <p class="lede">With three concurrent clients there is no single "expected answer" to compare against. The oracle
+      records a <b>history</b> of intervals (invoke → complete) and searches for <i>any</i> order of the operations that
+      respects real time and is a legal run of a register. This page takes real histories from the Zig simulator, runs
+      the same backtracking search step by step, and shows a bug that every per-operation check misses.</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>The system under test and the simulated world</h2>
+    <p>A primary executes writes, gives each one a version and replicates it <b>asynchronously</b> to a backup. Replication
+      messages take 1–30 ticks and can arrive out of order, so the backup buffers them (<code>backup_buffer</code>) and applies
+      them in version order. Clients read from either replica. The only difference between correct mode and <code>--bug</code>
+      is how long the backup waits before it answers a read.</p>
+    <div class="controls" id="arch-mode"></div>
+    <div class="viz" id="arch"></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--accent2)"></i>real code under test</span>
+      <span><i class="sw" style="background:var(--dim)"></i>simulated (network, time, clients)</span>
+      <span><i class="sw" style="background:var(--violet)"></i>oracle (sees only the history)</span>
+      <span><i class="sw" style="background:var(--bug)"></i>bug path</span>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>The history: intervals on a time axis</h2>
+    <p>Each bar is one operation from the real run, from the tick the client invoked it to the tick the reply arrived. The
+      checker sees <b>only these bars</b>, never the replicas. Step through the run: after every completion the simulator
+      calls <code>check_key</code> on that key's history so far. The panel on the right reruns the same search in JS at each
+      step. Its verdict turns red at the same completion where the Zig run stopped.</p>
+    <div class="controls" id="hist-pick"></div>
+    <div class="viz">
+      <div id="hist-lanes"></div>
+      <div id="hist-player"></div>
+      <div class="grid g2">
+        <div class="loglist tl" id="hist-log"></div>
+        <div class="side" id="hist-side"></div>
+      </div>
+      <div class="cap">Red outline = op in the minimal non-linearizable sub-history printed by <code>minimize</code>. Dashed
+        arrows = real-time edges in that sub-history ("A completed before B was invoked"). Dots on the backup lane =
+        <code>backup applies vN</code>. Hover any bar for details.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Underneath the oracle: the Wing &amp; Gong backtracking search</h2>
+    <p><code>search(ops, done, state, memo)</code> picks which op takes effect next. An op is a candidate only if no unplaced
+      op <i>completed before it was invoked</i>. Placing a write sets the register. Placing a read is allowed only if the
+      register holds the value the read returned. Each failed <code>(done-set, state)</code> pair is stored in a
+      4096×13-bit memo, so the search never explores the same future twice. The tree below is that search, run in JS on the
+      real key history, in the same op order as <code>main.zig</code>.</p>
+    <div class="controls" id="tree-pick"></div>
+    <div class="viz">
+      <div class="tree-wrap" id="tree"></div>
+      <div id="tree-player"></div>
+      <div class="lin-explain" id="tree-explain"></div>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--accent)"></i>write placed</span>
+      <span><i class="sw" style="background:var(--accent2)"></i>read placed (value matched)</span>
+      <span><i class="sw" style="background:var(--bug)"></i>dead end: read returned a value the register does not hold</span>
+      <span><i class="sw" style="background:var(--dim)"></i>memo hit: this (set, state) already failed</span>
+      <span>⏱n = n ops not yet allowed by real time (hover)</span>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h4>Real-time order forced by the minimal sub-history</h4><div id="forced"></div>
+        <p class="src">Parsed from the <code>Real-time order forced by the history</code> block of the run.</p></div>
+      <div class="card"><h4>Why it is impossible (seed 3)</h4>
+        <p><code>R(x)=3</code> needs <code>W1 &lt; W3 &lt; R3</code>. <code>R(x)=1</code> then needs a <code>W1</code> placed
+          after <code>W3</code>, but <code>W1</code> completed (t=7) before either read began. Every branch of the tree ends
+          at a read whose value the register does not hold at that point. Delta-debugging (<code>minimize</code>) dropped <code>W(x:=2)</code> because the
+          contradiction does not need it. Removing any other op makes the history linearizable.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>The bug: a session token is not a read index</h2>
+    <p>The backup's read path from <code>Sim.deliver</code> in <code>main.zig</code>. In correct mode the backup asks the
+      primary for its <b>current</b> commit version (a moment that lies inside the read's interval) and waits until it has
+      applied that version. With <code>--bug</code> it waits only for the client's <b>own</b> session token.</p>
+    <div class="grid g2">
+      <div><h4 style="color:var(--bug)">--bug: wait for the client's own token</h4>
+<pre class="code">} <span class="kw">else</span> {
+    assert(msg.to == backup);
+    <span class="kw">try</span> sim.backup_reads.append(sim.gpa, .{
+        .op = r.op,
+        .key = r.key,
+        .from = msg.from,
+        .min_version = r.min_version,
+        <span class="c">// BUG: the client's own token is not enough. It proves nothing about</span>
+        <span class="c">// writes OTHER clients have already seen acknowledged.</span>
+<span class="bad">        .need = <span class="kw">if</span> (bug_enabled) r.min_version <span class="kw">else</span> <span class="kw">null</span>,</span>
+    });
+    <span class="kw">if</span> (!bug_enabled) { <span class="c">// skipped</span>
+        ...
+    }
+    <span class="kw">try</span> sim.backup_serve_reads();
+}</pre></div>
+      <div><h4 style="color:var(--ok)">correct: Raft-style ReadIndex</h4>
+<pre class="code"><span class="kw">if</span> (!bug_enabled) {
+<span class="good">    <span class="kw">try</span> sim.send(backup, primary, .{ .read_index_request = .{ .op = r.op } });</span>
+}
+<span class="c">// ... at the primary:</span>
+.read_index_request => |q| {
+    assert(msg.to == primary);
+<span class="good">    <span class="kw">try</span> sim.send(primary, backup, .{ .read_index_reply = .{ .op = q.op, .commit = sim.primary_version } });</span>
+},
+<span class="c">// ... back at the backup:</span>
+.read_index_reply => |q| {
+    ...
+<span class="good">            pending.need = @max(pending.min_version, q.commit);</span>
+    ...
+    <span class="kw">try</span> sim.backup_serve_reads();
+},</pre></div>
+    </div>
+    <div class="callout warn"><strong>Why ordinary tests stay green</strong>These per-operation assertions in
+      <code>complete</code> hold in <b>both</b> modes. Every answer is plausible on its own: read-your-writes, monotonic
+      reads, and "the value really was committed at the version that served it".
+<pre class="code" style="margin-top:10px"><span class="fn">assert</span>(version >= client.last_seen);
+<span class="kw">if</span> (op.kind == .read) <span class="fn">assert</span>(value == sim.value_at(op.key, version));</pre>
+      Only the history-level check fails, because the failure needs <b>two</b> clients and a real-time relation between them.</div>
+    <h3>Same seed, both modes: seed 3</h3>
+    <p><span id="cmp-same"></span> With the bug, c0's backup read returns the stale <code>1</code> as soon as the backup
+      has applied c0's own token (v1). In correct mode the same read waits for the read index and returns the value c1 had already
+      seen. (Without the bug the run draws different random numbers after that point, because the extra
+      <code>read_index_request</code> sends consume PRNG draws.)</p>
+    <div class="viz"><div id="cmp-bug"></div><div id="cmp-ok"></div><div class="cap" id="cmp-cap"></div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>Across 2000 seeds</h2>
+    <p>The capture script runs <code>run &lt;seed&gt; --bug</code> for seeds 0–1999 and records the result and the size of
+      each minimal sub-history. Correct mode passes a sweep of 100 000 seeds.</p>
+    <div class="grid g2">
+      <div class="viz"><h4 style="margin:0 0 6px">Running failure rate with <code>--bug</code></h4><div id="ch-rate"></div></div>
+      <div class="viz"><h4 style="margin:0 0 6px">Size of the minimal non-linearizable sub-history</h4><div id="ch-size"></div>
+        <div class="cap">Never more than 4 ops. The search stays tiny, so DST runs many short seeds rather than long histories.</div></div>
+    </div>
+    <div class="viz"><h4 style="margin:0 0 6px">Minimal size vs. ops on the failing key (failing seeds)</h4><div id="ch-heat"></div>
+      <div class="cap">Cell = number of seeds. Even with 7–8 ops on the key, the essential contradiction usually involves only 2.</div></div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Determinism: the same seed gives the same history</h2>
+    <p>The capture runs each failing replay twice. The page compares the two outputs byte for byte.</p>
+    <div class="grid g2" id="det"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Try it: drag the intervals</h2>
+    <p>A JS re-implementation of <code>search</code> (the same algorithm, memo and real-time rule) for illustration. It is
+      separate from the captured Zig runs. Drag either end of a bar, or the bar itself. Click a read's label to change the
+      value it returned. If a valid order exists, the numbered dots show one linearization point per operation.</p>
+    <div class="controls" id="chk-ctl"></div>
+    <div class="viz" id="checker"></div>
+    <div id="chk-out"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>How TigerBeetle does this</h2>
+    <p>TigerBeetle mostly avoids the search: VSR <b>exposes the linearization</b>, because every reply carries its op number.
+      The tester puts replies back in op order and checks them against a sequential model in linear time.</p>
+    <div class="grid g2">
+      <div class="card"><h4><span class="src"><a class="file">src/testing/reply_sequence.zig</a></span></h4>
+<pre class="code"><span class="c">//! Replies from the cluster may arrive out-of-order; the ReplySequence reassembles them in the</span>
+<span class="c">//! correct order (by ascending op number).</span>
+...
+    <span class="c">/// `PendingReply`s are ordered by ascending reply op.</span>
+    <span class="kw">fn</span> <span class="fn">compare</span>(context: void, a: PendingReply, b: PendingReply) std.math.Order {
+        _ = context;
+        <span class="kw">return</span> std.math.order(a.reply.header.op, b.reply.header.op);
+    }</pre>
+        <p><code>insert</code>, <code>peek(op)</code> and <code>next</code> on a priority queue. <code>src/vopr.zig</code>
+          <code>on_cluster_reply</code> feeds the workload strictly in commit order. The backup's <code>backup_buffer</code>
+          here does the same reassembly for replication messages.</p></div>
+      <div class="card"><h4><span class="src"><a class="file">src/state_machine/auditor.zig</a> · <a class="file">src/testing/cluster/state_checker.zig</a></span></h4>
+<pre class="code"><span class="c">//! The Auditor expects replies in ascending commit order.</span>
+...
+<span class="kw">pub fn</span> <span class="fn">check_state</span>(state_checker: *StateChecker, replica_index: u8) !void {</pre>
+        <p>Once the order is known, the Auditor's oracle is a sequential model again. <code>check_state</code> runs every tick
+          for each replica and checks that each new commit matches or extends the canonical commit history.
+          <code>check_replicas</code> in this example is the tiny version: the backup's log is always a prefix of the primary's.</p></div>
+    </div>
+    <div class="callout info"><strong>When to search, when to check</strong>If the system can tell the tester its claimed
+      order (op numbers, versions), check that order directly, in linear time. Use a Knossos-style search when the order
+      is hidden, as here, where backup reads never get an op number.</div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/07-linearizability-checker</span>
+<span class="p">$ zig run main.zig -- sweep</span>            <span class="d"># 100 000 seeds, correct read index</span>
+<span class="p">$ zig run main.zig -- sweep --bug</span>      <span class="d"># FAIL at seed=1</span>
+<span class="p">$ zig run main.zig -- run 1 --bug</span>      <span class="d"># textbook 2-op counterexample</span>
+<span class="p">$ zig run main.zig -- run 3 --bug</span>      <span class="d"># 4-op counterexample, needs the search</span>
+<span class="p">$ site/tools/capture.sh 07</span>             <span class="d"># regenerate every number on this page</span></pre>
+    <h3>Captured output</h3>
+    <div class="controls" id="raw-pick"></div>
+    <div id="raw"></div>
+  </section>
+</main>
+<script type="text/plain" id="log-sweep" data-src="data/07/sweep.txt">
+PASS: 100000 seeds
+
+real	0m1.020s
+user	0m0.925s
+sys	0m0.092s
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/07/sweep-bug.txt">
+FAIL at seed=1 after 2 seeds. Replay with:
+  zig run main.zig -- run 1 --bug
+
+real	0m0.001s
+user	0m0.001s
+sys	0m0.000s
+</script>
+<script type="text/plain" id="log-run1-bug" data-src="data/07/run1-bug.txt">
+  t=  0 c0 invoke W(y:=1) -> primary
+  t=  0 c1 invoke W(y:=2) -> primary
+  t=  0 c2 invoke R(x) -> backup (session token v0)
+  t=  6 c0 ok     W(y:=1) at v1
+  t=  7 c1 ok     W(y:=2) at v2
+  t=  7 c2 ok     R(x)=0 from backup at v0
+  t=  9 c0 invoke W(x:=3) -> primary
+  t=  9 c1 invoke R(y) -> backup (session token v2)
+  t= 11 c2 invoke R(y) -> backup (session token v0)
+  t= 16    backup applies v1 (y:=1)
+  t= 18    backup applies v2 (y:=2)
+  t= 18 c0 ok     W(x:=3) at v3
+  t= 19 c2 ok     R(y)=0 from backup at v0
+
+NON-LINEARIZABLE history on key 'y'. Minimal sub-history (2 of 3 ops on this key):
+
+  who  op         [invoke, complete] timeline (t=0..19, 1 tick/col)
+  c1   W(y:=2)    [   0,    7]       |------|  primary v2
+  c2   R(y)=0     [  11,   19]                  |-------|  backup v0
+
+  Real-time order forced by the history:
+    c1 W(y:=2) completed at t=7 before c2 R(y)=0 was invoked at t=11
+  No order of these ops that respects real time is a legal register execution,
+  and removing any one op makes the history linearizable again.
+
+seed=1 ops=6 trace=3e1850e49d1b089a FAIL
+</script>
+<script type="text/plain" id="log-run1-bug-again" data-src="data/07/run1-bug-again.txt">
+  t=  0 c0 invoke W(y:=1) -> primary
+  t=  0 c1 invoke W(y:=2) -> primary
+  t=  0 c2 invoke R(x) -> backup (session token v0)
+  t=  6 c0 ok     W(y:=1) at v1
+  t=  7 c1 ok     W(y:=2) at v2
+  t=  7 c2 ok     R(x)=0 from backup at v0
+  t=  9 c0 invoke W(x:=3) -> primary
+  t=  9 c1 invoke R(y) -> backup (session token v2)
+  t= 11 c2 invoke R(y) -> backup (session token v0)
+  t= 16    backup applies v1 (y:=1)
+  t= 18    backup applies v2 (y:=2)
+  t= 18 c0 ok     W(x:=3) at v3
+  t= 19 c2 ok     R(y)=0 from backup at v0
+
+NON-LINEARIZABLE history on key 'y'. Minimal sub-history (2 of 3 ops on this key):
+
+  who  op         [invoke, complete] timeline (t=0..19, 1 tick/col)
+  c1   W(y:=2)    [   0,    7]       |------|  primary v2
+  c2   R(y)=0     [  11,   19]                  |-------|  backup v0
+
+  Real-time order forced by the history:
+    c1 W(y:=2) completed at t=7 before c2 R(y)=0 was invoked at t=11
+  No order of these ops that respects real time is a legal register execution,
+  and removing any one op makes the history linearizable again.
+
+seed=1 ops=6 trace=3e1850e49d1b089a FAIL
+</script>
+<script type="text/plain" id="log-run3-bug" data-src="data/07/run3-bug.txt">
+  t=  0 c0 invoke W(x:=1) -> primary
+  t=  0 c1 invoke W(x:=2) -> primary
+  t=  0 c2 invoke W(x:=3) -> primary
+  t=  5 c1 ok     W(x:=2) at v2
+  t=  6 c2 ok     W(x:=3) at v3
+  t=  7 c0 ok     W(x:=1) at v1
+  t=  9 c1 invoke R(x) -> primary (session token v2)
+  t= 10 c0 invoke R(x) -> backup (session token v1)
+  t= 10 c2 invoke W(y:=4) -> primary
+  t= 10    backup applies v1 (x:=1)
+  t= 13 c1 ok     R(x)=3 from primary at v3
+  t= 16 c1 invoke R(x) -> primary (session token v3)
+  t= 17 c0 ok     R(x)=1 from backup at v1
+
+NON-LINEARIZABLE history on key 'x'. Minimal sub-history (4 of 5 ops on this key):
+
+  who  op         [invoke, complete] timeline (t=0..17, 1 tick/col)
+  c0   W(x:=1)    [   0,    7]       |------|  primary v1
+  c2   W(x:=3)    [   0,    6]       |-----|  primary v3
+  c1   R(x)=3     [   9,   13]                |---|  primary v3
+  c0   R(x)=1     [  10,   17]                 |------|  backup v1
+
+  Real-time order forced by the history:
+    c0 W(x:=1) completed at t=7 before c1 R(x)=3 was invoked at t=9
+    c0 W(x:=1) completed at t=7 before c0 R(x)=1 was invoked at t=10
+    c2 W(x:=3) completed at t=6 before c1 R(x)=3 was invoked at t=9
+    c2 W(x:=3) completed at t=6 before c0 R(x)=1 was invoked at t=10
+  No order of these ops that respects real time is a legal register execution,
+  and removing any one op makes the history linearizable again.
+
+seed=3 ops=7 trace=4bc12f9b0095aded FAIL
+</script>
+<script type="text/plain" id="log-run3-bug-again" data-src="data/07/run3-bug-again.txt">
+  t=  0 c0 invoke W(x:=1) -> primary
+  t=  0 c1 invoke W(x:=2) -> primary
+  t=  0 c2 invoke W(x:=3) -> primary
+  t=  5 c1 ok     W(x:=2) at v2
+  t=  6 c2 ok     W(x:=3) at v3
+  t=  7 c0 ok     W(x:=1) at v1
+  t=  9 c1 invoke R(x) -> primary (session token v2)
+  t= 10 c0 invoke R(x) -> backup (session token v1)
+  t= 10 c2 invoke W(y:=4) -> primary
+  t= 10    backup applies v1 (x:=1)
+  t= 13 c1 ok     R(x)=3 from primary at v3
+  t= 16 c1 invoke R(x) -> primary (session token v3)
+  t= 17 c0 ok     R(x)=1 from backup at v1
+
+NON-LINEARIZABLE history on key 'x'. Minimal sub-history (4 of 5 ops on this key):
+
+  who  op         [invoke, complete] timeline (t=0..17, 1 tick/col)
+  c0   W(x:=1)    [   0,    7]       |------|  primary v1
+  c2   W(x:=3)    [   0,    6]       |-----|  primary v3
+  c1   R(x)=3     [   9,   13]                |---|  primary v3
+  c0   R(x)=1     [  10,   17]                 |------|  backup v1
+
+  Real-time order forced by the history:
+    c0 W(x:=1) completed at t=7 before c1 R(x)=3 was invoked at t=9
+    c0 W(x:=1) completed at t=7 before c0 R(x)=1 was invoked at t=10
+    c2 W(x:=3) completed at t=6 before c1 R(x)=3 was invoked at t=9
+    c2 W(x:=3) completed at t=6 before c0 R(x)=1 was invoked at t=10
+  No order of these ops that respects real time is a legal register execution,
+  and removing any one op makes the history linearizable again.
+
+seed=3 ops=7 trace=4bc12f9b0095aded FAIL
+</script>
+<script type="text/plain" id="log-run1" data-src="data/07/run1.txt">
+  t=  0 c0 invoke W(y:=1) -> primary
+  t=  0 c1 invoke W(y:=2) -> primary
+  t=  0 c2 invoke R(x) -> backup (session token v0)
+  t=  6 c0 ok     W(y:=1) at v1
+  t=  7 c1 ok     W(y:=2) at v2
+  t=  9 c0 invoke W(x:=3) -> primary
+  t=  9 c1 invoke R(y) -> backup (session token v2)
+  t= 16    backup applies v1 (y:=1)
+  t= 18    backup applies v2 (y:=2)
+  t= 19 c0 ok     W(x:=3) at v3
+  t= 22 c0 invoke R(y) -> backup (session token v3)
+  t= 22 c2 ok     R(x)=0 from backup at v2
+  t= 25 c2 invoke R(y) -> primary (session token v2)
+  t= 33    backup applies v3 (x:=3)
+  t= 34 c2 ok     R(y)=2 from primary at v3
+  t= 35 c2 invoke W(x:=4) -> primary
+  t= 35 c1 ok     R(y)=2 from backup at v3
+  t= 37 c1 invoke R(y) -> primary (session token v3)
+  t= 37 c0 ok     R(y)=2 from backup at v3
+  t= 39 c0 invoke R(y) -> primary (session token v3)
+  t= 45 c2 ok     W(x:=4) at v4
+  t= 45 c1 ok     R(y)=2 from primary at v4
+  t= 47 c0 ok     R(y)=2 from primary at v4
+  t= 61    backup applies v4 (x:=4)
+seed=1 ops=10 trace=958243d897550eef PASS
+</script>
+<script type="text/plain" id="log-run3" data-src="data/07/run3.txt">
+  t=  0 c0 invoke W(x:=1) -> primary
+  t=  0 c1 invoke W(x:=2) -> primary
+  t=  0 c2 invoke W(x:=3) -> primary
+  t=  5 c1 ok     W(x:=2) at v2
+  t=  6 c2 ok     W(x:=3) at v3
+  t=  7 c0 ok     W(x:=1) at v1
+  t=  9 c1 invoke R(x) -> primary (session token v2)
+  t= 10 c0 invoke R(x) -> backup (session token v1)
+  t= 10 c2 invoke W(y:=4) -> primary
+  t= 10    backup applies v1 (x:=1)
+  t= 13 c1 ok     R(x)=3 from primary at v3
+  t= 16 c1 invoke R(x) -> primary (session token v3)
+  t= 18    backup applies v2 (x:=2)
+  t= 19    backup applies v3 (x:=3)
+  t= 19 c1 ok     R(x)=3 from primary at v4
+  t= 20 c2 ok     W(y:=4) at v4
+  t= 44    backup applies v4 (y:=4)
+  t= 50 c0 ok     R(x)=3 from backup at v4
+seed=3 ops=7 trace=691a3a812948ec74 PASS
+</script>
+<script type="text/plain" id="tsv-bug" data-src="data/07/per-seed-bug.tsv">
+0	PASS	12	-	-	-
+1	FAIL	6	2	3	y
+2	PASS	7	-	-	-
+3	FAIL	7	4	5	x
+4	PASS	7	-	-	-
+5	PASS	6	-	-	-
+6	PASS	10	-	-	-
+7	PASS	7	-	-	-
+8	PASS	11	-	-	-
+9	PASS	11	-	-	-
+10	PASS	10	-	-	-
+11	PASS	9	-	-	-
+12	PASS	11	-	-	-
+13	PASS	11	-	-	-
+14	PASS	7	-	-	-
+15	FAIL	6	2	2	y
+16	PASS	8	-	-	-
+17	PASS	7	-	-	-
+18	PASS	7	-	-	-
+19	PASS	7	-	-	-
+20	PASS	10	-	-	-
+21	PASS	8	-	-	-
+22	PASS	10	-	-	-
+23	PASS	7	-	-	-
+24	FAIL	6	4	5	y
+25	PASS	7	-	-	-
+26	PASS	8	-	-	-
+27	PASS	9	-	-	-
+28	PASS	6	-	-	-
+29	PASS	7	-	-	-
+30	PASS	9	-	-	-
+31	PASS	6	-	-	-
+32	PASS	9	-	-	-
+33	PASS	11	-	-	-
+34	FAIL	6	2	3	y
+35	PASS	11	-	-	-
+36	PASS	9	-	-	-
+37	PASS	12	-	-	-
+38	PASS	10	-	-	-
+39	PASS	9	-	-	-
+40	PASS	11	-	-	-
+41	PASS	12	-	-	-
+42	PASS	10	-	-	-
+43	PASS	9	-	-	-
+44	PASS	9	-	-	-
+45	PASS	10	-	-	-
+46	PASS	8	-	-	-
+47	PASS	9	-	-	-
+48	PASS	11	-	-	-
+49	PASS	7	-	-	-
+50	PASS	6	-	-	-
+51	PASS	6	-	-	-
+52	PASS	12	-	-	-
+53	PASS	6	-	-	-
+54	PASS	7	-	-	-
+55	PASS	12	-	-	-
+56	PASS	12	-	-	-
+57	PASS	11	-	-	-
+58	PASS	12	-	-	-
+59	FAIL	10	2	6	y
+60	PASS	11	-	-	-
+61	PASS	9	-	-	-
+62	PASS	12	-	-	-
+63	PASS	6	-	-	-
+64	PASS	9	-	-	-
+65	FAIL	10	3	4	x
+66	FAIL	11	3	5	y
+67	PASS	8	-	-	-
+68	PASS	12	-	-	-
+69	PASS	12	-	-	-
+70	PASS	9	-	-	-
+71	FAIL	6	2	3	y
+72	PASS	6	-	-	-
+73	PASS	10	-	-	-
+74	FAIL	10	3	7	x
+75	PASS	11	-	-	-
+76	PASS	10	-	-	-
+77	PASS	11	-	-	-
+78	PASS	7	-	-	-
+79	PASS	11	-	-	-
+80	PASS	6	-	-	-
+81	PASS	10	-	-	-
+82	PASS	7	-	-	-
+83	PASS	12	-	-	-
+84	PASS	9	-	-	-
+85	PASS	11	-	-	-
+86	PASS	6	-	-	-
+87	PASS	11	-	-	-
+88	PASS	8	-	-	-
+89	PASS	12	-	-	-
+90	PASS	11	-	-	-
+91	PASS	11	-	-	-
+92	PASS	7	-	-	-
+93	PASS	7	-	-	-
+94	PASS	7	-	-	-
+95	PASS	8	-	-	-
+96	PASS	12	-	-	-
+97	PASS	10	-	-	-
+98	PASS	7	-	-	-
+99	PASS	9	-	-	-
+100	PASS	12	-	-	-
+101	PASS	11	-	-	-
+102	FAIL	7	2	2	x
+103	PASS	8	-	-	-
+104	PASS	7	-	-	-
+105	PASS	7	-	-	-
+106	PASS	7	-	-	-
+107	PASS	8	-	-	-
+108	PASS	8	-	-	-
+109	PASS	11	-	-	-
+110	PASS	8	-	-	-
+111	PASS	7	-	-	-
+112	PASS	12	-	-	-
+113	PASS	7	-	-	-
+114	PASS	7	-	-	-
+115	PASS	11	-	-	-
+116	PASS	10	-	-	-
+117	PASS	8	-	-	-
+118	PASS	10	-	-	-
+119	PASS	7	-	-	-
+120	PASS	7	-	-	-
+121	PASS	11	-	-	-
+122	PASS	7	-	-	-
+123	PASS	9	-	-	-
+124	FAIL	8	2	5	y
+125	PASS	6	-	-	-
+126	PASS	9	-	-	-
+127	PASS	10	-	-	-
+128	PASS	7	-	-	-
+129	PASS	7	-	-	-
+130	PASS	6	-	-	-
+131	PASS	12	-	-	-
+132	PASS	11	-	-	-
+133	PASS	7	-	-	-
+134	FAIL	6	2	3	y
+135	PASS	12	-	-	-
+136	PASS	10	-	-	-
+137	PASS	8	-	-	-
+138	PASS	6	-	-	-
+139	FAIL	11	3	5	x
+140	PASS	11	-	-	-
+141	PASS	8	-	-	-
+142	PASS	12	-	-	-
+143	PASS	11	-	-	-
+144	PASS	12	-	-	-
+145	PASS	6	-	-	-
+146	FAIL	8	2	7	x
+147	PASS	8	-	-	-
+148	PASS	11	-	-	-
+149	PASS	12	-	-	-
+150	PASS	7	-	-	-
+151	PASS	11	-	-	-
+152	PASS	8	-	-	-
+153	FAIL	6	2	4	y
+154	PASS	11	-	-	-
+155	PASS	7	-	-	-
+156	PASS	9	-	-	-
+157	PASS	12	-	-	-
+158	PASS	8	-	-	-
+159	PASS	7	-	-	-
+160	PASS	6	-	-	-
+161	FAIL	6	2	3	x
+162	PASS	9	-	-	-
+163	PASS	6	-	-	-
+164	PASS	6	-	-	-
+165	PASS	7	-	-	-
+166	PASS	9	-	-	-
+167	PASS	6	-	-	-
+168	PASS	10	-	-	-
+169	PASS	7	-	-	-
+170	PASS	11	-	-	-
+171	PASS	10	-	-	-
+172	PASS	8	-	-	-
+173	FAIL	6	2	3	x
+174	PASS	8	-	-	-
+175	PASS	10	-	-	-
+176	FAIL	11	2	6	x
+177	PASS	9	-	-	-
+178	PASS	6	-	-	-
+179	PASS	12	-	-	-
+180	PASS	9	-	-	-
+181	PASS	8	-	-	-
+182	PASS	9	-	-	-
+183	PASS	7	-	-	-
+184	PASS	10	-	-	-
+185	PASS	12	-	-	-
+186	FAIL	6	2	2	x
+187	PASS	8	-	-	-
+188	PASS	10	-	-	-
+189	PASS	9	-	-	-
+190	PASS	10	-	-	-
+191	PASS	10	-	-	-
+192	PASS	8	-	-	-
+193	FAIL	9	2	4	y
+194	PASS	6	-	-	-
+195	PASS	12	-	-	-
+196	FAIL	6	2	2	x
+197	PASS	9	-	-	-
+198	PASS	11	-	-	-
+199	PASS	10	-	-	-
+200	PASS	7	-	-	-
+201	PASS	9	-	-	-
+202	PASS	9	-	-	-
+203	PASS	9	-	-	-
+204	PASS	7	-	-	-
+205	FAIL	6	2	3	y
+206	FAIL	9	3	3	x
+207	PASS	7	-	-	-
+208	PASS	8	-	-	-
+209	PASS	8	-	-	-
+210	PASS	7	-	-	-
+211	PASS	7	-	-	-
+212	PASS	9	-	-	-
+213	PASS	11	-	-	-
+214	PASS	8	-	-	-
+215	PASS	12	-	-	-
+216	PASS	11	-	-	-
+217	PASS	9	-	-	-
+218	PASS	8	-	-	-
+219	PASS	6	-	-	-
+220	PASS	8	-	-	-
+221	PASS	11	-	-	-
+222	PASS	6	-	-	-
+223	FAIL	7	2	4	x
+224	PASS	9	-	-	-
+225	PASS	10	-	-	-
+226	FAIL	8	2	3	y
+227	FAIL	6	2	3	x
+228	PASS	6	-	-	-
+229	PASS	12	-	-	-
+230	PASS	7	-	-	-
+231	PASS	12	-	-	-
+232	FAIL	7	2	3	y
+233	PASS	7	-	-	-
+234	PASS	9	-	-	-
+235	PASS	12	-	-	-
+236	FAIL	7	2	3	x
+237	PASS	12	-	-	-
+238	PASS	10	-	-	-
+239	PASS	8	-	-	-
+240	PASS	9	-	-	-
+241	PASS	10	-	-	-
+242	FAIL	6	2	4	x
+243	PASS	8	-	-	-
+244	FAIL	11	2	4	x
+245	PASS	7	-	-	-
+246	PASS	12	-	-	-
+247	PASS	8	-	-	-
+248	PASS	6	-	-	-
+249	PASS	11	-	-	-
+250	PASS	6	-	-	-
+251	FAIL	8	2	5	x
+252	PASS	8	-	-	-
+253	PASS	6	-	-	-
+254	PASS	9	-	-	-
+255	PASS	7	-	-	-
+256	PASS	7	-	-	-
+257	PASS	9	-	-	-
+258	PASS	8	-	-	-
+259	PASS	7	-	-	-
+260	PASS	7	-	-	-
+261	PASS	8	-	-	-
+262	PASS	8	-	-	-
+263	FAIL	10	3	7	y
+264	PASS	8	-	-	-
+265	FAIL	9	2	4	x
+266	PASS	7	-	-	-
+267	PASS	8	-	-	-
+268	PASS	7	-	-	-
+269	FAIL	7	2	4	y
+270	FAIL	9	2	4	y
+271	PASS	7	-	-	-
+272	PASS	8	-	-	-
+273	PASS	9	-	-	-
+274	FAIL	11	2	5	x
+275	PASS	6	-	-	-
+276	PASS	6	-	-	-
+277	PASS	10	-	-	-
+278	FAIL	5	2	2	x
+279	PASS	6	-	-	-
+280	PASS	9	-	-	-
+281	PASS	6	-	-	-
+282	PASS	9	-	-	-
+283	PASS	9	-	-	-
+284	PASS	6	-	-	-
+285	PASS	8	-	-	-
+286	FAIL	8	2	6	x
+287	PASS	8	-	-	-
+288	FAIL	11	3	4	x
+289	FAIL	6	2	3	y
+290	PASS	8	-	-	-
+291	PASS	6	-	-	-
+292	PASS	12	-	-	-
+293	FAIL	7	4	5	x
+294	PASS	9	-	-	-
+295	PASS	7	-	-	-
+296	PASS	12	-	-	-
+297	PASS	9	-	-	-
+298	FAIL	6	2	3	x
+299	PASS	7	-	-	-
+300	PASS	11	-	-	-
+301	PASS	8	-	-	-
+302	FAIL	11	2	5	x
+303	FAIL	6	2	4	y
+304	PASS	10	-	-	-
+305	PASS	10	-	-	-
+306	PASS	10	-	-	-
+307	PASS	8	-	-	-
+308	PASS	10	-	-	-
+309	PASS	11	-	-	-
+310	PASS	12	-	-	-
+311	PASS	8	-	-	-
+312	PASS	10	-	-	-
+313	PASS	10	-	-	-
+314	PASS	11	-	-	-
+315	PASS	8	-	-	-
+316	PASS	6	-	-	-
+317	PASS	7	-	-	-
+318	PASS	7	-	-	-
+319	PASS	7	-	-	-
+320	PASS	8	-	-	-
+321	PASS	11	-	-	-
+322	PASS	11	-	-	-
+323	PASS	8	-	-	-
+324	FAIL	12	3	5	x
+325	PASS	8	-	-	-
+326	PASS	7	-	-	-
+327	PASS	7	-	-	-
+328	PASS	10	-	-	-
+329	FAIL	8	2	5	y
+330	PASS	8	-	-	-
+331	PASS	10	-	-	-
+332	PASS	12	-	-	-
+333	PASS	10	-	-	-
+334	PASS	11	-	-	-
+335	PASS	10	-	-	-
+336	PASS	9	-	-	-
+337	FAIL	12	2	6	y
+338	PASS	12	-	-	-
+339	PASS	6	-	-	-
+340	PASS	11	-	-	-
+341	PASS	6	-	-	-
+342	PASS	12	-	-	-
+343	PASS	9	-	-	-
+344	FAIL	9	3	6	y
+345	FAIL	9	2	4	y
+346	PASS	10	-	-	-
+347	PASS	7	-	-	-
+348	PASS	8	-	-	-
+349	PASS	11	-	-	-
+350	PASS	12	-	-	-
+351	PASS	12	-	-	-
+352	PASS	12	-	-	-
+353	PASS	10	-	-	-
+354	PASS	10	-	-	-
+355	PASS	8	-	-	-
+356	PASS	10	-	-	-
+357	PASS	9	-	-	-
+358	PASS	8	-	-	-
+359	PASS	6	-	-	-
+360	PASS	8	-	-	-
+361	PASS	11	-	-	-
+362	PASS	9	-	-	-
+363	FAIL	11	4	8	y
+364	FAIL	6	2	3	y
+365	PASS	10	-	-	-
+366	PASS	6	-	-	-
+367	PASS	9	-	-	-
+368	PASS	8	-	-	-
+369	PASS	11	-	-	-
+370	PASS	11	-	-	-
+371	PASS	7	-	-	-
+372	PASS	8	-	-	-
+373	PASS	8	-	-	-
+374	PASS	10	-	-	-
+375	PASS	7	-	-	-
+376	FAIL	6	2	3	y
+377	FAIL	10	2	4	y
+378	PASS	6	-	-	-
+379	PASS	12	-	-	-
+380	PASS	6	-	-	-
+381	PASS	9	-	-	-
+382	PASS	6	-	-	-
+383	PASS	11	-	-	-
+384	FAIL	7	2	5	x
+385	PASS	10	-	-	-
+386	PASS	8	-	-	-
+387	PASS	11	-	-	-
+388	PASS	10	-	-	-
+389	PASS	10	-	-	-
+390	PASS	6	-	-	-
+391	PASS	7	-	-	-
+392	PASS	10	-	-	-
+393	PASS	6	-	-	-
+394	PASS	10	-	-	-
+395	PASS	10	-	-	-
+396	PASS	9	-	-	-
+397	PASS	6	-	-	-
+398	PASS	7	-	-	-
+399	PASS	12	-	-	-
+400	PASS	9	-	-	-
+401	PASS	6	-	-	-
+402	FAIL	6	2	3	x
+403	PASS	12	-	-	-
+404	PASS	11	-	-	-
+405	PASS	10	-	-	-
+406	PASS	9	-	-	-
+407	PASS	8	-	-	-
+408	PASS	11	-	-	-
+409	PASS	10	-	-	-
+410	FAIL	7	4	5	y
+411	PASS	9	-	-	-
+412	PASS	6	-	-	-
+413	FAIL	10	3	5	x
+414	PASS	12	-	-	-
+415	PASS	7	-	-	-
+416	PASS	12	-	-	-
+417	PASS	10	-	-	-
+418	PASS	9	-	-	-
+419	PASS	9	-	-	-
+420	FAIL	9	2	4	x
+421	PASS	7	-	-	-
+422	PASS	9	-	-	-
+423	PASS	9	-	-	-
+424	FAIL	11	3	7	x
+425	FAIL	7	2	4	y
+426	PASS	12	-	-	-
+427	PASS	10	-	-	-
+428	PASS	7	-	-	-
+429	FAIL	6	2	2	x
+430	PASS	7	-	-	-
+431	PASS	9	-	-	-
+432	PASS	9	-	-	-
+433	PASS	8	-	-	-
+434	FAIL	9	4	4	y
+435	PASS	6	-	-	-
+436	PASS	11	-	-	-
+437	FAIL	9	2	6	x
+438	PASS	11	-	-	-
+439	PASS	10	-	-	-
+440	PASS	12	-	-	-
+441	PASS	10	-	-	-
+442	PASS	12	-	-	-
+443	PASS	12	-	-	-
+444	FAIL	7	2	3	y
+445	PASS	12	-	-	-
+446	PASS	9	-	-	-
+447	PASS	6	-	-	-
+448	PASS	7	-	-	-
+449	PASS	6	-	-	-
+450	PASS	7	-	-	-
+451	PASS	7	-	-	-
+452	PASS	10	-	-	-
+453	FAIL	9	2	3	x
+454	FAIL	8	3	4	y
+455	PASS	7	-	-	-
+456	FAIL	11	3	6	y
+457	PASS	6	-	-	-
+458	PASS	12	-	-	-
+459	FAIL	10	2	5	y
+460	PASS	9	-	-	-
+461	PASS	9	-	-	-
+462	PASS	11	-	-	-
+463	FAIL	11	2	4	y
+464	PASS	8	-	-	-
+465	PASS	7	-	-	-
+466	PASS	12	-	-	-
+467	PASS	11	-	-	-
+468	PASS	8	-	-	-
+469	PASS	12	-	-	-
+470	PASS	8	-	-	-
+471	PASS	8	-	-	-
+472	PASS	9	-	-	-
+473	PASS	11	-	-	-
+474	PASS	12	-	-	-
+475	FAIL	6	2	3	x
+476	PASS	7	-	-	-
+477	FAIL	6	2	4	y
+478	PASS	7	-	-	-
+479	PASS	8	-	-	-
+480	PASS	10	-	-	-
+481	PASS	11	-	-	-
+482	PASS	12	-	-	-
+483	PASS	7	-	-	-
+484	PASS	9	-	-	-
+485	PASS	7	-	-	-
+486	PASS	6	-	-	-
+487	PASS	6	-	-	-
+488	FAIL	7	2	6	y
+489	PASS	12	-	-	-
+490	PASS	6	-	-	-
+491	PASS	10	-	-	-
+492	PASS	11	-	-	-
+493	PASS	6	-	-	-
+494	PASS	6	-	-	-
+495	PASS	10	-	-	-
+496	PASS	11	-	-	-
+497	PASS	9	-	-	-
+498	PASS	7	-	-	-
+499	PASS	12	-	-	-
+500	PASS	7	-	-	-
+501	PASS	8	-	-	-
+502	PASS	12	-	-	-
+503	PASS	9	-	-	-
+504	PASS	9	-	-	-
+505	FAIL	6	2	4	x
+506	PASS	10	-	-	-
+507	FAIL	6	2	3	y
+508	PASS	9	-	-	-
+509	PASS	8	-	-	-
+510	PASS	8	-	-	-
+511	FAIL	7	2	4	x
+512	PASS	8	-	-	-
+513	PASS	11	-	-	-
+514	PASS	6	-	-	-
+515	PASS	11	-	-	-
+516	PASS	9	-	-	-
+517	PASS	8	-	-	-
+518	PASS	12	-	-	-
+519	FAIL	8	2	4	x
+520	PASS	11	-	-	-
+521	PASS	10	-	-	-
+522	FAIL	8	3	7	x
+523	PASS	7	-	-	-
+524	PASS	8	-	-	-
+525	PASS	11	-	-	-
+526	PASS	7	-	-	-
+527	PASS	6	-	-	-
+528	PASS	7	-	-	-
+529	PASS	12	-	-	-
+530	PASS	9	-	-	-
+531	PASS	11	-	-	-
+532	PASS	7	-	-	-
+533	PASS	10	-	-	-
+534	PASS	8	-	-	-
+535	PASS	11	-	-	-
+536	PASS	11	-	-	-
+537	PASS	12	-	-	-
+538	PASS	7	-	-	-
+539	PASS	6	-	-	-
+540	PASS	9	-	-	-
+541	PASS	9	-	-	-
+542	PASS	10	-	-	-
+543	PASS	6	-	-	-
+544	PASS	9	-	-	-
+545	PASS	8	-	-	-
+546	PASS	6	-	-	-
+547	PASS	12	-	-	-
+548	PASS	8	-	-	-
+549	PASS	7	-	-	-
+550	PASS	10	-	-	-
+551	PASS	10	-	-	-
+552	FAIL	10	2	4	y
+553	PASS	6	-	-	-
+554	PASS	8	-	-	-
+555	PASS	6	-	-	-
+556	PASS	8	-	-	-
+557	PASS	6	-	-	-
+558	PASS	10	-	-	-
+559	PASS	10	-	-	-
+560	PASS	9	-	-	-
+561	PASS	7	-	-	-
+562	PASS	9	-	-	-
+563	PASS	9	-	-	-
+564	PASS	8	-	-	-
+565	FAIL	10	3	6	x
+566	PASS	9	-	-	-
+567	PASS	8	-	-	-
+568	PASS	7	-	-	-
+569	PASS	7	-	-	-
+570	PASS	7	-	-	-
+571	PASS	7	-	-	-
+572	PASS	8	-	-	-
+573	PASS	11	-	-	-
+574	PASS	7	-	-	-
+575	PASS	6	-	-	-
+576	FAIL	6	2	4	y
+577	FAIL	6	2	2	y
+578	PASS	9	-	-	-
+579	PASS	12	-	-	-
+580	PASS	9	-	-	-
+581	PASS	6	-	-	-
+582	PASS	11	-	-	-
+583	PASS	11	-	-	-
+584	PASS	12	-	-	-
+585	FAIL	11	3	8	x
+586	PASS	10	-	-	-
+587	PASS	10	-	-	-
+588	PASS	6	-	-	-
+589	PASS	10	-	-	-
+590	PASS	6	-	-	-
+591	PASS	8	-	-	-
+592	PASS	7	-	-	-
+593	PASS	10	-	-	-
+594	PASS	6	-	-	-
+595	FAIL	8	4	4	x
+596	PASS	12	-	-	-
+597	PASS	8	-	-	-
+598	PASS	6	-	-	-
+599	PASS	6	-	-	-
+600	PASS	7	-	-	-
+601	PASS	8	-	-	-
+602	PASS	9	-	-	-
+603	PASS	6	-	-	-
+604	PASS	6	-	-	-
+605	PASS	9	-	-	-
+606	PASS	9	-	-	-
+607	PASS	12	-	-	-
+608	PASS	11	-	-	-
+609	PASS	9	-	-	-
+610	PASS	8	-	-	-
+611	FAIL	8	2	2	y
+612	PASS	7	-	-	-
+613	PASS	8	-	-	-
+614	PASS	7	-	-	-
+615	PASS	11	-	-	-
+616	PASS	12	-	-	-
+617	PASS	9	-	-	-
+618	PASS	8	-	-	-
+619	FAIL	6	2	2	x
+620	PASS	7	-	-	-
+621	PASS	9	-	-	-
+622	PASS	10	-	-	-
+623	FAIL	6	2	2	y
+624	PASS	7	-	-	-
+625	PASS	12	-	-	-
+626	PASS	10	-	-	-
+627	PASS	10	-	-	-
+628	PASS	10	-	-	-
+629	PASS	10	-	-	-
+630	PASS	6	-	-	-
+631	PASS	8	-	-	-
+632	PASS	7	-	-	-
+633	FAIL	8	3	5	y
+634	PASS	11	-	-	-
+635	PASS	9	-	-	-
+636	PASS	12	-	-	-
+637	PASS	10	-	-	-
+638	PASS	11	-	-	-
+639	PASS	8	-	-	-
+640	FAIL	10	2	5	y
+641	PASS	10	-	-	-
+642	PASS	12	-	-	-
+643	PASS	12	-	-	-
+644	FAIL	6	2	4	x
+645	PASS	7	-	-	-
+646	PASS	9	-	-	-
+647	PASS	9	-	-	-
+648	PASS	9	-	-	-
+649	PASS	12	-	-	-
+650	PASS	7	-	-	-
+651	PASS	7	-	-	-
+652	PASS	7	-	-	-
+653	PASS	7	-	-	-
+654	PASS	10	-	-	-
+655	FAIL	6	2	3	x
+656	PASS	7	-	-	-
+657	PASS	7	-	-	-
+658	PASS	10	-	-	-
+659	PASS	8	-	-	-
+660	PASS	6	-	-	-
+661	PASS	12	-	-	-
+662	PASS	8	-	-	-
+663	FAIL	11	2	4	y
+664	PASS	10	-	-	-
+665	PASS	9	-	-	-
+666	PASS	8	-	-	-
+667	PASS	11	-	-	-
+668	PASS	7	-	-	-
+669	PASS	10	-	-	-
+670	FAIL	10	2	3	y
+671	PASS	11	-	-	-
+672	PASS	6	-	-	-
+673	FAIL	7	2	3	x
+674	PASS	11	-	-	-
+675	PASS	6	-	-	-
+676	FAIL	6	2	3	x
+677	PASS	7	-	-	-
+678	PASS	9	-	-	-
+679	PASS	6	-	-	-
+680	PASS	9	-	-	-
+681	PASS	11	-	-	-
+682	PASS	10	-	-	-
+683	FAIL	9	3	6	x
+684	PASS	10	-	-	-
+685	PASS	12	-	-	-
+686	PASS	10	-	-	-
+687	PASS	10	-	-	-
+688	PASS	8	-	-	-
+689	PASS	10	-	-	-
+690	PASS	11	-	-	-
+691	PASS	7	-	-	-
+692	FAIL	7	2	5	y
+693	PASS	7	-	-	-
+694	FAIL	6	2	3	x
+695	PASS	12	-	-	-
+696	PASS	12	-	-	-
+697	PASS	10	-	-	-
+698	PASS	12	-	-	-
+699	PASS	8	-	-	-
+700	PASS	12	-	-	-
+701	FAIL	6	2	4	y
+702	PASS	7	-	-	-
+703	PASS	6	-	-	-
+704	PASS	12	-	-	-
+705	PASS	10	-	-	-
+706	PASS	12	-	-	-
+707	FAIL	8	4	7	x
+708	PASS	7	-	-	-
+709	FAIL	11	3	4	x
+710	PASS	7	-	-	-
+711	PASS	6	-	-	-
+712	PASS	6	-	-	-
+713	PASS	12	-	-	-
+714	FAIL	6	2	3	y
+715	PASS	11	-	-	-
+716	PASS	10	-	-	-
+717	PASS	8	-	-	-
+718	PASS	7	-	-	-
+719	PASS	6	-	-	-
+720	PASS	12	-	-	-
+721	PASS	7	-	-	-
+722	PASS	9	-	-	-
+723	FAIL	6	2	2	y
+724	PASS	10	-	-	-
+725	PASS	6	-	-	-
+726	PASS	12	-	-	-
+727	PASS	9	-	-	-
+728	PASS	8	-	-	-
+729	PASS	11	-	-	-
+730	PASS	10	-	-	-
+731	FAIL	6	2	3	x
+732	FAIL	7	2	5	x
+733	PASS	12	-	-	-
+734	PASS	12	-	-	-
+735	PASS	11	-	-	-
+736	PASS	11	-	-	-
+737	PASS	10	-	-	-
+738	PASS	7	-	-	-
+739	PASS	6	-	-	-
+740	PASS	9	-	-	-
+741	PASS	10	-	-	-
+742	PASS	6	-	-	-
+743	PASS	12	-	-	-
+744	PASS	7	-	-	-
+745	PASS	9	-	-	-
+746	PASS	10	-	-	-
+747	PASS	7	-	-	-
+748	PASS	9	-	-	-
+749	PASS	8	-	-	-
+750	PASS	6	-	-	-
+751	PASS	10	-	-	-
+752	PASS	10	-	-	-
+753	PASS	7	-	-	-
+754	PASS	7	-	-	-
+755	PASS	12	-	-	-
+756	PASS	10	-	-	-
+757	PASS	8	-	-	-
+758	PASS	11	-	-	-
+759	PASS	8	-	-	-
+760	PASS	7	-	-	-
+761	PASS	8	-	-	-
+762	PASS	8	-	-	-
+763	PASS	6	-	-	-
+764	PASS	6	-	-	-
+765	PASS	9	-	-	-
+766	PASS	6	-	-	-
+767	FAIL	7	2	4	y
+768	FAIL	8	2	2	y
+769	PASS	9	-	-	-
+770	PASS	9	-	-	-
+771	PASS	6	-	-	-
+772	PASS	8	-	-	-
+773	PASS	8	-	-	-
+774	PASS	8	-	-	-
+775	PASS	8	-	-	-
+776	PASS	7	-	-	-
+777	PASS	9	-	-	-
+778	PASS	6	-	-	-
+779	PASS	12	-	-	-
+780	PASS	9	-	-	-
+781	PASS	10	-	-	-
+782	PASS	12	-	-	-
+783	PASS	6	-	-	-
+784	FAIL	9	2	7	y
+785	FAIL	7	2	5	y
+786	PASS	7	-	-	-
+787	PASS	8	-	-	-
+788	PASS	6	-	-	-
+789	PASS	6	-	-	-
+790	PASS	6	-	-	-
+791	FAIL	7	2	3	x
+792	PASS	6	-	-	-
+793	PASS	8	-	-	-
+794	PASS	10	-	-	-
+795	FAIL	8	2	3	y
+796	PASS	6	-	-	-
+797	PASS	11	-	-	-
+798	PASS	12	-	-	-
+799	PASS	6	-	-	-
+800	PASS	10	-	-	-
+801	PASS	11	-	-	-
+802	FAIL	8	3	3	y
+803	PASS	12	-	-	-
+804	PASS	6	-	-	-
+805	PASS	12	-	-	-
+806	PASS	6	-	-	-
+807	PASS	6	-	-	-
+808	FAIL	8	4	6	x
+809	PASS	10	-	-	-
+810	PASS	11	-	-	-
+811	PASS	7	-	-	-
+812	PASS	10	-	-	-
+813	PASS	7	-	-	-
+814	PASS	9	-	-	-
+815	PASS	8	-	-	-
+816	PASS	12	-	-	-
+817	FAIL	6	2	3	y
+818	PASS	11	-	-	-
+819	PASS	7	-	-	-
+820	PASS	7	-	-	-
+821	PASS	8	-	-	-
+822	FAIL	9	3	4	y
+823	PASS	6	-	-	-
+824	PASS	7	-	-	-
+825	PASS	12	-	-	-
+826	FAIL	6	2	3	x
+827	FAIL	7	2	5	y
+828	PASS	7	-	-	-
+829	PASS	10	-	-	-
+830	PASS	6	-	-	-
+831	PASS	6	-	-	-
+832	FAIL	6	2	5	x
+833	PASS	10	-	-	-
+834	PASS	9	-	-	-
+835	FAIL	11	2	5	y
+836	PASS	10	-	-	-
+837	PASS	10	-	-	-
+838	FAIL	11	3	8	y
+839	FAIL	6	2	3	y
+840	PASS	12	-	-	-
+841	PASS	10	-	-	-
+842	PASS	12	-	-	-
+843	PASS	12	-	-	-
+844	PASS	11	-	-	-
+845	PASS	6	-	-	-
+846	PASS	12	-	-	-
+847	PASS	11	-	-	-
+848	FAIL	10	3	6	y
+849	PASS	8	-	-	-
+850	PASS	9	-	-	-
+851	PASS	12	-	-	-
+852	PASS	7	-	-	-
+853	PASS	6	-	-	-
+854	PASS	6	-	-	-
+855	PASS	12	-	-	-
+856	PASS	11	-	-	-
+857	PASS	10	-	-	-
+858	PASS	8	-	-	-
+859	PASS	10	-	-	-
+860	PASS	6	-	-	-
+861	FAIL	6	2	3	x
+862	FAIL	10	2	4	x
+863	PASS	6	-	-	-
+864	PASS	11	-	-	-
+865	PASS	10	-	-	-
+866	PASS	12	-	-	-
+867	PASS	11	-	-	-
+868	PASS	8	-	-	-
+869	FAIL	6	2	3	x
+870	PASS	8	-	-	-
+871	PASS	7	-	-	-
+872	PASS	11	-	-	-
+873	PASS	11	-	-	-
+874	PASS	7	-	-	-
+875	PASS	12	-	-	-
+876	PASS	7	-	-	-
+877	PASS	11	-	-	-
+878	PASS	12	-	-	-
+879	PASS	6	-	-	-
+880	FAIL	6	2	5	x
+881	FAIL	7	2	4	y
+882	PASS	7	-	-	-
+883	PASS	12	-	-	-
+884	PASS	9	-	-	-
+885	PASS	11	-	-	-
+886	PASS	6	-	-	-
+887	FAIL	8	2	7	y
+888	PASS	8	-	-	-
+889	PASS	12	-	-	-
+890	PASS	11	-	-	-
+891	PASS	6	-	-	-
+892	PASS	6	-	-	-
+893	PASS	11	-	-	-
+894	PASS	8	-	-	-
+895	PASS	7	-	-	-
+896	PASS	7	-	-	-
+897	PASS	6	-	-	-
+898	PASS	9	-	-	-
+899	FAIL	8	2	3	y
+900	FAIL	8	2	4	x
+901	PASS	11	-	-	-
+902	PASS	12	-	-	-
+903	PASS	7	-	-	-
+904	PASS	8	-	-	-
+905	PASS	8	-	-	-
+906	PASS	6	-	-	-
+907	PASS	7	-	-	-
+908	PASS	11	-	-	-
+909	FAIL	9	3	5	x
+910	PASS	6	-	-	-
+911	PASS	12	-	-	-
+912	PASS	7	-	-	-
+913	PASS	6	-	-	-
+914	PASS	12	-	-	-
+915	FAIL	8	3	6	x
+916	PASS	8	-	-	-
+917	PASS	11	-	-	-
+918	PASS	7	-	-	-
+919	PASS	6	-	-	-
+920	PASS	9	-	-	-
+921	PASS	9	-	-	-
+922	PASS	6	-	-	-
+923	PASS	11	-	-	-
+924	PASS	11	-	-	-
+925	PASS	7	-	-	-
+926	PASS	8	-	-	-
+927	PASS	6	-	-	-
+928	PASS	11	-	-	-
+929	PASS	6	-	-	-
+930	FAIL	7	2	3	x
+931	FAIL	8	2	4	y
+932	PASS	8	-	-	-
+933	PASS	7	-	-	-
+934	PASS	11	-	-	-
+935	PASS	8	-	-	-
+936	FAIL	9	2	4	x
+937	PASS	11	-	-	-
+938	PASS	6	-	-	-
+939	PASS	9	-	-	-
+940	PASS	12	-	-	-
+941	PASS	7	-	-	-
+942	PASS	11	-	-	-
+943	PASS	9	-	-	-
+944	PASS	11	-	-	-
+945	PASS	6	-	-	-
+946	PASS	6	-	-	-
+947	PASS	11	-	-	-
+948	FAIL	5	2	2	y
+949	PASS	8	-	-	-
+950	PASS	11	-	-	-
+951	PASS	9	-	-	-
+952	FAIL	10	2	5	y
+953	PASS	8	-	-	-
+954	PASS	6	-	-	-
+955	PASS	10	-	-	-
+956	PASS	8	-	-	-
+957	PASS	9	-	-	-
+958	PASS	6	-	-	-
+959	FAIL	9	2	5	y
+960	FAIL	7	2	2	y
+961	PASS	10	-	-	-
+962	PASS	12	-	-	-
+963	PASS	10	-	-	-
+964	PASS	7	-	-	-
+965	FAIL	12	3	7	x
+966	PASS	8	-	-	-
+967	PASS	9	-	-	-
+968	FAIL	8	4	4	y
+969	PASS	12	-	-	-
+970	PASS	10	-	-	-
+971	PASS	11	-	-	-
+972	PASS	8	-	-	-
+973	FAIL	9	2	5	y
+974	PASS	9	-	-	-
+975	PASS	9	-	-	-
+976	PASS	10	-	-	-
+977	FAIL	10	4	7	x
+978	PASS	11	-	-	-
+979	PASS	6	-	-	-
+980	PASS	6	-	-	-
+981	PASS	12	-	-	-
+982	PASS	11	-	-	-
+983	PASS	6	-	-	-
+984	PASS	7	-	-	-
+985	PASS	12	-	-	-
+986	PASS	10	-	-	-
+987	PASS	6	-	-	-
+988	PASS	10	-	-	-
+989	PASS	10	-	-	-
+990	PASS	7	-	-	-
+991	PASS	12	-	-	-
+992	PASS	6	-	-	-
+993	PASS	7	-	-	-
+994	PASS	9	-	-	-
+995	PASS	11	-	-	-
+996	PASS	10	-	-	-
+997	PASS	11	-	-	-
+998	FAIL	11	3	8	y
+999	PASS	12	-	-	-
+1000	PASS	6	-	-	-
+1001	PASS	6	-	-	-
+1002	PASS	10	-	-	-
+1003	PASS	7	-	-	-
+1004	FAIL	10	3	7	y
+1005	PASS	11	-	-	-
+1006	PASS	9	-	-	-
+1007	PASS	11	-	-	-
+1008	PASS	6	-	-	-
+1009	FAIL	6	2	3	y
+1010	PASS	11	-	-	-
+1011	PASS	8	-	-	-
+1012	PASS	11	-	-	-
+1013	PASS	11	-	-	-
+1014	PASS	6	-	-	-
+1015	PASS	7	-	-	-
+1016	PASS	6	-	-	-
+1017	PASS	12	-	-	-
+1018	PASS	6	-	-	-
+1019	PASS	9	-	-	-
+1020	PASS	6	-	-	-
+1021	PASS	8	-	-	-
+1022	PASS	8	-	-	-
+1023	PASS	12	-	-	-
+1024	FAIL	7	2	6	x
+1025	PASS	9	-	-	-
+1026	PASS	6	-	-	-
+1027	PASS	7	-	-	-
+1028	FAIL	6	2	5	x
+1029	PASS	8	-	-	-
+1030	PASS	10	-	-	-
+1031	PASS	6	-	-	-
+1032	PASS	8	-	-	-
+1033	FAIL	6	2	4	x
+1034	PASS	7	-	-	-
+1035	PASS	9	-	-	-
+1036	PASS	7	-	-	-
+1037	PASS	11	-	-	-
+1038	PASS	8	-	-	-
+1039	PASS	9	-	-	-
+1040	PASS	10	-	-	-
+1041	PASS	6	-	-	-
+1042	FAIL	7	2	3	y
+1043	FAIL	6	2	3	y
+1044	PASS	9	-	-	-
+1045	PASS	9	-	-	-
+1046	PASS	8	-	-	-
+1047	PASS	8	-	-	-
+1048	PASS	7	-	-	-
+1049	FAIL	6	2	3	y
+1050	PASS	8	-	-	-
+1051	PASS	12	-	-	-
+1052	PASS	6	-	-	-
+1053	PASS	11	-	-	-
+1054	PASS	7	-	-	-
+1055	PASS	12	-	-	-
+1056	PASS	11	-	-	-
+1057	PASS	10	-	-	-
+1058	PASS	12	-	-	-
+1059	PASS	10	-	-	-
+1060	FAIL	9	3	5	x
+1061	PASS	10	-	-	-
+1062	PASS	10	-	-	-
+1063	FAIL	8	4	4	y
+1064	PASS	10	-	-	-
+1065	FAIL	6	2	3	y
+1066	FAIL	6	3	3	y
+1067	PASS	8	-	-	-
+1068	PASS	6	-	-	-
+1069	PASS	9	-	-	-
+1070	PASS	11	-	-	-
+1071	PASS	8	-	-	-
+1072	PASS	7	-	-	-
+1073	FAIL	6	2	2	x
+1074	PASS	11	-	-	-
+1075	PASS	7	-	-	-
+1076	PASS	6	-	-	-
+1077	PASS	6	-	-	-
+1078	PASS	9	-	-	-
+1079	PASS	11	-	-	-
+1080	PASS	7	-	-	-
+1081	PASS	11	-	-	-
+1082	PASS	7	-	-	-
+1083	PASS	10	-	-	-
+1084	FAIL	8	2	4	y
+1085	FAIL	9	3	4	x
+1086	PASS	7	-	-	-
+1087	PASS	6	-	-	-
+1088	FAIL	7	2	4	x
+1089	PASS	8	-	-	-
+1090	PASS	7	-	-	-
+1091	PASS	12	-	-	-
+1092	PASS	9	-	-	-
+1093	PASS	6	-	-	-
+1094	PASS	12	-	-	-
+1095	PASS	11	-	-	-
+1096	PASS	6	-	-	-
+1097	PASS	8	-	-	-
+1098	PASS	8	-	-	-
+1099	FAIL	9	3	6	y
+1100	PASS	11	-	-	-
+1101	PASS	7	-	-	-
+1102	PASS	9	-	-	-
+1103	PASS	11	-	-	-
+1104	PASS	9	-	-	-
+1105	PASS	9	-	-	-
+1106	PASS	12	-	-	-
+1107	PASS	8	-	-	-
+1108	FAIL	7	2	4	x
+1109	PASS	10	-	-	-
+1110	PASS	11	-	-	-
+1111	PASS	6	-	-	-
+1112	PASS	7	-	-	-
+1113	PASS	10	-	-	-
+1114	PASS	10	-	-	-
+1115	PASS	10	-	-	-
+1116	PASS	12	-	-	-
+1117	PASS	8	-	-	-
+1118	PASS	8	-	-	-
+1119	PASS	11	-	-	-
+1120	PASS	9	-	-	-
+1121	PASS	10	-	-	-
+1122	PASS	11	-	-	-
+1123	PASS	8	-	-	-
+1124	PASS	10	-	-	-
+1125	PASS	7	-	-	-
+1126	PASS	10	-	-	-
+1127	PASS	12	-	-	-
+1128	PASS	7	-	-	-
+1129	PASS	12	-	-	-
+1130	PASS	7	-	-	-
+1131	PASS	11	-	-	-
+1132	PASS	9	-	-	-
+1133	PASS	7	-	-	-
+1134	PASS	12	-	-	-
+1135	PASS	11	-	-	-
+1136	PASS	10	-	-	-
+1137	PASS	7	-	-	-
+1138	PASS	8	-	-	-
+1139	PASS	7	-	-	-
+1140	PASS	12	-	-	-
+1141	PASS	9	-	-	-
+1142	PASS	7	-	-	-
+1143	PASS	9	-	-	-
+1144	PASS	9	-	-	-
+1145	PASS	9	-	-	-
+1146	PASS	10	-	-	-
+1147	PASS	10	-	-	-
+1148	FAIL	6	2	4	y
+1149	PASS	6	-	-	-
+1150	PASS	7	-	-	-
+1151	PASS	7	-	-	-
+1152	PASS	6	-	-	-
+1153	PASS	12	-	-	-
+1154	PASS	11	-	-	-
+1155	PASS	7	-	-	-
+1156	PASS	6	-	-	-
+1157	PASS	6	-	-	-
+1158	PASS	7	-	-	-
+1159	PASS	10	-	-	-
+1160	PASS	9	-	-	-
+1161	PASS	6	-	-	-
+1162	PASS	6	-	-	-
+1163	PASS	11	-	-	-
+1164	PASS	10	-	-	-
+1165	PASS	6	-	-	-
+1166	PASS	6	-	-	-
+1167	FAIL	7	2	5	x
+1168	PASS	12	-	-	-
+1169	PASS	7	-	-	-
+1170	FAIL	7	2	3	x
+1171	PASS	12	-	-	-
+1172	FAIL	9	2	5	x
+1173	PASS	6	-	-	-
+1174	PASS	11	-	-	-
+1175	PASS	8	-	-	-
+1176	PASS	12	-	-	-
+1177	PASS	7	-	-	-
+1178	PASS	6	-	-	-
+1179	PASS	8	-	-	-
+1180	PASS	7	-	-	-
+1181	PASS	7	-	-	-
+1182	PASS	6	-	-	-
+1183	PASS	9	-	-	-
+1184	PASS	12	-	-	-
+1185	PASS	10	-	-	-
+1186	PASS	11	-	-	-
+1187	PASS	6	-	-	-
+1188	PASS	11	-	-	-
+1189	PASS	10	-	-	-
+1190	PASS	9	-	-	-
+1191	PASS	9	-	-	-
+1192	PASS	6	-	-	-
+1193	PASS	10	-	-	-
+1194	FAIL	11	2	7	y
+1195	FAIL	6	2	5	x
+1196	PASS	11	-	-	-
+1197	PASS	12	-	-	-
+1198	PASS	11	-	-	-
+1199	FAIL	9	2	3	x
+1200	PASS	9	-	-	-
+1201	PASS	11	-	-	-
+1202	PASS	6	-	-	-
+1203	PASS	10	-	-	-
+1204	PASS	9	-	-	-
+1205	PASS	9	-	-	-
+1206	PASS	10	-	-	-
+1207	PASS	11	-	-	-
+1208	PASS	10	-	-	-
+1209	FAIL	9	2	5	y
+1210	PASS	11	-	-	-
+1211	PASS	8	-	-	-
+1212	PASS	10	-	-	-
+1213	FAIL	9	3	6	x
+1214	PASS	10	-	-	-
+1215	PASS	7	-	-	-
+1216	PASS	12	-	-	-
+1217	PASS	11	-	-	-
+1218	PASS	10	-	-	-
+1219	PASS	9	-	-	-
+1220	PASS	9	-	-	-
+1221	PASS	9	-	-	-
+1222	PASS	12	-	-	-
+1223	PASS	6	-	-	-
+1224	PASS	6	-	-	-
+1225	PASS	9	-	-	-
+1226	PASS	8	-	-	-
+1227	FAIL	7	4	5	y
+1228	PASS	6	-	-	-
+1229	PASS	11	-	-	-
+1230	FAIL	12	3	8	x
+1231	PASS	6	-	-	-
+1232	PASS	6	-	-	-
+1233	FAIL	6	2	4	x
+1234	PASS	9	-	-	-
+1235	FAIL	11	3	7	x
+1236	PASS	7	-	-	-
+1237	PASS	8	-	-	-
+1238	PASS	12	-	-	-
+1239	PASS	12	-	-	-
+1240	PASS	10	-	-	-
+1241	PASS	12	-	-	-
+1242	FAIL	11	3	5	y
+1243	PASS	8	-	-	-
+1244	PASS	10	-	-	-
+1245	PASS	12	-	-	-
+1246	FAIL	8	2	5	y
+1247	PASS	11	-	-	-
+1248	PASS	6	-	-	-
+1249	PASS	7	-	-	-
+1250	PASS	12	-	-	-
+1251	PASS	7	-	-	-
+1252	PASS	10	-	-	-
+1253	PASS	6	-	-	-
+1254	FAIL	10	2	5	y
+1255	PASS	8	-	-	-
+1256	PASS	12	-	-	-
+1257	PASS	6	-	-	-
+1258	PASS	6	-	-	-
+1259	FAIL	6	2	5	x
+1260	PASS	9	-	-	-
+1261	PASS	8	-	-	-
+1262	PASS	12	-	-	-
+1263	PASS	6	-	-	-
+1264	FAIL	6	2	4	x
+1265	PASS	10	-	-	-
+1266	PASS	11	-	-	-
+1267	PASS	6	-	-	-
+1268	PASS	9	-	-	-
+1269	PASS	12	-	-	-
+1270	PASS	10	-	-	-
+1271	FAIL	11	3	5	y
+1272	PASS	10	-	-	-
+1273	PASS	9	-	-	-
+1274	PASS	10	-	-	-
+1275	PASS	6	-	-	-
+1276	PASS	10	-	-	-
+1277	PASS	12	-	-	-
+1278	PASS	8	-	-	-
+1279	PASS	12	-	-	-
+1280	PASS	10	-	-	-
+1281	PASS	12	-	-	-
+1282	PASS	12	-	-	-
+1283	FAIL	8	3	5	x
+1284	PASS	10	-	-	-
+1285	PASS	6	-	-	-
+1286	PASS	11	-	-	-
+1287	PASS	8	-	-	-
+1288	PASS	9	-	-	-
+1289	PASS	8	-	-	-
+1290	PASS	11	-	-	-
+1291	PASS	9	-	-	-
+1292	PASS	6	-	-	-
+1293	PASS	6	-	-	-
+1294	PASS	10	-	-	-
+1295	PASS	6	-	-	-
+1296	PASS	6	-	-	-
+1297	PASS	10	-	-	-
+1298	PASS	11	-	-	-
+1299	PASS	6	-	-	-
+1300	PASS	10	-	-	-
+1301	PASS	7	-	-	-
+1302	PASS	9	-	-	-
+1303	PASS	6	-	-	-
+1304	PASS	11	-	-	-
+1305	PASS	8	-	-	-
+1306	PASS	9	-	-	-
+1307	FAIL	6	2	2	x
+1308	PASS	10	-	-	-
+1309	FAIL	6	2	3	y
+1310	FAIL	7	2	3	x
+1311	PASS	10	-	-	-
+1312	FAIL	11	2	5	y
+1313	PASS	8	-	-	-
+1314	PASS	8	-	-	-
+1315	PASS	8	-	-	-
+1316	PASS	12	-	-	-
+1317	PASS	12	-	-	-
+1318	PASS	10	-	-	-
+1319	FAIL	10	2	6	x
+1320	FAIL	6	2	4	x
+1321	PASS	9	-	-	-
+1322	PASS	10	-	-	-
+1323	PASS	12	-	-	-
+1324	PASS	12	-	-	-
+1325	PASS	8	-	-	-
+1326	FAIL	6	2	3	x
+1327	PASS	9	-	-	-
+1328	PASS	8	-	-	-
+1329	PASS	9	-	-	-
+1330	PASS	11	-	-	-
+1331	PASS	8	-	-	-
+1332	PASS	10	-	-	-
+1333	PASS	12	-	-	-
+1334	FAIL	8	2	3	x
+1335	PASS	11	-	-	-
+1336	PASS	7	-	-	-
+1337	FAIL	10	3	6	x
+1338	FAIL	8	2	2	y
+1339	PASS	10	-	-	-
+1340	PASS	11	-	-	-
+1341	PASS	6	-	-	-
+1342	PASS	8	-	-	-
+1343	PASS	12	-	-	-
+1344	PASS	12	-	-	-
+1345	PASS	7	-	-	-
+1346	PASS	11	-	-	-
+1347	PASS	11	-	-	-
+1348	PASS	11	-	-	-
+1349	PASS	7	-	-	-
+1350	PASS	8	-	-	-
+1351	PASS	12	-	-	-
+1352	PASS	6	-	-	-
+1353	FAIL	11	2	6	x
+1354	PASS	10	-	-	-
+1355	PASS	10	-	-	-
+1356	PASS	6	-	-	-
+1357	PASS	7	-	-	-
+1358	FAIL	6	2	2	y
+1359	PASS	6	-	-	-
+1360	PASS	10	-	-	-
+1361	PASS	12	-	-	-
+1362	PASS	11	-	-	-
+1363	PASS	11	-	-	-
+1364	PASS	11	-	-	-
+1365	PASS	10	-	-	-
+1366	PASS	7	-	-	-
+1367	PASS	7	-	-	-
+1368	PASS	11	-	-	-
+1369	PASS	11	-	-	-
+1370	FAIL	7	2	4	x
+1371	FAIL	10	3	7	y
+1372	PASS	12	-	-	-
+1373	PASS	7	-	-	-
+1374	FAIL	7	2	2	x
+1375	PASS	8	-	-	-
+1376	PASS	8	-	-	-
+1377	PASS	7	-	-	-
+1378	PASS	7	-	-	-
+1379	PASS	12	-	-	-
+1380	PASS	7	-	-	-
+1381	PASS	8	-	-	-
+1382	PASS	6	-	-	-
+1383	PASS	8	-	-	-
+1384	PASS	8	-	-	-
+1385	FAIL	6	2	4	y
+1386	PASS	8	-	-	-
+1387	PASS	10	-	-	-
+1388	PASS	6	-	-	-
+1389	PASS	8	-	-	-
+1390	FAIL	7	2	4	y
+1391	PASS	8	-	-	-
+1392	PASS	10	-	-	-
+1393	FAIL	7	2	3	y
+1394	PASS	9	-	-	-
+1395	PASS	7	-	-	-
+1396	PASS	11	-	-	-
+1397	PASS	6	-	-	-
+1398	PASS	9	-	-	-
+1399	PASS	12	-	-	-
+1400	PASS	10	-	-	-
+1401	PASS	7	-	-	-
+1402	PASS	7	-	-	-
+1403	FAIL	12	3	5	x
+1404	PASS	8	-	-	-
+1405	PASS	8	-	-	-
+1406	PASS	9	-	-	-
+1407	PASS	8	-	-	-
+1408	FAIL	6	2	3	y
+1409	PASS	9	-	-	-
+1410	PASS	12	-	-	-
+1411	PASS	7	-	-	-
+1412	PASS	8	-	-	-
+1413	PASS	10	-	-	-
+1414	PASS	11	-	-	-
+1415	PASS	9	-	-	-
+1416	PASS	9	-	-	-
+1417	PASS	10	-	-	-
+1418	PASS	12	-	-	-
+1419	PASS	11	-	-	-
+1420	PASS	7	-	-	-
+1421	FAIL	8	3	4	y
+1422	FAIL	7	4	7	x
+1423	PASS	12	-	-	-
+1424	PASS	11	-	-	-
+1425	FAIL	6	2	3	y
+1426	PASS	9	-	-	-
+1427	FAIL	7	2	3	y
+1428	PASS	8	-	-	-
+1429	FAIL	10	3	4	y
+1430	PASS	9	-	-	-
+1431	FAIL	10	3	6	y
+1432	PASS	9	-	-	-
+1433	PASS	6	-	-	-
+1434	PASS	7	-	-	-
+1435	PASS	12	-	-	-
+1436	PASS	12	-	-	-
+1437	PASS	6	-	-	-
+1438	PASS	10	-	-	-
+1439	PASS	10	-	-	-
+1440	PASS	7	-	-	-
+1441	FAIL	9	2	4	x
+1442	PASS	9	-	-	-
+1443	PASS	10	-	-	-
+1444	PASS	8	-	-	-
+1445	FAIL	11	2	3	y
+1446	PASS	7	-	-	-
+1447	PASS	6	-	-	-
+1448	PASS	6	-	-	-
+1449	PASS	8	-	-	-
+1450	PASS	7	-	-	-
+1451	PASS	7	-	-	-
+1452	FAIL	7	2	6	x
+1453	PASS	12	-	-	-
+1454	PASS	8	-	-	-
+1455	PASS	10	-	-	-
+1456	PASS	8	-	-	-
+1457	FAIL	6	2	3	x
+1458	FAIL	8	2	3	x
+1459	FAIL	8	2	5	x
+1460	PASS	7	-	-	-
+1461	PASS	7	-	-	-
+1462	PASS	7	-	-	-
+1463	PASS	11	-	-	-
+1464	PASS	7	-	-	-
+1465	PASS	12	-	-	-
+1466	PASS	7	-	-	-
+1467	PASS	12	-	-	-
+1468	PASS	12	-	-	-
+1469	PASS	7	-	-	-
+1470	PASS	12	-	-	-
+1471	FAIL	6	2	4	y
+1472	PASS	9	-	-	-
+1473	FAIL	12	3	7	x
+1474	FAIL	9	2	4	y
+1475	FAIL	7	2	3	x
+1476	PASS	9	-	-	-
+1477	PASS	10	-	-	-
+1478	PASS	7	-	-	-
+1479	PASS	10	-	-	-
+1480	PASS	6	-	-	-
+1481	PASS	8	-	-	-
+1482	PASS	8	-	-	-
+1483	PASS	10	-	-	-
+1484	PASS	8	-	-	-
+1485	PASS	9	-	-	-
+1486	FAIL	8	2	4	y
+1487	PASS	7	-	-	-
+1488	PASS	9	-	-	-
+1489	PASS	6	-	-	-
+1490	PASS	9	-	-	-
+1491	PASS	6	-	-	-
+1492	FAIL	8	3	5	y
+1493	FAIL	6	2	2	y
+1494	PASS	10	-	-	-
+1495	PASS	10	-	-	-
+1496	PASS	6	-	-	-
+1497	PASS	6	-	-	-
+1498	PASS	8	-	-	-
+1499	PASS	8	-	-	-
+1500	PASS	11	-	-	-
+1501	FAIL	8	2	4	y
+1502	PASS	11	-	-	-
+1503	PASS	10	-	-	-
+1504	PASS	9	-	-	-
+1505	PASS	6	-	-	-
+1506	PASS	12	-	-	-
+1507	PASS	11	-	-	-
+1508	PASS	12	-	-	-
+1509	PASS	10	-	-	-
+1510	PASS	12	-	-	-
+1511	PASS	12	-	-	-
+1512	PASS	9	-	-	-
+1513	PASS	9	-	-	-
+1514	PASS	9	-	-	-
+1515	PASS	7	-	-	-
+1516	PASS	6	-	-	-
+1517	PASS	12	-	-	-
+1518	PASS	11	-	-	-
+1519	PASS	11	-	-	-
+1520	PASS	6	-	-	-
+1521	PASS	7	-	-	-
+1522	PASS	11	-	-	-
+1523	PASS	6	-	-	-
+1524	PASS	12	-	-	-
+1525	PASS	7	-	-	-
+1526	PASS	10	-	-	-
+1527	PASS	8	-	-	-
+1528	PASS	11	-	-	-
+1529	PASS	6	-	-	-
+1530	PASS	6	-	-	-
+1531	PASS	7	-	-	-
+1532	PASS	7	-	-	-
+1533	PASS	9	-	-	-
+1534	PASS	12	-	-	-
+1535	PASS	6	-	-	-
+1536	PASS	8	-	-	-
+1537	PASS	11	-	-	-
+1538	PASS	11	-	-	-
+1539	PASS	10	-	-	-
+1540	PASS	12	-	-	-
+1541	PASS	12	-	-	-
+1542	PASS	7	-	-	-
+1543	PASS	7	-	-	-
+1544	PASS	12	-	-	-
+1545	PASS	8	-	-	-
+1546	PASS	6	-	-	-
+1547	PASS	11	-	-	-
+1548	PASS	6	-	-	-
+1549	PASS	6	-	-	-
+1550	PASS	10	-	-	-
+1551	PASS	12	-	-	-
+1552	PASS	11	-	-	-
+1553	PASS	6	-	-	-
+1554	FAIL	6	2	4	x
+1555	PASS	11	-	-	-
+1556	PASS	10	-	-	-
+1557	PASS	6	-	-	-
+1558	PASS	7	-	-	-
+1559	PASS	12	-	-	-
+1560	PASS	7	-	-	-
+1561	PASS	12	-	-	-
+1562	FAIL	9	2	5	y
+1563	PASS	12	-	-	-
+1564	FAIL	8	4	7	x
+1565	PASS	6	-	-	-
+1566	PASS	7	-	-	-
+1567	PASS	7	-	-	-
+1568	PASS	7	-	-	-
+1569	PASS	12	-	-	-
+1570	FAIL	10	2	7	y
+1571	PASS	6	-	-	-
+1572	PASS	8	-	-	-
+1573	PASS	12	-	-	-
+1574	FAIL	6	2	3	y
+1575	PASS	11	-	-	-
+1576	PASS	11	-	-	-
+1577	PASS	8	-	-	-
+1578	PASS	8	-	-	-
+1579	PASS	8	-	-	-
+1580	PASS	9	-	-	-
+1581	PASS	6	-	-	-
+1582	PASS	9	-	-	-
+1583	PASS	8	-	-	-
+1584	PASS	12	-	-	-
+1585	FAIL	11	3	6	x
+1586	PASS	9	-	-	-
+1587	PASS	6	-	-	-
+1588	PASS	7	-	-	-
+1589	PASS	9	-	-	-
+1590	PASS	6	-	-	-
+1591	PASS	9	-	-	-
+1592	PASS	10	-	-	-
+1593	FAIL	6	2	3	y
+1594	FAIL	6	2	4	y
+1595	PASS	8	-	-	-
+1596	PASS	9	-	-	-
+1597	PASS	7	-	-	-
+1598	PASS	6	-	-	-
+1599	PASS	6	-	-	-
+1600	PASS	10	-	-	-
+1601	PASS	7	-	-	-
+1602	FAIL	8	4	7	x
+1603	PASS	8	-	-	-
+1604	FAIL	12	3	6	y
+1605	PASS	8	-	-	-
+1606	PASS	7	-	-	-
+1607	PASS	9	-	-	-
+1608	PASS	12	-	-	-
+1609	PASS	8	-	-	-
+1610	PASS	12	-	-	-
+1611	PASS	7	-	-	-
+1612	FAIL	7	4	7	x
+1613	PASS	6	-	-	-
+1614	FAIL	9	4	6	x
+1615	PASS	8	-	-	-
+1616	PASS	8	-	-	-
+1617	PASS	9	-	-	-
+1618	FAIL	10	3	9	y
+1619	PASS	11	-	-	-
+1620	FAIL	7	2	2	y
+1621	PASS	12	-	-	-
+1622	PASS	10	-	-	-
+1623	PASS	9	-	-	-
+1624	PASS	7	-	-	-
+1625	PASS	7	-	-	-
+1626	PASS	11	-	-	-
+1627	PASS	10	-	-	-
+1628	FAIL	7	4	4	x
+1629	PASS	11	-	-	-
+1630	PASS	9	-	-	-
+1631	PASS	9	-	-	-
+1632	PASS	6	-	-	-
+1633	PASS	8	-	-	-
+1634	PASS	8	-	-	-
+1635	PASS	11	-	-	-
+1636	PASS	7	-	-	-
+1637	PASS	10	-	-	-
+1638	PASS	11	-	-	-
+1639	PASS	7	-	-	-
+1640	PASS	9	-	-	-
+1641	PASS	9	-	-	-
+1642	PASS	6	-	-	-
+1643	PASS	9	-	-	-
+1644	FAIL	6	2	4	y
+1645	PASS	7	-	-	-
+1646	PASS	6	-	-	-
+1647	PASS	6	-	-	-
+1648	PASS	7	-	-	-
+1649	PASS	11	-	-	-
+1650	PASS	9	-	-	-
+1651	PASS	8	-	-	-
+1652	PASS	12	-	-	-
+1653	PASS	6	-	-	-
+1654	PASS	8	-	-	-
+1655	FAIL	6	2	3	x
+1656	PASS	9	-	-	-
+1657	PASS	6	-	-	-
+1658	FAIL	9	2	5	y
+1659	PASS	9	-	-	-
+1660	FAIL	7	2	5	x
+1661	PASS	10	-	-	-
+1662	FAIL	7	2	4	x
+1663	PASS	8	-	-	-
+1664	FAIL	11	2	7	y
+1665	PASS	12	-	-	-
+1666	PASS	7	-	-	-
+1667	PASS	11	-	-	-
+1668	PASS	6	-	-	-
+1669	PASS	11	-	-	-
+1670	PASS	8	-	-	-
+1671	PASS	7	-	-	-
+1672	FAIL	5	2	3	x
+1673	PASS	8	-	-	-
+1674	PASS	8	-	-	-
+1675	PASS	10	-	-	-
+1676	FAIL	6	2	4	x
+1677	PASS	9	-	-	-
+1678	PASS	11	-	-	-
+1679	PASS	6	-	-	-
+1680	PASS	6	-	-	-
+1681	PASS	9	-	-	-
+1682	PASS	10	-	-	-
+1683	PASS	8	-	-	-
+1684	PASS	6	-	-	-
+1685	PASS	6	-	-	-
+1686	PASS	11	-	-	-
+1687	PASS	10	-	-	-
+1688	PASS	7	-	-	-
+1689	PASS	11	-	-	-
+1690	FAIL	8	2	3	x
+1691	FAIL	6	2	5	x
+1692	PASS	9	-	-	-
+1693	PASS	8	-	-	-
+1694	PASS	11	-	-	-
+1695	PASS	12	-	-	-
+1696	FAIL	6	2	3	y
+1697	PASS	8	-	-	-
+1698	PASS	6	-	-	-
+1699	FAIL	10	2	2	x
+1700	FAIL	8	2	2	x
+1701	PASS	12	-	-	-
+1702	PASS	10	-	-	-
+1703	PASS	10	-	-	-
+1704	PASS	9	-	-	-
+1705	PASS	8	-	-	-
+1706	FAIL	6	2	3	y
+1707	PASS	8	-	-	-
+1708	PASS	6	-	-	-
+1709	PASS	8	-	-	-
+1710	FAIL	12	4	5	x
+1711	PASS	6	-	-	-
+1712	PASS	12	-	-	-
+1713	PASS	8	-	-	-
+1714	PASS	10	-	-	-
+1715	PASS	8	-	-	-
+1716	PASS	11	-	-	-
+1717	PASS	8	-	-	-
+1718	PASS	11	-	-	-
+1719	FAIL	10	3	4	x
+1720	PASS	11	-	-	-
+1721	PASS	11	-	-	-
+1722	PASS	11	-	-	-
+1723	PASS	11	-	-	-
+1724	PASS	11	-	-	-
+1725	FAIL	9	2	5	y
+1726	PASS	7	-	-	-
+1727	PASS	12	-	-	-
+1728	PASS	8	-	-	-
+1729	PASS	6	-	-	-
+1730	FAIL	6	2	3	y
+1731	FAIL	12	3	5	y
+1732	FAIL	10	3	6	y
+1733	PASS	9	-	-	-
+1734	PASS	10	-	-	-
+1735	PASS	9	-	-	-
+1736	FAIL	7	2	4	x
+1737	FAIL	6	2	3	y
+1738	PASS	9	-	-	-
+1739	PASS	11	-	-	-
+1740	PASS	10	-	-	-
+1741	PASS	12	-	-	-
+1742	PASS	11	-	-	-
+1743	FAIL	6	2	4	y
+1744	PASS	8	-	-	-
+1745	PASS	8	-	-	-
+1746	PASS	7	-	-	-
+1747	PASS	8	-	-	-
+1748	PASS	10	-	-	-
+1749	PASS	9	-	-	-
+1750	PASS	10	-	-	-
+1751	PASS	6	-	-	-
+1752	PASS	9	-	-	-
+1753	PASS	9	-	-	-
+1754	PASS	11	-	-	-
+1755	PASS	7	-	-	-
+1756	PASS	8	-	-	-
+1757	PASS	10	-	-	-
+1758	PASS	7	-	-	-
+1759	PASS	6	-	-	-
+1760	FAIL	8	2	2	y
+1761	FAIL	7	2	5	x
+1762	PASS	8	-	-	-
+1763	FAIL	6	2	3	y
+1764	FAIL	9	2	5	x
+1765	PASS	10	-	-	-
+1766	PASS	11	-	-	-
+1767	PASS	12	-	-	-
+1768	PASS	12	-	-	-
+1769	PASS	10	-	-	-
+1770	PASS	7	-	-	-
+1771	PASS	12	-	-	-
+1772	PASS	10	-	-	-
+1773	PASS	12	-	-	-
+1774	PASS	6	-	-	-
+1775	PASS	10	-	-	-
+1776	PASS	10	-	-	-
+1777	PASS	10	-	-	-
+1778	PASS	7	-	-	-
+1779	PASS	7	-	-	-
+1780	PASS	12	-	-	-
+1781	PASS	11	-	-	-
+1782	PASS	9	-	-	-
+1783	PASS	8	-	-	-
+1784	PASS	8	-	-	-
+1785	PASS	9	-	-	-
+1786	FAIL	7	2	4	x
+1787	FAIL	6	2	4	x
+1788	PASS	9	-	-	-
+1789	FAIL	7	2	3	y
+1790	PASS	11	-	-	-
+1791	FAIL	10	3	5	y
+1792	PASS	11	-	-	-
+1793	PASS	8	-	-	-
+1794	PASS	9	-	-	-
+1795	PASS	6	-	-	-
+1796	PASS	11	-	-	-
+1797	FAIL	6	2	2	x
+1798	PASS	8	-	-	-
+1799	FAIL	11	2	7	y
+1800	FAIL	6	2	2	y
+1801	FAIL	12	2	5	y
+1802	PASS	11	-	-	-
+1803	PASS	6	-	-	-
+1804	PASS	6	-	-	-
+1805	PASS	7	-	-	-
+1806	PASS	12	-	-	-
+1807	PASS	12	-	-	-
+1808	PASS	6	-	-	-
+1809	PASS	11	-	-	-
+1810	PASS	9	-	-	-
+1811	FAIL	6	2	3	x
+1812	PASS	9	-	-	-
+1813	PASS	6	-	-	-
+1814	PASS	12	-	-	-
+1815	PASS	6	-	-	-
+1816	FAIL	7	2	5	y
+1817	PASS	12	-	-	-
+1818	PASS	6	-	-	-
+1819	PASS	7	-	-	-
+1820	PASS	7	-	-	-
+1821	PASS	7	-	-	-
+1822	PASS	8	-	-	-
+1823	PASS	8	-	-	-
+1824	PASS	10	-	-	-
+1825	FAIL	8	2	4	x
+1826	PASS	11	-	-	-
+1827	PASS	12	-	-	-
+1828	PASS	9	-	-	-
+1829	PASS	11	-	-	-
+1830	PASS	6	-	-	-
+1831	PASS	12	-	-	-
+1832	PASS	6	-	-	-
+1833	PASS	8	-	-	-
+1834	PASS	10	-	-	-
+1835	PASS	9	-	-	-
+1836	PASS	9	-	-	-
+1837	PASS	12	-	-	-
+1838	PASS	7	-	-	-
+1839	PASS	8	-	-	-
+1840	PASS	11	-	-	-
+1841	PASS	7	-	-	-
+1842	PASS	12	-	-	-
+1843	PASS	10	-	-	-
+1844	PASS	8	-	-	-
+1845	PASS	12	-	-	-
+1846	PASS	7	-	-	-
+1847	PASS	10	-	-	-
+1848	FAIL	10	2	6	y
+1849	PASS	6	-	-	-
+1850	FAIL	10	3	7	y
+1851	PASS	12	-	-	-
+1852	PASS	8	-	-	-
+1853	PASS	8	-	-	-
+1854	PASS	12	-	-	-
+1855	FAIL	7	2	3	y
+1856	PASS	12	-	-	-
+1857	PASS	11	-	-	-
+1858	PASS	10	-	-	-
+1859	PASS	12	-	-	-
+1860	PASS	6	-	-	-
+1861	PASS	9	-	-	-
+1862	PASS	10	-	-	-
+1863	PASS	10	-	-	-
+1864	PASS	10	-	-	-
+1865	PASS	7	-	-	-
+1866	PASS	8	-	-	-
+1867	PASS	12	-	-	-
+1868	PASS	7	-	-	-
+1869	PASS	12	-	-	-
+1870	PASS	11	-	-	-
+1871	PASS	7	-	-	-
+1872	FAIL	8	4	4	x
+1873	PASS	9	-	-	-
+1874	FAIL	6	2	4	x
+1875	PASS	10	-	-	-
+1876	PASS	9	-	-	-
+1877	PASS	12	-	-	-
+1878	PASS	11	-	-	-
+1879	FAIL	6	2	2	y
+1880	PASS	7	-	-	-
+1881	PASS	6	-	-	-
+1882	PASS	10	-	-	-
+1883	PASS	7	-	-	-
+1884	PASS	9	-	-	-
+1885	PASS	12	-	-	-
+1886	PASS	12	-	-	-
+1887	PASS	10	-	-	-
+1888	FAIL	6	2	4	y
+1889	PASS	11	-	-	-
+1890	PASS	7	-	-	-
+1891	PASS	7	-	-	-
+1892	PASS	6	-	-	-
+1893	FAIL	10	2	5	x
+1894	PASS	7	-	-	-
+1895	PASS	10	-	-	-
+1896	PASS	8	-	-	-
+1897	PASS	7	-	-	-
+1898	PASS	6	-	-	-
+1899	PASS	8	-	-	-
+1900	PASS	10	-	-	-
+1901	PASS	6	-	-	-
+1902	PASS	7	-	-	-
+1903	PASS	8	-	-	-
+1904	FAIL	6	2	5	x
+1905	PASS	6	-	-	-
+1906	PASS	8	-	-	-
+1907	FAIL	8	2	2	y
+1908	PASS	8	-	-	-
+1909	PASS	11	-	-	-
+1910	PASS	8	-	-	-
+1911	PASS	8	-	-	-
+1912	PASS	11	-	-	-
+1913	PASS	11	-	-	-
+1914	PASS	11	-	-	-
+1915	FAIL	8	2	4	y
+1916	PASS	12	-	-	-
+1917	PASS	9	-	-	-
+1918	PASS	9	-	-	-
+1919	FAIL	7	2	6	y
+1920	PASS	10	-	-	-
+1921	PASS	7	-	-	-
+1922	PASS	8	-	-	-
+1923	PASS	8	-	-	-
+1924	PASS	7	-	-	-
+1925	PASS	9	-	-	-
+1926	PASS	10	-	-	-
+1927	FAIL	6	2	4	x
+1928	PASS	12	-	-	-
+1929	PASS	9	-	-	-
+1930	PASS	12	-	-	-
+1931	PASS	9	-	-	-
+1932	PASS	8	-	-	-
+1933	PASS	8	-	-	-
+1934	PASS	9	-	-	-
+1935	PASS	11	-	-	-
+1936	PASS	12	-	-	-
+1937	PASS	12	-	-	-
+1938	PASS	8	-	-	-
+1939	PASS	8	-	-	-
+1940	PASS	12	-	-	-
+1941	FAIL	6	2	3	x
+1942	FAIL	7	2	4	y
+1943	PASS	6	-	-	-
+1944	PASS	7	-	-	-
+1945	PASS	12	-	-	-
+1946	PASS	6	-	-	-
+1947	PASS	12	-	-	-
+1948	PASS	10	-	-	-
+1949	PASS	12	-	-	-
+1950	FAIL	6	2	3	x
+1951	PASS	10	-	-	-
+1952	PASS	11	-	-	-
+1953	PASS	12	-	-	-
+1954	PASS	8	-	-	-
+1955	PASS	6	-	-	-
+1956	PASS	12	-	-	-
+1957	PASS	9	-	-	-
+1958	FAIL	12	3	7	x
+1959	FAIL	11	4	9	y
+1960	PASS	10	-	-	-
+1961	PASS	12	-	-	-
+1962	PASS	8	-	-	-
+1963	PASS	9	-	-	-
+1964	PASS	12	-	-	-
+1965	PASS	7	-	-	-
+1966	PASS	10	-	-	-
+1967	PASS	11	-	-	-
+1968	PASS	7	-	-	-
+1969	PASS	9	-	-	-
+1970	PASS	10	-	-	-
+1971	PASS	7	-	-	-
+1972	PASS	7	-	-	-
+1973	PASS	11	-	-	-
+1974	PASS	11	-	-	-
+1975	PASS	7	-	-	-
+1976	FAIL	9	2	3	y
+1977	PASS	12	-	-	-
+1978	PASS	8	-	-	-
+1979	PASS	9	-	-	-
+1980	PASS	10	-	-	-
+1981	PASS	6	-	-	-
+1982	PASS	8	-	-	-
+1983	PASS	11	-	-	-
+1984	PASS	12	-	-	-
+1985	FAIL	9	2	4	x
+1986	PASS	7	-	-	-
+1987	PASS	9	-	-	-
+1988	FAIL	8	2	4	y
+1989	PASS	8	-	-	-
+1990	FAIL	12	2	6	x
+1991	PASS	8	-	-	-
+1992	PASS	9	-	-	-
+1993	PASS	7	-	-	-
+1994	PASS	9	-	-	-
+1995	PASS	12	-	-	-
+1996	PASS	11	-	-	-
+1997	PASS	6	-	-	-
+1998	FAIL	7	2	4	x
+1999	PASS	8	-	-	-
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex07" });
+const { el, s, C } = DST;
+
+// ---------------------------------------------------------------- parsing real output
+function parseRun(text) {
+  const ops = [], events = [], open = {};
+  let minimal = null, forced = [], final = null, inMin = false;
+  for (const line of text.split("\n")) {
+    let m;
+    if ((m = line.match(/^\s*t=\s*(\d+) c(\d) invoke (?:W\((\w):=(\d+)\)|R\((\w)\)) -> (primary|backup)(?: \(session token v(\d+)\))?/))) {
+      const op = { id: ops.length, client: +m[2], kind: m[3] ? "W" : "R", key: m[3] || m[5], value: m[3] ? +m[4] : null,
+        invoke: +m[1], complete: null, target: m[6], token: m[7] != null ? +m[7] : null, version: null };
+      ops.push(op); open[op.client] = op;
+      events.push({ t: op.invoke, type: "invoke", op, line: line.trim() });
+    } else if ((m = line.match(/^\s*t=\s*(\d+) c(\d) ok\s+(?:W\((\w):=(\d+)\) at v(\d+)|R\((\w)\)=(\d+) from (primary|backup) at v(\d+))/))) {
+      const op = open[+m[2]]; delete open[+m[2]];
+      op.complete = +m[1]; op.version = +(m[5] || m[9]); if (op.kind === "R") op.value = +m[7];
+      events.push({ t: op.complete, type: "ok", op, line: line.trim() });
+    } else if ((m = line.match(/^\s*t=\s*(\d+)\s+backup applies v(\d+) \((\w):=(\d+)\)/))) {
+      events.push({ t: +m[1], type: "apply", v: +m[2], key: m[3], value: +m[4], line: line.trim() });
+    } else if ((m = line.match(/NON-LINEARIZABLE history on key '(\w)'\. Minimal sub-history \((\d+) of (\d+) ops/))) {
+      minimal = { key: m[1], n: +m[2], of: +m[3], rows: [] }; inMin = true;
+    } else if (inMin && (m = line.match(/^\s*c(\d)\s+(W\(\w:=\d+\)|R\(\w\)=\d+)\s+\[\s*(\d+),\s*(\d+|pending)\]\s+\S+\s+(primary|backup) v(\d+)/))) {
+      minimal.rows.push({ client: +m[1], label: m[2], invoke: +m[3], complete: m[4] === "pending" ? null : +m[4] });
+    } else if ((m = line.match(/c(\d) (\S+) completed at t=(\d+) before c(\d) (\S+) was invoked at t=(\d+)/))) {
+      forced.push({ a: { client: +m[1], label: m[2], t: +m[3] }, b: { client: +m[4], label: m[5], t: +m[6] } });
+    } else if ((m = line.match(/^seed=(\d+) ops=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/))) {
+      final = { seed: +m[1], ops: +m[2], trace: m[3], result: m[4] };
+    }
+  }
+  const label = (o) => o.kind === "W" ? `W(${o.key}:=${o.value})` : `R(${o.key})=${o.value ?? "?"}`;
+  ops.forEach((o) => (o.label = label(o)));
+  if (minimal) minimal.ops = minimal.rows.map((r) => ops.find((o) => o.client === r.client && o.label === r.label && o.invoke === r.invoke)).sort((a, b) => a.id - b.id);
+  return { ops, events, minimal, forced, final, text, label };
+}
+const opLabel = (o) => o.kind === "W" ? `W(${o.key || "x"}:=${o.value})` : `R(${o.key || "x"})=${o.value}`;
+
+// ---------------------------------------------------------------- the checker (same algorithm as main.zig `search`)
+function keyHistory(ops, key) { return ops.filter((o) => o.key === key && !(o.kind === "R" && o.complete == null)); }
+function stateValue(ops, st) { return st === 0 ? 0 : ops[st - 1].value; }
+// Returns {ok, order, visited, memoHits, root, steps} ; records the search tree.
+function search(ops, record) {
+  const memo = new Set(); let visited = 0, memoHits = 0; const steps = [];
+  function rec(done, state, parent, opIndex, path) {
+    visited++;
+    const node = { done, state, op: opIndex, parent, depth: parent ? parent.depth + 1 : 0, kind: "node", children: [], blocked: [], path };
+    if (record) { if (parent) parent.children.push(node); steps.push(node); }
+    let minC = Infinity, minI = -1, remaining = false;
+    ops.forEach((o, i) => { if (done & (1 << i)) return; if (o.complete != null) { remaining = true; if (o.complete < minC) { minC = o.complete; minI = i; } } });
+    if (!remaining) { node.kind = "win"; return node; }
+    const key = done + "," + state;
+    if (memo.has(key)) { node.kind = "memo"; memoHits++; return null; }
+    memo.add(key);
+    for (let i = 0; i < ops.length; i++) {
+      const bit = 1 << i; if (done & bit) continue;
+      const o = ops[i];
+      if (o.invoke > minC) { node.blocked.push({ i, by: minI }); continue; }
+      if (o.kind === "W") { const r = rec(done | bit, i + 1, node, i, path.concat(i)); if (r) return r; }
+      else if (stateValue(ops, state) === o.value) { const r = rec(done | bit, state, node, i, path.concat(i)); if (r) return r; }
+      else if (record) { const bad = { op: i, parent: node, depth: node.depth + 1, kind: "bad", children: [], blocked: [], state, reason: `register holds ${stateValue(ops, state)}, read returned ${o.value}` }; node.children.push(bad); steps.push(bad); }
+    }
+    return null;
+  }
+  const win = rec(0, 0, null, null, []);
+  return { ok: !!win, order: win ? win.path : null, visited, memoHits, root: steps[0], steps };
+}
+
+// ---------------------------------------------------------------- data
+const runs = {
+  r1: parseRun(DST.text("log-run1-bug")), r3: parseRun(DST.text("log-run3-bug")),
+  ok1: parseRun(DST.text("log-run1")), ok3: parseRun(DST.text("log-run3")),
+};
+const sweepOk = DST.text("log-sweep"), sweepBug = DST.text("log-sweep-bug");
+const perSeed = DST.text("tsv-bug").trim().split("\n").map((l) => { const f = l.split("\t"); return { seed: +f[0], res: f[1], ops: +f[2], min: f[3] === "-" ? null : +f[3], of: f[4] === "-" ? null : +f[4], key: f[5] }; });
+const fails = perSeed.filter((r) => r.res === "FAIL");
+
+// ---------------------------------------------------------------- hero stats
+{
+  const okN = sweepOk.match(/PASS: (\d+) seeds/)[1], okT = (sweepOk.match(/real\s+(\S+)/) || [, "?"])[1];
+  const firstBug = sweepBug.match(/FAIL at seed=(\d+)/)[1];
+  const stat = (num, lbl) => el("div", { class: "stat" }, el("div", { class: "num" }, num), el("div", { class: "lbl", html: lbl }));
+  DST.$("#stats").append(
+    stat(Number(okN).toLocaleString(), `seeds pass in correct mode (sweep, ${okT.replace("0m", "")})`),
+    stat("seed " + firstBug, "first failure found by <code>sweep --bug</code>"),
+    stat(`${(100 * fails.length / perSeed.length).toFixed(1)}%`, `of seeds 0–${perSeed.length - 1} fail with <code>--bug</code> (${fails.length})`),
+    stat(`≤ ${Math.max(...fails.map((f) => f.min))} ops`, "largest minimal non-linearizable sub-history"));
+}
+
+// ---------------------------------------------------------------- 01 architecture
+{
+  const W = 1000, H = 510, svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+  const defs = s("defs", {}, ["dim", "accent", "accent2", "bug", "violet", "ok"].map((k) =>
+    s("marker", { id: "ah-" + k, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, s("path", { d: "M0,0L10,5L0,10z", fill: C[k] }))));
+  svg.append(defs);
+  // simulated network region
+  svg.append(s("rect", { x: 170, y: 20, width: 470, height: 330, rx: 18, fill: "rgba(93,106,133,.06)", stroke: C.dim, "stroke-dasharray": "6 5" }));
+  svg.append(s("text", { x: 405, y: 42, "text-anchor": "middle", fill: C.dim, "font-size": 12, "font-family": "monospace" }, "simulated network · msgs carry deliver_at · hops 1–6 ticks"));
+  const box = (x, y, w, h, title, sub, col, dashed) => {
+    const g = s("g", {});
+    g.append(s("rect", { x, y, width: w, height: h, rx: 12, fill: "#121b2b", stroke: col, "stroke-width": 1.8, "stroke-dasharray": dashed ? "5 4" : null }));
+    g.append(s("text", { x: x + w / 2, y: y + 24, "text-anchor": "middle", fill: C.text, "font-size": 15, "font-weight": 700 }, title));
+    (Array.isArray(sub) ? sub : [sub]).forEach((t, i) => g.append(s("text", { x: x + w / 2, y: y + 44 + i * 16, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, t)));
+    svg.append(g); return g;
+  };
+  ["c0", "c1", "c2"].forEach((c, i) => box(20, 70 + i * 95, 120, 70, "client " + c, ["1 op outstanding", "session token"], C.dim, true));
+  box(660, 60, 180, 90, "primary", ["assigns versions", "log[1..v] · replicate"], C.accent2);
+  box(660, 250, 180, 100, "backup", ["backup_buffer → apply", "in version order", "backup_reads (pending)"], C.accent2);
+  box(870, 150, 120, 110, "checker", ["history only", "check_key on", "every completion"], C.violet);
+  const paths = {
+    write: { d: "M140,95 C320,60 480,70 660,95", col: "accent", label: "write / read → primary", lx: 400, ly: 62 },
+    replicate: { d: "M720,150 C700,190 700,215 720,250", col: "accent2", label: "replicate (1–30 ticks, reordered)", lx: 560, ly: 205, slow: true },
+    readb: { d: "M140,295 C330,330 480,320 660,305", col: "accent", label: "read(min_version = token)", lx: 330, ly: 336 },
+    rir: { d: "M800,250 C830,215 830,185 800,150", col: "ok", label: "", lx: 0, ly: 0, mode: "ok" },
+    rirep: { d: "M760,150 C770,190 770,210 760,250", col: "ok", label: "", lx: 0, ly: 0, mode: "ok" },
+    reply: { d: "M660,320 C470,420 300,400 140,220", col: "accent", label: "read_ok(value, version)", lx: 300, ly: 392 },
+    hist: { d: "M840,205 L870,205", col: "violet", label: "", lx: 0, ly: 0 },
+  };
+  const modeEls = { ok: [], bug: [] };
+  for (const [k, p] of Object.entries(paths)) {
+    const g = s("g", {});
+    const path = s("path", { d: p.d, fill: "none", stroke: C[p.col], "stroke-width": 2, "marker-end": `url(#ah-${p.col})`, class: "flow", opacity: 0.9 });
+    g.append(path);
+    if (p.label) g.append(s("text", { x: p.lx, y: p.ly, "text-anchor": "middle", fill: C[p.col], "font-size": 11.5, "font-family": "monospace" }, p.label));
+    const dot = s("circle", { r: 4.5, fill: C[p.col] });
+    dot.append(s("animateMotion", { dur: p.slow ? "3.2s" : "1.6s", repeatCount: "indefinite", path: p.d }));
+    g.append(dot);
+    if (p.mode) modeEls[p.mode].push(g);
+    svg.append(g);
+  }
+  // read-index labels (correct) / bug label
+  const okLab = s("g", {}, s("text", { x: 850, y: 40, fill: C.ok, "font-size": 11.5, "font-family": "monospace", "text-anchor": "middle" }, "read_index_request →"),
+    s("text", { x: 850, y: 54, fill: C.ok, "font-size": 11.5, "font-family": "monospace", "text-anchor": "middle" }, "← read_index_reply(commit)"),
+    s("text", { x: 750, y: 380, fill: C.ok, "font-size": 12, "font-family": "monospace", "text-anchor": "middle" }, "need = max(token, primary commit)"),
+    s("text", { x: 750, y: 396, fill: C.muted, "font-size": 11, "font-family": "monospace", "text-anchor": "middle" }, "≥ anything any client has seen"));
+  const bugLab = s("g", {}, s("text", { x: 750, y: 380, fill: C.bug, "font-size": 12, "font-family": "monospace", "text-anchor": "middle", "font-weight": 700 }, "need = min_version (own token only)"),
+    s("text", { x: 750, y: 396, fill: C.muted, "font-size": 11, "font-family": "monospace", "text-anchor": "middle" }, "may be behind writes others saw acked"),
+    s("rect", { x: 660, y: 250, width: 180, height: 100, rx: 12, fill: "none", stroke: C.bug, "stroke-width": 2.5, class: "pulse" }));
+  modeEls.ok.push(okLab); modeEls.bug.push(bugLab); svg.append(okLab, bugLab);
+  // seed flow strip
+  const sy = 472;
+  svg.append(s("text", { x: 20, y: sy - 6, fill: C.muted, "font-size": 12, "font-family": "monospace" }, "seed → DefaultPrng(seed) →"));
+  ["ops_budget 6..12", "key x|y", "write 40%", "read target", "msg delay", "think 1..4"].forEach((t, i) => {
+    const x = 220 + i * 128;
+    svg.append(s("rect", { x, y: sy - 22, width: 118, height: 24, rx: 12, fill: "#101829", stroke: C.warn }));
+    svg.append(s("text", { x: x + 59, y: sy - 6, "text-anchor": "middle", fill: C.warn, "font-size": 11, "font-family": "monospace" }, t));
+  });
+  svg.append(s("text", { x: 20, y: sy + 26, fill: C.dim, "font-size": 11, "font-family": "monospace" }, "every send, delivery, invoke, completion and backup apply → Wyhash trace"));
+  DST.$("#arch").append(svg);
+  const setMode = (m) => {
+    modeEls.ok.forEach((g) => (g.style.display = m === "ok" ? "" : "none"));
+    modeEls.bug.forEach((g) => (g.style.display = m === "bug" ? "" : "none"));
+    bOk.classList.toggle("on", m === "ok"); bBug.classList.toggle("on", m === "bug");
+  };
+  const bOk = el("button", { onclick: () => setMode("ok") }, "correct: read index");
+  const bBug = el("button", { onclick: () => setMode("bug") }, "--bug: session token");
+  DST.$("#arch-mode").append(bOk, bBug);
+  setMode("ok");
+}
+
+// ---------------------------------------------------------------- 02 history lanes + replay
+let histPlayer;
+function showHistory(run, name) {
+  const host = DST.$("#hist-lanes"), ph = DST.$("#hist-player"), logEl = DST.$("#hist-log"), side = DST.$("#hist-side");
+  host.innerHTML = ph.innerHTML = logEl.innerHTML = side.innerHTML = "";
+  if (histPlayer) histPlayer.stop();
+  const tEnd = Math.max(...run.events.map((e) => e.t));
+  const minIds = new Set((run.minimal ? run.minimal.ops : []).map((o) => o.id));
+  const lanesN = ["c0", "c1", "c2", "backup"];
+  const evs = run.ops.map((o) => ({
+    lane: o.client, t: o.invoke, t2: o.complete ?? tEnd, label: o.label + (o.complete == null ? " …" : ""),
+    color: o.complete == null ? "#3a4560" : o.kind === "W" ? C.accent : o.target === "backup" ? C.warn : C.accent2,
+    tip: `${o.label}  c${o.client} → ${o.target}\ninvoke t=${o.invoke}  complete ${o.complete == null ? "pending" : "t=" + o.complete}` + (o.version != null ? `\nserved at v${o.version}` : "") + (o.token != null ? `\nsession token v${o.token}` : ""),
+  }));
+  run.events.filter((e) => e.type === "apply").forEach((e) => evs.push({ lane: 3, t: e.t, r: 6, color: C.violet, tip: e.line }));
+  const arrows = run.forced.map((f) => {
+    const b = run.minimal.ops.find((o) => o.client === f.b.client && o.label === f.b.label);
+    return { from: f.a.client, to: f.b.client, t: f.a.t, t2: f.b.t, color: C.bug, dash: "4 3", opacity: 0.9, tip: `c${f.a.client} ${f.a.label} completed at t=${f.a.t} before c${f.b.client} ${f.b.label} invoked at t=${f.b.t}` };
+  });
+  const L = DST.lanes(host, lanesN, evs, { tmin: 0, tmax: tEnd + 1, laneH: 42, tlabel: "tick", arrows });
+  run.ops.forEach((o, i) => { if (minIds.has(o.id)) { L.nodes[i].setAttribute("stroke", C.bug); L.nodes[i].setAttribute("stroke-width", 2.5); } });
+  // log list
+  const rows = run.events.map((e) => {
+    const cls = e.type === "ok" && e.op.kind === "R" && e.op.target === "backup" ? "ev" : "ev";
+    const r = el("div", { class: "tl-row" }, el("span", { class: "t" }, "t=" + e.t), el("span", {}, el("span", { class: cls }, e.line.replace(/^t=\s*\d+\s*/, ""))));
+    logEl.append(r); return r;
+  });
+  // precompute verdicts at each ok event (exactly when main.zig calls check_key)
+  const verdicts = run.events.map((e, i) => {
+    if (e.type !== "ok") return null;
+    const snapshot = run.ops.filter((o) => run.events.slice(0, i + 1).some((x) => x.type === "invoke" && x.op === o))
+      .map((o) => ({ ...o, complete: run.events.slice(0, i + 1).some((x) => x.type === "ok" && x.op === o) ? o.complete : null, value: o.kind === "R" && !run.events.slice(0, i + 1).some((x) => x.type === "ok" && x.op === o) ? null : o.value }));
+    const h = keyHistory(snapshot, e.op.key), r = search(h, false);
+    return { key: e.op.key, n: h.length, ok: r.ok, visited: r.visited };
+  });
+  const onStep = (i) => {
+    const e = run.events[i], t = e.t;
+    L.mark(t);
+    // grow bars only up to the cursor
+    run.ops.forEach((o, k) => {
+      const n = L.nodes[k], invoked = run.events.slice(0, i + 1).some((x) => x.type === "invoke" && x.op === o);
+      n.setAttribute("opacity", invoked ? 1 : 0.12);
+      const done = run.events.slice(0, i + 1).some((x) => x.type === "ok" && x.op === o);
+      const end = done ? o.complete : Math.max(o.invoke, t);
+      n.setAttribute("width", Math.max(3, L.x(Math.min(end, o.complete ?? tEnd)) - L.x(o.invoke)));
+    });
+    run.events.forEach((x, k) => { if (x.type === "apply") L.nodes[run.ops.length + run.events.filter((y, j) => y.type === "apply" && j < k).length].setAttribute("opacity", k <= i ? 1 : 0.12); });
+    rows.forEach((r, k) => { r.classList.toggle("cur", k === i); r.classList.toggle("fut", k > i); });
+    logEl.scrollTop = rows[i].offsetTop - logEl.clientHeight / 2;
+    // side state
+    const tokens = [0, 0, 0]; let applied = 0, acked = 0;
+    run.events.slice(0, i + 1).forEach((x) => {
+      if (x.type === "ok") { tokens[x.op.client] = Math.max(tokens[x.op.client], x.op.version); if (x.op.kind === "W") acked = Math.max(acked, x.op.version); }
+      if (x.type === "apply") applied = x.v;
+    });
+    side.innerHTML = "";
+    side.append(el("table", { class: "data" },
+      el("tr", {}, el("th", {}, "state at t=" + t), el("th", { class: "num" }, "")),
+      ...[0, 1, 2].map((c) => el("tr", {}, el("td", {}, `c${c} session token`), el("td", { class: "num" }, "v" + tokens[c]))),
+      el("tr", {}, el("td", {}, "highest acked write"), el("td", { class: "num" }, "v" + acked)),
+      el("tr", {}, el("td", {}, "backup_applied"), el("td", { class: "num", style: { color: applied < acked ? C.warn : C.ok } }, "v" + applied + (applied < acked ? "  (behind)" : "")))));
+    const vs = verdicts.slice(0, i + 1).map((v, k) => v && { ...v, k }).filter(Boolean);
+    side.append(el("div", { style: { margin: "8px 0 4px", color: C.muted } }, "check_key after each completion (JS rerun):"),
+      el("div", {}, vs.map((v) => { const sp = el("span", { class: "ev " + (v.ok ? "good" : "bad"), style: { margin: "2px" } }, `${v.key}:${v.ok ? "✓" : "✕"}`); DST.tip(sp, `t=${run.events[v.k].t} key '${v.key}': ${v.n} ops, ${v.visited} search calls → ${v.ok ? "linearizable" : "NOT linearizable"}`); return sp; })));
+    const last = vs[vs.length - 1];
+    if (i === run.events.length - 1 && run.final) {
+      const agree = last && !last.ok && run.final.result === "FAIL" && run.minimal && last.n === run.minimal.of && last.key === run.minimal.key;
+      side.append(el("div", { style: { marginTop: "10px" } }, el("span", { class: "verdict " + (run.final.result === "FAIL" ? "bad" : "ok") }, `Zig: ${run.final.result} · key '${run.minimal?.key}' · ${run.minimal?.n} of ${run.minimal?.of} ops`)),
+        el("div", { style: { marginTop: "6px", color: agree ? C.ok : C.bug } }, agree ? "✓ the JS search agrees: same key, same op count, not linearizable" : "✕ JS and Zig disagree"));
+    }
+  };
+  histPlayer = new DST.Player(ph, { count: run.events.length, onStep, speed: 3, label: (i) => `event ${i + 1}/${run.events.length} · t=${run.events[i].t}` });
+  histPlayer.go(run.events.length - 1);
+}
+{
+  const pick = DST.$("#hist-pick");
+  const bs = [["r1", "run 1 --bug  (2-op counterexample)"], ["r3", "run 3 --bug  (4-op counterexample)"]].map(([k, t]) =>
+    el("button", { onclick: (ev) => { bs.forEach((b) => b.classList.remove("on")); ev.target.classList.add("on"); showHistory(runs[k]); } }, t));
+  pick.append(...bs); bs[1].classList.add("on"); showHistory(runs.r3);
+}
+
+// ---------------------------------------------------------------- 03 search tree
+let treePlayer;
+function showTree(ops, title) {
+  const host = DST.$("#tree"), ph = DST.$("#tree-player"), ex = DST.$("#tree-explain");
+  host.innerHTML = ph.innerHTML = ""; if (treePlayer) treePlayer.stop();
+  const res = search(ops, true), steps = res.steps;
+  // layout: depth → x, leaf order → y
+  let leafY = 0; const colW = 168, rowH = 34, padL = 10, padT = 40;
+  (function lay(n) { if (!n.children.length) { n.y = leafY++; return; } n.children.forEach(lay); n.y = (n.children[0].y + n.children[n.children.length - 1].y) / 2; })(res.root);
+  const maxD = Math.max(...steps.map((n) => n.depth));
+  const W = padL + (maxD + 1) * colW + 250, H = padT + leafY * rowH + 10;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, style: `min-width:${Math.min(W, 900)}px` });
+  const X = (n) => padL + n.depth * colW, Y = (n) => padT + n.y * rowH;
+  for (let d = 0; d <= maxD; d++) svg.append(s("text", { x: padL + d * colW + 4, y: 14, fill: C.dim, "font-size": 11, "font-family": "monospace" }, d === 0 ? "start" : `position ${d}`));
+  const g = new Map();
+  steps.forEach((n, idx) => {
+    const grp = s("g", {}); n.idx = idx;
+    if (n.parent) grp.append(s("path", { d: `M${X(n.parent) + 130},${Y(n.parent)} C${X(n) - 20},${Y(n.parent)} ${X(n) - 30},${Y(n)} ${X(n)},${Y(n)}`, fill: "none", stroke: n.kind === "bad" ? C.bug : C.line, "stroke-width": 1.5 }));
+    const o = n.op != null ? ops[n.op] : null;
+    const col = n.kind === "bad" ? C.bug : n.kind === "memo" ? C.dim : n.kind === "win" ? C.ok : !o ? C.violet : o.kind === "W" ? C.accent : C.accent2;
+    const st = n.kind === "bad" ? null : stateValue(ops, n.state);
+    const txt = o ? `${opLabel(o)}${n.kind === "bad" ? " ✕" : n.kind === "memo" ? " ↺" : ""}` : "start";
+    const rect = s("rect", { x: X(n), y: Y(n) - 12, width: 130, height: 24, rx: 7, fill: n.kind === "bad" ? "rgba(255,92,122,.15)" : "#121b2b", stroke: col, "stroke-width": 1.6 });
+    grp.append(rect, s("text", { x: X(n) + 8, y: Y(n) + 4, fill: C.text, "font-size": 11.5, "font-family": "monospace" }, txt));
+    if (st != null) grp.append(s("text", { x: X(n) + 124, y: Y(n) + 4, "text-anchor": "end", fill: C.muted, "font-size": 10, "font-family": "monospace" }, `${o?.key || ops[0].key || "x"}=${st}`));
+    if (n.blocked.length) {
+      const b = s("text", { x: X(n) + 133, y: Y(n) - 8, fill: C.warn, "font-size": 10, "font-family": "monospace" }, `⏱${n.blocked.length}`);
+      DST.tip(b, n.blocked.map((bl) => `${opLabel(ops[bl.i])} not allowed yet: ${opLabel(ops[bl.by])} completed at t=${ops[bl.by].complete} < invoke t=${ops[bl.i].invoke}`).join("\n"));
+      grp.append(b);
+    }
+    if (!n.children.length || n.kind === "bad") {
+      const reason = n.kind === "bad" ? n.reason : n.kind === "memo" ? "(set, state) already failed → pruned" : n.kind === "win" ? "all completed ops placed → linearizable" : "";
+      if (reason) grp.append(s("text", { x: X(n) + 140, y: Y(n) + 4, fill: n.kind === "win" ? C.ok : n.kind === "memo" ? C.dim : C.bug, "font-size": 11, "font-family": "monospace" }, reason));
+    }
+    DST.tip(rect, () => {
+      const seq = []; for (let p = n; p && p.op != null; p = p.parent) seq.unshift(opLabel(ops[p.op]));
+      return `step ${idx + 1}: ${seq.join(" → ") || "(empty)"}\n${n.kind === "bad" ? n.reason : "register = " + st}`;
+    });
+    svg.append(grp); g.set(n, grp);
+  });
+  host.append(svg);
+  const explain = (n) => {
+    const seq = []; for (let p = n; p && p.op != null; p = p.parent) seq.unshift(opLabel(ops[p.op]));
+    const o = n.op != null ? ops[n.op] : null;
+    if (!o) return `<b>${title}</b>: ${ops.length} ops. Start with register = 0 and nothing placed.`;
+    const what = n.kind === "bad" ? `try <b>${opLabel(o)}</b>: ${n.reason} → dead end`
+      : n.kind === "memo" ? `place <b>${opLabel(o)}</b>: this set of placed ops with register ${stateValue(ops, n.state)} was already explored and failed → pruned by the memo`
+      : n.kind === "win" ? `place <b>${opLabel(o)}</b>: every completed op is placed → a valid linearization`
+      : `place <b>${opLabel(o)}</b> (register = ${stateValue(ops, n.state)})` + (n.blocked.length ? `; ${n.blocked.length} op(s) not yet allowed by real time` : "");
+    return `order so far: ${seq.join(" → ")}<br>${what}`;
+  };
+  const onStep = (i) => {
+    steps.forEach((n, k) => { const gg = g.get(n); gg.setAttribute("opacity", k <= i ? 1 : 0.07); gg.querySelector("rect").setAttribute("stroke-width", k === i ? 3.2 : 1.6); });
+    let tail = "";
+    if (i === steps.length - 1) tail = `<br><b>${res.ok ? "Linearizable" : "No order works"}</b> after ${res.visited} calls to search (${res.memoHits} memo hits). ` + (res.ok ? "" : "This matches the Zig checker's verdict.");
+    ex.innerHTML = explain(steps[i]) + tail;
+  };
+  treePlayer = new DST.Player(ph, { count: steps.length, onStep, speed: 3, label: (i) => `step ${i + 1}/${steps.length}` });
+  treePlayer.go(steps.length - 1);
+}
+{
+  const r1 = runs.r1, r3 = runs.r3;
+  const choices = [
+    [`seed 3 · key ${r3.minimal.key} · all ${keyHistory(r3.ops, r3.minimal.key).length} ops`, () => keyHistory(r3.ops, r3.minimal.key)],
+    [`seed 3 · minimal (${r3.minimal.n} ops)`, () => r3.minimal.ops],
+    [`seed 1 · key ${r1.minimal.key} · all ${keyHistory(r1.ops, r1.minimal.key).length} ops`, () => keyHistory(r1.ops, r1.minimal.key)],
+    [`seed 1 · minimal (${r1.minimal.n} ops)`, () => r1.minimal.ops],
+  ];
+  const bs = choices.map(([t, f]) => el("button", { onclick: (ev) => { bs.forEach((b) => b.classList.remove("on")); ev.target.classList.add("on"); showTree(f(), t); } }, t));
+  DST.$("#tree-pick").append(...bs); bs[0].classList.add("on"); showTree(choices[0][1](), choices[0][0]);
+
+  // forced real-time order graph (seed 3 minimal)
+  const ops = r3.minimal.ops, W = 520, H = 60 + ops.length * 0, svg = s("svg", { viewBox: `0 0 ${W} 200` });
+  svg.append(s("defs", {}, s("marker", { id: "fa", viewBox: "0 0 10 10", refX: 10, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, s("path", { d: "M0,0L10,5L0,10z", fill: C.bug }))));
+  const pos = {}; const writes = ops.filter((o) => o.kind === "W"), reads = ops.filter((o) => o.kind === "R");
+  writes.forEach((o, i) => (pos[o.client + o.label] = [90, 50 + i * 100]));
+  reads.forEach((o, i) => (pos[o.client + o.label] = [410, 50 + i * 100]));
+  r3.forced.forEach((f) => {
+    const [x1, y1] = pos[f.a.client + f.a.label], [x2, y2] = pos[f.b.client + f.b.label];
+    svg.append(s("line", { x1: x1 + 70, y1, x2: x2 - 72, y2, stroke: C.bug, "stroke-width": 1.6, "marker-end": "url(#fa)", opacity: 0.85 }));
+  });
+  ops.forEach((o) => {
+    const [x, y] = pos[o.client + o.label];
+    svg.append(s("rect", { x: x - 70, y: y - 16, width: 140, height: 32, rx: 8, fill: "#121b2b", stroke: o.kind === "W" ? C.accent : C.accent2 }));
+    svg.append(s("text", { x, y: y + 4, "text-anchor": "middle", fill: C.text, "font-size": 12, "font-family": "monospace" }, `c${o.client} ${o.label}`));
+    svg.append(s("text", { x, y: y + 30, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, `[${o.invoke}, ${o.complete}]`));
+  });
+  svg.append(s("text", { x: 260, y: 196, "text-anchor": "middle", fill: C.muted, "font-size": 11, "font-family": "monospace" }, "every write completed before every read was invoked"));
+  DST.$("#forced").append(svg);
+}
+
+// ---------------------------------------------------------------- 04 same seed both modes
+{
+  const draw = (host, run, title, highlight) => {
+    const tEnd = Math.max(...run.events.map((e) => e.t));
+    DST.$(host).append(el("div", { style: { fontFamily: "var(--mono)", fontSize: ".85rem", color: C.muted, margin: "6px 0 0" } }, title));
+    const evs = run.ops.map((o) => ({ lane: o.client, t: o.invoke, t2: o.complete ?? tEnd, label: o.label + (o.complete == null ? " …" : ""),
+      color: o.complete == null ? "#3a4560" : highlight(o) ? (run.final.result === "FAIL" ? C.bug : C.ok) : o.kind === "W" ? C.accent : "#4f7f9a",
+      tip: `${o.label} → ${o.target}  [${o.invoke}, ${o.complete ?? "pending"}]` + (o.version != null ? ` at v${o.version}` : "") }));
+    run.events.filter((e) => e.type === "apply").forEach((e) => evs.push({ lane: 3, t: e.t, r: 5, color: C.violet, tip: e.line }));
+    DST.lanes(host, ["c0", "c1", "c2", "backup"], evs, { tmin: 0, tmax: cmpMax, laneH: 30 });
+  };
+  const cmpMax = Math.max(...[runs.r3, runs.ok3].flatMap((r) => r.events.map((e) => e.t))) + 2;
+  const stale = runs.r3.minimal.ops.find((o) => o.target === "backup");
+  const isC0Read = (o) => o.client === stale.client && o.kind === "R" && o.target === "backup" && o.invoke === stale.invoke;
+  draw("#cmp-bug", runs.r3, `run 3 --bug → ${runs.r3.final.result}  trace=${runs.r3.final.trace}`, isC0Read);
+  draw("#cmp-ok", runs.ok3, `run 3 → ${runs.ok3.final.result}  trace=${runs.ok3.final.trace}`, isC0Read);
+  const a = runs.r3.ops.find(isC0Read), b = runs.ok3.ops.find(isC0Read);
+  const la = runs.r3.events.map((e) => e.line), lb = runs.ok3.events.map((e) => e.line);
+  let same = 0; while (same < la.length && la[same] === lb[same]) same++;
+  DST.$("#cmp-same").textContent = `The first ${same} event lines are identical (up to "${la[same - 1]}"). `;
+  DST.$("#cmp-cap").innerHTML = `c0's backup read invoked at t=${a.invoke}: with <code>--bug</code> it returns <b style="color:var(--bug)">${a.label}</b> at t=${a.complete} (backup at v${a.version}); correct mode returns <b style="color:var(--ok)">${b.label}</b> at t=${b.complete} (v${b.version}) after waiting for the read index. Same time axis (0–${cmpMax} ticks).`;
+}
+
+// ---------------------------------------------------------------- 05 charts
+{
+  let f = 0; const pts = perSeed.map((r, i) => { if (r.res === "FAIL") f++; return [r.seed, (100 * f) / (i + 1)]; }).filter((p, i) => i >= 9);
+  DST.line("#ch-rate", [{ name: "failure %", color: C.bug, points: pts }], { width: 560, height: 300, xlabel: "seed", ylabel: "% failing so far", ymin: 0, yfmt: (v) => v + "%" });
+  const sizes = {}; fails.forEach((r) => (sizes[r.min] = (sizes[r.min] || 0) + 1));
+  DST.bar("#ch-size", Object.keys(sizes).sort().map((k, i) => ({ label: `${k} ops`, value: sizes[k], color: [C.accent2, C.warn, C.bug][i], note: `${sizes[k]} of ${fails.length} failing seeds` })),
+    { labelW: 70, rowH: 40, width: 560, fmt: (v) => `${v} (${((100 * v) / fails.length).toFixed(0)}%)` });
+  // heatmap min size vs key ops
+  const mins = [...new Set(fails.map((r) => r.min))].sort(), ofs = [...new Set(fails.map((r) => r.of))].sort((a, b) => a - b);
+  const cw = 70, ch = 40, l = 110, t = 30, W = l + ofs.length * cw + 20, H = t + mins.length * ch + 40;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, style: `max-width:${W}px` });
+  const cnt = (m, o) => fails.filter((r) => r.min === m && r.of === o).length, mx = Math.max(...mins.flatMap((m) => ofs.map((o) => cnt(m, o))));
+  ofs.forEach((o, j) => svg.append(s("text", { x: l + j * cw + cw / 2, y: t + mins.length * ch + 20, "text-anchor": "middle", fill: C.muted, "font-size": 12, "font-family": "monospace" }, o)));
+  svg.append(s("text", { x: l + (ofs.length * cw) / 2, y: H - 4, "text-anchor": "middle", fill: C.dim, "font-size": 11 }, "ops on the failing key (key_history length)"));
+  mins.forEach((m, i) => {
+    svg.append(s("text", { x: l - 10, y: t + i * ch + ch / 2 + 4, "text-anchor": "end", fill: C.muted, "font-size": 12, "font-family": "monospace" }, `minimal ${m}`));
+    ofs.forEach((o, j) => {
+      const v = cnt(m, o), r = s("rect", { x: l + j * cw + 2, y: t + i * ch + 2, width: cw - 4, height: ch - 4, rx: 6, fill: v ? C.bug : "#121b2b", "fill-opacity": v ? 0.15 + (0.85 * v) / mx : 1, stroke: C.line });
+      DST.tip(r, `${v} seeds: minimal ${m} ops out of ${o} on the key`); svg.append(r);
+      if (v) svg.append(s("text", { x: l + j * cw + cw / 2, y: t + i * ch + ch / 2 + 4, "text-anchor": "middle", fill: C.text, "font-size": 12, "font-family": "monospace", "pointer-events": "none" }, v));
+    });
+  });
+  DST.$("#ch-heat").append(svg);
+}
+
+// ---------------------------------------------------------------- 06 determinism
+{
+  for (const [a, b, name] of [["log-run1-bug", "log-run1-bug-again", "run 1 --bug"], ["log-run3-bug", "log-run3-bug-again", "run 3 --bug"]]) {
+    const ta = DST.text(a), tb = DST.text(b), same = ta === tb;
+    const last = (t) => t.trim().split("\n").pop();
+    const card = el("div", { class: "card" }, el("h4", {}, name + " · twice"));
+    DST.term(card, `$ ${name}\n${last(ta)}\n$ ${name}\n${last(tb)}`, [[/FAIL/, "f"], [/^\$ /, "p"]]);
+    card.append(el("div", { class: "verdict " + (same ? "ok" : "bad"), style: { marginTop: "8px" } }, same ? `✓ byte-identical (${ta.length} bytes, ${ta.split("\n").length} lines)` : "✕ outputs differ"));
+    DST.$("#det").append(card);
+  }
+}
+
+// ---------------------------------------------------------------- 07 interactive checker
+{
+  const host = DST.$("#checker"), out = DST.$("#chk-out"), ctl = DST.$("#chk-ctl");
+  let ops = [];
+  const fromReal = (list) => list.map((o) => ({ client: o.client, kind: o.kind, key: "x", value: o.value, invoke: o.invoke, complete: o.complete }));
+  const presets = [
+    ["seed 3 minimal (real)", () => fromReal(runs.r3.minimal.ops)],
+    ["seed 3 key x (real)", () => fromReal(keyHistory(runs.r3.ops, runs.r3.minimal.key))],
+    ["seed 1 minimal (real)", () => fromReal(runs.r1.minimal.ops)],
+  ];
+  const seedIn = el("input", { type: "number", value: 7, style: { width: "80px" } });
+  function randomHistory(seed) {
+    const r = DST.Rand(seed), res = []; let val = 1;
+    for (let c = 0; c < 3; c++) {
+      let t = r.int(3); const n = 1 + r.int(2);
+      for (let k = 0; k < n; k++) {
+        const w = r.chance(0.45), dur = 2 + r.int(7);
+        res.push({ client: c, kind: w ? "W" : "R", key: "x", value: w ? val++ : 0, invoke: t, complete: t + dur });
+        t += dur + 1 + r.int(3);
+      }
+    }
+    const written = [0, ...res.filter((o) => o.kind === "W").map((o) => o.value)];
+    res.forEach((o) => { if (o.kind === "R") o.value = r.pick(written); });
+    return res.sort((a, b) => a.invoke - b.invoke);
+  }
+  presets.forEach(([t, f]) => ctl.append(el("button", { onclick: () => { ops = f(); render(); } }, t)));
+  ctl.append(el("span", { style: { color: C.dim } }, "│ random seed"), seedIn, el("button", { onclick: () => { ops = randomHistory(+seedIn.value); render(); } }, "generate (DST.Rand)"),
+    el("button", { onclick: () => { const t = Math.max(0, ...ops.map((o) => o.complete)); ops.push({ client: ops.length % 3, kind: "W", key: "x", value: Math.max(0, ...ops.filter((o) => o.kind === "W").map((o) => o.value)) + 1, invoke: Math.max(0, t - 4), complete: t + 2 }); render(); } }, "+ write"),
+    el("button", { onclick: () => { const t = Math.max(0, ...ops.map((o) => o.complete)); ops.push({ client: ops.length % 3, kind: "R", key: "x", value: 0, invoke: Math.max(0, t - 2), complete: t + 4 }); render(); } }, "+ read"),
+    el("button", { onclick: () => { ops.pop(); render(); } }, "− last"));
+  const rowH = 44, l = 150, T = 30;
+  function render() {
+    host.innerHTML = ""; out.innerHTML = "";
+    if (ops.length > 10) ops.length = 10;
+    const tmax = Math.max(20, ...ops.map((o) => o.complete + 3));
+    const W = 1000, H = 30 + ops.length * rowH + 30;
+    const X = (t) => l + (t / tmax) * (W - l - 20);
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}` });
+    for (let t = 0; t <= tmax; t++) {
+      svg.append(s("line", { x1: X(t), x2: X(t), y1: 20, y2: H - 26, stroke: t % 5 ? "#151f33" : C.line }));
+      if (t % 5 === 0) svg.append(s("text", { x: X(t), y: H - 10, "text-anchor": "middle", fill: C.dim, "font-size": 11, "font-family": "monospace" }, t));
+    }
+    const res = search(ops, false);
+    // linearization points (greedy, valid for any order that respects real time)
+    const pts = {};
+    if (res.ok) { let p = -Infinity; res.order.forEach((i, k) => { p = Math.max(p, ops[i].invoke); pts[i] = { p, k }; }); }
+    const toT = (ev) => { const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const q = pt.matrixTransform(svg.getScreenCTM().inverse()); return Math.round(((q.x - l) / (W - l - 20)) * tmax); };
+    ops.forEach((o, i) => {
+      const y = 30 + i * rowH, col = o.kind === "W" ? C.accent : C.accent2;
+      const lab = s("text", { x: l - 12, y: y + 18, "text-anchor": "end", fill: o.kind === "R" ? C.accent2 : C.text, "font-size": 13, "font-family": "monospace", style: o.kind === "R" ? "cursor:pointer;text-decoration:underline dotted" : "" }, `c${o.client} ${opLabel(o)}`);
+      if (o.kind === "R") lab.addEventListener("click", () => {
+        const vals = [0, ...ops.filter((w) => w.kind === "W").map((w) => w.value)]; o.value = vals[(vals.indexOf(o.value) + 1) % vals.length]; render();
+      });
+      svg.append(lab);
+      const bar = s("rect", { x: X(o.invoke), y: y + 4, width: Math.max(4, X(o.complete) - X(o.invoke)), height: 22, rx: 6, fill: col, "fill-opacity": 0.35, stroke: col, "stroke-width": 1.5, style: "cursor:grab" });
+      svg.append(bar);
+      const h1 = s("circle", { cx: X(o.invoke), cy: y + 15, r: 8, fill: "#0b0f17", stroke: col, "stroke-width": 2.5, style: "cursor:ew-resize" });
+      const h2 = s("circle", { cx: X(o.complete), cy: y + 15, r: 8, fill: col, stroke: col, "stroke-width": 2.5, style: "cursor:ew-resize" });
+      svg.append(h1, h2);
+      if (pts[i]) {
+        const cx = X(pts[i].p) + 4 + pts[i].k * 0.001;
+        svg.append(s("circle", { cx: Math.min(cx, X(o.complete)), cy: y + 15, r: 10, fill: C.yellow }));
+        svg.append(s("text", { x: Math.min(cx, X(o.complete)), y: y + 19, "text-anchor": "middle", fill: "#0b0f17", "font-size": 11, "font-weight": 700, "font-family": "monospace" }, pts[i].k + 1));
+      }
+      const drag = (which) => (ev) => {
+        ev.preventDefault(); const start = toT(ev), o0 = { ...o };
+        const move = (e) => {
+          const t = toT(e);
+          if (which === "a") o.invoke = Math.max(0, Math.min(o.complete, t));
+          else if (which === "b") o.complete = Math.max(o.invoke, Math.min(60, t));
+          else { const d = Math.max(-o0.invoke, t - start); o.invoke = o0.invoke + d; o.complete = o0.complete + d; }
+          live();
+        };
+        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); render(); };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      };
+      h1.addEventListener("pointerdown", drag("a")); h2.addEventListener("pointerdown", drag("b")); bar.addEventListener("pointerdown", drag("m"));
+      o._els = { bar, h1, h2 }; o._X = X;
+    });
+    host.append(svg);
+    showVerdict(res);
+  }
+  function live() { // cheap redraw while dragging: move shapes, recompute verdict
+    ops.forEach((o) => { const X = o._X; o._els.bar.setAttribute("x", X(o.invoke)); o._els.bar.setAttribute("width", Math.max(4, X(o.complete) - X(o.invoke))); o._els.h1.setAttribute("cx", X(o.invoke)); o._els.h2.setAttribute("cx", X(o.complete)); });
+    showVerdict(search(ops, false));
+  }
+  function showVerdict(res) {
+    out.innerHTML = "";
+    out.append(el("span", { class: "verdict " + (res.ok ? "ok" : "bad") }, res.ok ? "LINEARIZABLE" : "NOT LINEARIZABLE"),
+      el("span", { style: { marginLeft: "12px", fontFamily: "var(--mono)", fontSize: ".85rem", color: C.muted } },
+        res.ok ? `witness order: ${res.order.map((i) => opLabel(ops[i])).join(" → ")}` : "no order respects real time and register semantics",
+        `  ·  ${res.visited} search calls, ${res.memoHits} memo hits`));
+  }
+  ops = presets[0][1](); render();
+}
+
+// ---------------------------------------------------------------- raw output
+{
+  const files = [["run3-bug", "log-run3-bug"], ["run1-bug", "log-run1-bug"], ["run3 (correct)", "log-run3"], ["run1 (correct)", "log-run1"], ["sweep", "log-sweep"], ["sweep --bug", "log-sweep-bug"]];
+  const raw = DST.$("#raw");
+  const rules = [[/FAIL|NON-LINEARIZABLE/, "f"], [/PASS/, "k"], [/backup applies/, "d"]];
+  const bs = files.map(([t, id]) => el("button", { onclick: (ev) => { bs.forEach((b) => b.classList.remove("on")); ev.target.classList.add("on"); raw.innerHTML = ""; DST.term(raw, DST.text(id), rules); } }, t));
+  DST.$("#raw-pick").append(...bs); bs[0].click();
+}
+</script>
+</body></html>

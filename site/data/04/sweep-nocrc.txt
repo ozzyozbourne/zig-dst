@@ -1,0 +1,2 @@
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug-no-checksum

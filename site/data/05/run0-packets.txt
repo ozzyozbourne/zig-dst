@@ -1,0 +1,1044 @@
+
+          SEED=0
+
+          clients=4
+          requests_per_client=24
+          request_timeout=10 ticks
+          ticks_max_safety=847 ticks
+          one_way_delay_mean=3 ticks
+          one_way_delay_min=1 ticks
+          packet_loss_probability=13%
+          packet_replay_probability=17%
+          path_maximum_capacity=20 messages
+          path_clog_duration_mean=7 ticks
+          path_clog_probability=6/1000 per tick
+
+  [    1] client 2: send r1 transfer(219)
+  [    1] pkt: send seq=1 3->0 request c2 r1 delay=1 ready_at=2 queued=1
+  [    2] pkt: deliver seq=1 3->0 request c2 r1
+  [    2] server: apply c2 r1 amount=219 balance=219
+  [    2] pkt: send seq=2 0->3 reply c2 r1 delay=1 ready_at=3 queued=1
+  [    3] pkt: deliver seq=2 0->3 reply c2 r1
+  [    3] client 2: reply r1 balance=219
+  [    4] client 2: send r2 transfer(898)
+  [    4] pkt: send seq=3 3->0 request c2 r2 delay=1 ready_at=5 queued=1
+  [    4] client 3: send r1 transfer(244)
+  [    4] pkt: send seq=4 4->0 request c3 r1 delay=1 ready_at=5 queued=1
+  [    5] pkt: deliver seq=3 3->0 request c2 r2
+  [    5] server: apply c2 r2 amount=898 balance=1117
+  [    5] pkt: send seq=5 0->3 reply c2 r2 delay=2 ready_at=7 queued=1
+  [    5] pkt: deliver seq=4 4->0 request c3 r1
+  [    5] server: apply c3 r1 amount=244 balance=1361
+  [    5] pkt: send seq=6 0->4 reply c3 r1 delay=2 ready_at=7 queued=1
+  [    7] pkt: deliver seq=5 0->3 reply c2 r2
+  [    7] client 2: reply r2 balance=1117
+  [    7] pkt: deliver seq=6 0->4 reply c3 r1
+  [    7] client 3: reply r1 balance=1361
+  [    8] client 3: send r2 transfer(844)
+  [    8] pkt: send seq=7 4->0 request c3 r2 delay=1 ready_at=9 queued=1
+  [    9] pkt: deliver seq=7 4->0 request c3 r2
+  [    9] server: apply c3 r2 amount=844 balance=2205
+  [    9] pkt: send seq=8 0->4 reply c3 r2 delay=3 ready_at=12 queued=1
+  [    9] client 2: send r3 transfer(329)
+  [    9] pkt: send seq=9 3->0 request c2 r3 delay=1 ready_at=10 queued=1
+  [   10] pkt: deliver seq=9 3->0 request c2 r3
+  [   10] server: apply c2 r3 amount=329 balance=2534
+  [   10] pkt: send seq=10 0->3 reply c2 r3 delay=2 ready_at=12 queued=1
+  [   11] net: path 4->0 clogged for 4 ticks
+  [   12] pkt: deliver seq=10 0->3 reply c2 r3
+  [   12] client 2: reply r3 balance=2534
+  [   12] pkt: deliver seq=8 0->4 reply c3 r2
+  [   12] client 3: reply r2 balance=2205
+  [   13] client 1: send r1 transfer(730)
+  [   13] pkt: send seq=11 2->0 request c1 r1 delay=1 ready_at=14 queued=1
+  [   14] pkt: deliver seq=11 2->0 request c1 r1
+  [   14] server: apply c1 r1 amount=730 balance=3264
+  [   14] pkt: send seq=12 0->2 reply c1 r1 delay=5 ready_at=19 queued=1
+  [   14] client 3: send r3 transfer(13)
+  [   14] pkt: send seq=13 4->0 request c3 r3 delay=4 ready_at=18 queued=1
+  [   16] client 0: send r1 transfer(801)
+  [   16] pkt: send seq=14 1->0 request c0 r1 delay=1 ready_at=17 queued=1
+  [   17] pkt: replay seq=14 1->0 request c0 r1
+  [   17] pkt: send seq=15 1->0 request c0 r1 delay=1 ready_at=18 queued=1
+  [   17] pkt: deliver seq=14 1->0 request c0 r1
+  [   17] server: apply c0 r1 amount=801 balance=4065
+  [   17] pkt: send seq=16 0->1 reply c0 r1 delay=1 ready_at=18 queued=1
+  [   18] pkt: deliver seq=16 0->1 reply c0 r1
+  [   18] client 0: reply r1 balance=4065
+  [   18] pkt: lost seq=15 1->0 request c0 r1
+  [   18] pkt: deliver seq=13 4->0 request c3 r3
+  [   18] server: apply c3 r3 amount=13 balance=4078
+  [   18] pkt: send seq=17 0->4 reply c3 r3 delay=5 ready_at=23 queued=1
+  [   18] client 2: send r4 transfer(555)
+  [   18] pkt: send seq=18 3->0 request c2 r4 delay=7 ready_at=25 queued=1
+  [   19] pkt: deliver seq=12 0->2 reply c1 r1
+  [   19] client 1: reply r1 balance=3264
+  [   22] net: path 2->0 clogged for 10 ticks
+  [   23] pkt: replay seq=17 0->4 reply c3 r3
+  [   23] pkt: send seq=19 0->4 reply c3 r3 delay=2 ready_at=25 queued=1
+  [   23] pkt: deliver seq=17 0->4 reply c3 r3
+  [   23] client 3: reply r3 balance=4078
+  [   23] client 1: send r2 transfer(860)
+  [   23] pkt: send seq=20 2->0 request c1 r2 delay=4 ready_at=27 queued=1
+  [   25] pkt: replay seq=19 0->4 reply c3 r3
+  [   25] pkt: send seq=21 0->4 reply c3 r3 delay=1 ready_at=26 queued=1
+  [   25] pkt: deliver seq=19 0->4 reply c3 r3
+  [   25] pkt: deliver seq=18 3->0 request c2 r4
+  [   25] server: apply c2 r4 amount=555 balance=4633
+  [   25] pkt: send seq=22 0->3 reply c2 r4 delay=1 ready_at=26 queued=1
+  [   26] pkt: deliver seq=22 0->3 reply c2 r4
+  [   26] client 2: reply r4 balance=4633
+  [   26] pkt: deliver seq=21 0->4 reply c3 r3
+  [   29] client 2: send r5 transfer(856)
+  [   29] pkt: send seq=23 3->0 request c2 r5 delay=2 ready_at=31 queued=1
+  [   29] client 3: send r4 transfer(436)
+  [   29] pkt: send seq=24 4->0 request c3 r4 delay=2 ready_at=31 queued=1
+  [   31] pkt: deliver seq=23 3->0 request c2 r5
+  [   31] server: apply c2 r5 amount=856 balance=5489
+  [   31] pkt: send seq=25 0->3 reply c2 r5 delay=1 ready_at=32 queued=1
+  [   31] pkt: deliver seq=24 4->0 request c3 r4
+  [   31] server: apply c3 r4 amount=436 balance=5925
+  [   31] pkt: send seq=26 0->4 reply c3 r4 delay=1 ready_at=32 queued=1
+  [   32] net: path 1->0 clogged for 10 ticks
+  [   32] pkt: lost seq=25 0->3 reply c2 r5
+  [   32] pkt: deliver seq=26 0->4 reply c3 r4
+  [   32] client 3: reply r4 balance=5925
+  [   32] pkt: deliver seq=20 2->0 request c1 r2
+  [   32] server: apply c1 r2 amount=860 balance=6785
+  [   32] pkt: send seq=27 0->2 reply c1 r2 delay=1 ready_at=33 queued=1
+  [   32] client 0: send r2 transfer(455)
+  [   32] pkt: send seq=28 1->0 request c0 r2 delay=2 ready_at=34 queued=1
+  [   33] pkt: deliver seq=27 0->2 reply c1 r2
+  [   33] client 1: reply r2 balance=6785
+  [   34] net: path 0->3 clogged for 10 ticks
+  [   34] client 3: send r5 transfer(533)
+  [   34] pkt: send seq=29 4->0 request c3 r5 delay=2 ready_at=36 queued=1
+  [   36] pkt: deliver seq=29 4->0 request c3 r5
+  [   36] server: apply c3 r5 amount=533 balance=7318
+  [   36] pkt: send seq=30 0->4 reply c3 r5 delay=2 ready_at=38 queued=1
+  [   37] client 1: send r3 transfer(246)
+  [   37] pkt: send seq=31 2->0 request c1 r3 delay=2 ready_at=39 queued=1
+  [   38] net: path 4->0 clogged for 3 ticks
+  [   38] pkt: deliver seq=30 0->4 reply c3 r5
+  [   38] client 3: reply r5 balance=7318
+  [   39] pkt: deliver seq=31 2->0 request c1 r3
+  [   39] server: apply c1 r3 amount=246 balance=7564
+  [   39] pkt: send seq=32 0->2 reply c1 r3 delay=1 ready_at=40 queued=1
+  [   40] pkt: replay seq=32 0->2 reply c1 r3
+  [   40] pkt: send seq=33 0->2 reply c1 r3 delay=1 ready_at=41 queued=1
+  [   40] pkt: deliver seq=32 0->2 reply c1 r3
+  [   40] client 1: reply r3 balance=7564
+  [   40] client 2: timeout, resend r5 (attempt 1)
+  [   40] pkt: send seq=34 3->0 request c2 r5 delay=10 ready_at=50 queued=1
+  [   41] pkt: replay seq=33 0->2 reply c1 r3
+  [   41] pkt: send seq=35 0->2 reply c1 r3 delay=1 ready_at=42 queued=1
+  [   41] pkt: deliver seq=33 0->2 reply c1 r3
+  [   41] client 3: send r6 transfer(203)
+  [   41] pkt: send seq=36 4->0 request c3 r6 delay=1 ready_at=42 queued=1
+  [   42] pkt: deliver seq=35 0->2 reply c1 r3
+  [   42] pkt: replay seq=28 1->0 request c0 r2
+  [   42] pkt: send seq=37 1->0 request c0 r2 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=28 1->0 request c0 r2
+  [   42] server: apply c0 r2 amount=455 balance=8019
+  [   42] pkt: send seq=38 0->1 reply c0 r2 delay=3 ready_at=45 queued=1
+  [   42] pkt: replay seq=36 4->0 request c3 r6
+  [   42] pkt: send seq=39 4->0 request c3 r6 delay=1 ready_at=43 queued=1
+  [   42] pkt: deliver seq=36 4->0 request c3 r6
+  [   42] server: apply c3 r6 amount=203 balance=8222
+  [   42] pkt: send seq=40 0->4 reply c3 r6 delay=3 ready_at=45 queued=1
+  [   43] pkt: replay seq=37 1->0 request c0 r2
+  [   43] pkt: send seq=41 1->0 request c0 r2 delay=1 ready_at=44 queued=1
+  [   43] pkt: deliver seq=37 1->0 request c0 r2
+  [   43] server: duplicate c0 r2 -> cached reply balance=8019
+  [   43] pkt: send seq=42 0->1 reply c0 r2 delay=2 ready_at=45 queued=2
+  [   43] pkt: replay seq=39 4->0 request c3 r6
+  [   43] pkt: send seq=43 4->0 request c3 r6 delay=6 ready_at=49 queued=1
+  [   43] pkt: deliver seq=39 4->0 request c3 r6
+  [   43] server: duplicate c3 r6 -> cached reply balance=8222
+  [   43] pkt: send seq=44 0->4 reply c3 r6 delay=5 ready_at=48 queued=2
+  [   44] pkt: lost seq=41 1->0 request c0 r2
+  [   44] client 1: send r4 transfer(302)
+  [   44] pkt: send seq=45 2->0 request c1 r4 delay=1 ready_at=45 queued=1
+  [   45] pkt: deliver seq=38 0->1 reply c0 r2
+  [   45] client 0: reply r2 balance=8019
+  [   45] pkt: deliver seq=42 0->1 reply c0 r2
+  [   45] pkt: replay seq=40 0->4 reply c3 r6
+  [   45] pkt: send seq=46 0->4 reply c3 r6 delay=1 ready_at=46 queued=2
+  [   45] pkt: deliver seq=40 0->4 reply c3 r6
+  [   45] client 3: reply r6 balance=8222
+  [   45] pkt: deliver seq=45 2->0 request c1 r4
+  [   45] server: apply c1 r4 amount=302 balance=8524
+  [   45] pkt: send seq=47 0->2 reply c1 r4 delay=1 ready_at=46 queued=1
+  [   46] pkt: deliver seq=47 0->2 reply c1 r4
+  [   46] client 1: reply r4 balance=8524
+  [   46] pkt: deliver seq=46 0->4 reply c3 r6
+  [   48] pkt: deliver seq=44 0->4 reply c3 r6
+  [   49] pkt: replay seq=43 4->0 request c3 r6
+  [   49] pkt: send seq=48 4->0 request c3 r6 delay=1 ready_at=50 queued=1
+  [   49] pkt: deliver seq=43 4->0 request c3 r6
+  [   49] server: duplicate c3 r6 -> cached reply balance=8222
+  [   49] pkt: send seq=49 0->4 reply c3 r6 delay=3 ready_at=52 queued=1
+  [   50] pkt: deliver seq=34 3->0 request c2 r5
+  [   50] server: duplicate c2 r5 -> cached reply balance=5489
+  [   50] pkt: send seq=50 0->3 reply c2 r5 delay=1 ready_at=51 queued=1
+  [   50] pkt: deliver seq=48 4->0 request c3 r6
+  [   50] server: duplicate c3 r6 -> cached reply balance=8222
+  [   50] pkt: send seq=51 0->4 reply c3 r6 delay=1 ready_at=51 queued=2
+  [   50] client 3: send r7 transfer(165)
+  [   50] pkt: send seq=52 4->0 request c3 r7 delay=1 ready_at=51 queued=1
+  [   51] pkt: deliver seq=50 0->3 reply c2 r5
+  [   51] client 2: reply r5 balance=5489
+  [   51] pkt: lost seq=51 0->4 reply c3 r6
+  [   51] pkt: deliver seq=52 4->0 request c3 r7
+  [   51] server: apply c3 r7 amount=165 balance=8689
+  [   51] pkt: send seq=53 0->4 reply c3 r7 delay=1 ready_at=52 queued=2
+  [   52] pkt: deliver seq=49 0->4 reply c3 r6
+  [   52] pkt: deliver seq=53 0->4 reply c3 r7
+  [   52] client 3: reply r7 balance=8689
+  [   57] client 3: send r8 transfer(817)
+  [   57] pkt: send seq=54 4->0 request c3 r8 delay=5 ready_at=62 queued=1
+  [   58] client 1: send r5 transfer(292)
+  [   58] pkt: send seq=55 2->0 request c1 r5 delay=1 ready_at=59 queued=1
+  [   59] pkt: lost seq=55 2->0 request c1 r5
+  [   59] client 2: send r6 transfer(947)
+  [   59] pkt: send seq=56 3->0 request c2 r6 delay=1 ready_at=60 queued=1
+  [   60] pkt: replay seq=56 3->0 request c2 r6
+  [   60] pkt: send seq=57 3->0 request c2 r6 delay=1 ready_at=61 queued=1
+  [   60] pkt: deliver seq=56 3->0 request c2 r6
+  [   60] server: apply c2 r6 amount=947 balance=9636
+  [   60] pkt: send seq=58 0->3 reply c2 r6 delay=4 ready_at=64 queued=1
+  [   61] pkt: lost seq=57 3->0 request c2 r6
+  [   62] pkt: deliver seq=54 4->0 request c3 r8
+  [   62] server: apply c3 r8 amount=817 balance=10453
+  [   62] pkt: send seq=59 0->4 reply c3 r8 delay=11 ready_at=73 queued=1
+  [   63] client 0: send r3 transfer(389)
+  [   63] pkt: send seq=60 1->0 request c0 r3 delay=2 ready_at=65 queued=1
+  [   64] pkt: deliver seq=58 0->3 reply c2 r6
+  [   64] client 2: reply r6 balance=9636
+  [   65] pkt: deliver seq=60 1->0 request c0 r3
+  [   65] server: apply c0 r3 amount=389 balance=10842
+  [   65] pkt: send seq=61 0->1 reply c0 r3 delay=1 ready_at=66 queued=1
+  [   65] client 2: send r7 transfer(979)
+  [   65] pkt: send seq=62 3->0 request c2 r7 delay=1 ready_at=66 queued=1
+  [   66] pkt: deliver seq=61 0->1 reply c0 r3
+  [   66] client 0: reply r3 balance=10842
+  [   66] pkt: lost seq=62 3->0 request c2 r7
+  [   69] client 1: timeout, resend r5 (attempt 1)
+  [   69] pkt: send seq=63 2->0 request c1 r5 delay=1 ready_at=70 queued=1
+  [   70] pkt: lost seq=63 2->0 request c1 r5
+  [   70] client 0: send r4 transfer(795)
+  [   70] pkt: send seq=64 1->0 request c0 r4 delay=1 ready_at=71 queued=1
+  [   70] client 3: timeout, resend r8 (attempt 1)
+  [   70] pkt: send seq=65 4->0 request c3 r8 delay=3 ready_at=73 queued=1
+  [   71] pkt: deliver seq=64 1->0 request c0 r4
+  [   71] server: apply c0 r4 amount=795 balance=11637
+  [   71] pkt: send seq=66 0->1 reply c0 r4 delay=1 ready_at=72 queued=1
+  [   72] net: path 4->0 clogged for 2 ticks
+  [   72] pkt: replay seq=66 0->1 reply c0 r4
+  [   72] pkt: send seq=67 0->1 reply c0 r4 delay=1 ready_at=73 queued=1
+  [   72] pkt: deliver seq=66 0->1 reply c0 r4
+  [   72] client 0: reply r4 balance=11637
+  [   73] pkt: deliver seq=67 0->1 reply c0 r4
+  [   73] pkt: deliver seq=59 0->4 reply c3 r8
+  [   73] client 3: reply r8 balance=10453
+  [   74] pkt: deliver seq=65 4->0 request c3 r8
+  [   74] server: duplicate c3 r8 -> cached reply balance=10453
+  [   74] pkt: send seq=68 0->4 reply c3 r8 delay=4 ready_at=78 queued=1
+  [   78] pkt: replay seq=68 0->4 reply c3 r8
+  [   78] pkt: send seq=69 0->4 reply c3 r8 delay=1 ready_at=79 queued=1
+  [   78] pkt: deliver seq=68 0->4 reply c3 r8
+  [   79] pkt: deliver seq=69 0->4 reply c3 r8
+  [   81] client 2: timeout, resend r7 (attempt 1)
+  [   81] pkt: send seq=70 3->0 request c2 r7 delay=1 ready_at=82 queued=1
+  [   82] pkt: replay seq=70 3->0 request c2 r7
+  [   82] pkt: send seq=71 3->0 request c2 r7 delay=1 ready_at=83 queued=1
+  [   82] pkt: deliver seq=70 3->0 request c2 r7
+  [   82] server: apply c2 r7 amount=979 balance=12616
+  [   82] pkt: send seq=72 0->3 reply c2 r7 delay=11 ready_at=93 queued=1
+  [   83] pkt: deliver seq=71 3->0 request c2 r7
+  [   83] server: duplicate c2 r7 -> cached reply balance=12616
+  [   83] pkt: send seq=73 0->3 reply c2 r7 delay=6 ready_at=89 queued=2
+  [   84] client 0: send r5 transfer(60)
+  [   84] pkt: send seq=74 1->0 request c0 r5 delay=1 ready_at=85 queued=1
+  [   85] pkt: replay seq=74 1->0 request c0 r5
+  [   85] pkt: send seq=75 1->0 request c0 r5 delay=1 ready_at=86 queued=1
+  [   85] pkt: deliver seq=74 1->0 request c0 r5
+  [   85] server: apply c0 r5 amount=60 balance=12676
+  [   85] pkt: send seq=76 0->1 reply c0 r5 delay=1 ready_at=86 queued=1
+  [   86] pkt: replay seq=76 0->1 reply c0 r5
+  [   86] pkt: send seq=77 0->1 reply c0 r5 delay=9 ready_at=95 queued=1
+  [   86] pkt: deliver seq=76 0->1 reply c0 r5
+  [   86] client 0: reply r5 balance=12676
+  [   86] pkt: deliver seq=75 1->0 request c0 r5
+  [   86] server: duplicate c0 r5 -> cached reply balance=12676
+  [   86] pkt: send seq=78 0->1 reply c0 r5 delay=2 ready_at=88 queued=2
+  [   88] pkt: lost seq=78 0->1 reply c0 r5
+  [   89] pkt: deliver seq=73 0->3 reply c2 r7
+  [   89] client 2: reply r7 balance=12616
+  [   93] pkt: deliver seq=72 0->3 reply c2 r7
+  [   95] pkt: deliver seq=77 0->1 reply c0 r5
+  [   95] client 1: timeout, resend r5 (attempt 2)
+  [   95] pkt: send seq=79 2->0 request c1 r5 delay=1 ready_at=96 queued=1
+  [   96] pkt: deliver seq=79 2->0 request c1 r5
+  [   96] server: apply c1 r5 amount=292 balance=12968
+  [   96] pkt: send seq=80 0->2 reply c1 r5 delay=1 ready_at=97 queued=1
+  [   97] pkt: lost seq=80 0->2 reply c1 r5
+  [  102] client 0: send r6 transfer(698)
+  [  102] pkt: send seq=81 1->0 request c0 r6 delay=3 ready_at=105 queued=1
+  [  104] client 2: send r8 transfer(705)
+  [  104] pkt: send seq=82 3->0 request c2 r8 delay=11 ready_at=115 queued=1
+  [  105] pkt: deliver seq=81 1->0 request c0 r6
+  [  105] server: apply c0 r6 amount=698 balance=13666
+  [  105] pkt: send seq=83 0->1 reply c0 r6 delay=2 ready_at=107 queued=1
+  [  107] pkt: deliver seq=83 0->1 reply c0 r6
+  [  107] client 0: reply r6 balance=13666
+  [  108] client 0: send r7 transfer(498)
+  [  108] pkt: send seq=84 1->0 request c0 r7 delay=1 ready_at=109 queued=1
+  [  109] pkt: deliver seq=84 1->0 request c0 r7
+  [  109] server: apply c0 r7 amount=498 balance=14164
+  [  109] pkt: send seq=85 0->1 reply c0 r7 delay=1 ready_at=110 queued=1
+  [  110] pkt: deliver seq=85 0->1 reply c0 r7
+  [  110] client 0: reply r7 balance=14164
+  [  111] client 3: send r9 transfer(644)
+  [  111] pkt: send seq=86 4->0 request c3 r9 delay=2 ready_at=113 queued=1
+  [  113] pkt: deliver seq=86 4->0 request c3 r9
+  [  113] server: apply c3 r9 amount=644 balance=14808
+  [  113] pkt: send seq=87 0->4 reply c3 r9 delay=1 ready_at=114 queued=1
+  [  114] pkt: deliver seq=87 0->4 reply c3 r9
+  [  114] client 3: reply r9 balance=14808
+  [  115] pkt: replay seq=82 3->0 request c2 r8
+  [  115] pkt: send seq=88 3->0 request c2 r8 delay=1 ready_at=116 queued=1
+  [  115] pkt: deliver seq=82 3->0 request c2 r8
+  [  115] server: apply c2 r8 amount=705 balance=15513
+  [  115] pkt: send seq=89 0->3 reply c2 r8 delay=2 ready_at=117 queued=1
+  [  116] pkt: replay seq=88 3->0 request c2 r8
+  [  116] pkt: send seq=90 3->0 request c2 r8 delay=1 ready_at=117 queued=1
+  [  116] pkt: deliver seq=88 3->0 request c2 r8
+  [  116] server: duplicate c2 r8 -> cached reply balance=15513
+  [  116] pkt: send seq=91 0->3 reply c2 r8 delay=1 ready_at=117 queued=2
+  [  117] pkt: deliver seq=89 0->3 reply c2 r8
+  [  117] client 2: reply r8 balance=15513
+  [  117] pkt: replay seq=91 0->3 reply c2 r8
+  [  117] pkt: send seq=92 0->3 reply c2 r8 delay=1 ready_at=118 queued=1
+  [  117] pkt: deliver seq=91 0->3 reply c2 r8
+  [  117] pkt: deliver seq=90 3->0 request c2 r8
+  [  117] server: duplicate c2 r8 -> cached reply balance=15513
+  [  117] pkt: send seq=93 0->3 reply c2 r8 delay=3 ready_at=120 queued=2
+  [  118] pkt: replay seq=92 0->3 reply c2 r8
+  [  118] pkt: send seq=94 0->3 reply c2 r8 delay=5 ready_at=123 queued=2
+  [  118] pkt: deliver seq=92 0->3 reply c2 r8
+  [  120] pkt: deliver seq=93 0->3 reply c2 r8
+  [  123] pkt: lost seq=94 0->3 reply c2 r8
+  [  123] client 3: send r10 transfer(706)
+  [  123] pkt: send seq=95 4->0 request c3 r10 delay=1 ready_at=124 queued=1
+  [  124] pkt: lost seq=95 4->0 request c3 r10
+  [  128] net: path 2->0 clogged for 20 ticks
+  [  131] client 2: send r9 transfer(326)
+  [  131] pkt: send seq=96 3->0 request c2 r9 delay=1 ready_at=132 queued=1
+  [  132] pkt: lost seq=96 3->0 request c2 r9
+  [  136] client 0: send r8 transfer(497)
+  [  136] pkt: send seq=97 1->0 request c0 r8 delay=10 ready_at=146 queued=1
+  [  141] client 1: timeout, resend r5 (attempt 3)
+  [  141] pkt: send seq=98 2->0 request c1 r5 delay=8 ready_at=149 queued=1
+  [  141] client 2: timeout, resend r9 (attempt 1)
+  [  141] pkt: send seq=99 3->0 request c2 r9 delay=1 ready_at=142 queued=1
+  [  141] client 3: timeout, resend r10 (attempt 1)
+  [  141] pkt: send seq=100 4->0 request c3 r10 delay=1 ready_at=142 queued=1
+  [  142] pkt: replay seq=99 3->0 request c2 r9
+  [  142] pkt: send seq=101 3->0 request c2 r9 delay=4 ready_at=146 queued=1
+  [  142] pkt: deliver seq=99 3->0 request c2 r9
+  [  142] server: apply c2 r9 amount=326 balance=15839
+  [  142] pkt: send seq=102 0->3 reply c2 r9 delay=2 ready_at=144 queued=1
+  [  142] pkt: deliver seq=100 4->0 request c3 r10
+  [  142] server: apply c3 r10 amount=706 balance=16545
+  [  142] pkt: send seq=103 0->4 reply c3 r10 delay=2 ready_at=144 queued=1
+  [  144] pkt: replay seq=102 0->3 reply c2 r9
+  [  144] pkt: send seq=104 0->3 reply c2 r9 delay=3 ready_at=147 queued=1
+  [  144] pkt: deliver seq=102 0->3 reply c2 r9
+  [  144] client 2: reply r9 balance=15839
+  [  144] pkt: lost seq=103 0->4 reply c3 r10
+  [  146] pkt: deliver seq=97 1->0 request c0 r8
+  [  146] server: apply c0 r8 amount=497 balance=17042
+  [  146] pkt: send seq=105 0->1 reply c0 r8 delay=1 ready_at=147 queued=1
+  [  146] pkt: deliver seq=101 3->0 request c2 r9
+  [  146] server: duplicate c2 r9 -> cached reply balance=15839
+  [  146] pkt: send seq=106 0->3 reply c2 r9 delay=6 ready_at=152 queued=2
+  [  146] client 0: timeout, resend r8 (attempt 1)
+  [  146] pkt: send seq=107 1->0 request c0 r8 delay=4 ready_at=150 queued=1
+  [  147] pkt: deliver seq=105 0->1 reply c0 r8
+  [  147] client 0: reply r8 balance=17042
+  [  147] pkt: deliver seq=104 0->3 reply c2 r9
+  [  149] pkt: deliver seq=98 2->0 request c1 r5
+  [  149] server: duplicate c1 r5 -> cached reply balance=12968
+  [  149] pkt: send seq=108 0->2 reply c1 r5 delay=1 ready_at=150 queued=1
+  [  150] pkt: deliver seq=108 0->2 reply c1 r5
+  [  150] client 1: reply r5 balance=12968
+  [  150] pkt: replay seq=107 1->0 request c0 r8
+  [  150] pkt: send seq=109 1->0 request c0 r8 delay=1 ready_at=151 queued=1
+  [  150] pkt: deliver seq=107 1->0 request c0 r8
+  [  150] server: duplicate c0 r8 -> cached reply balance=17042
+  [  150] pkt: send seq=110 0->1 reply c0 r8 delay=1 ready_at=151 queued=1
+  [  151] pkt: deliver seq=110 0->1 reply c0 r8
+  [  151] pkt: deliver seq=109 1->0 request c0 r8
+  [  151] server: duplicate c0 r8 -> cached reply balance=17042
+  [  151] pkt: send seq=111 0->1 reply c0 r8 delay=1 ready_at=152 queued=1
+  [  151] client 0: send r9 transfer(846)
+  [  151] pkt: send seq=112 1->0 request c0 r9 delay=1 ready_at=152 queued=1
+  [  152] pkt: deliver seq=111 0->1 reply c0 r8
+  [  152] pkt: replay seq=106 0->3 reply c2 r9
+  [  152] pkt: send seq=113 0->3 reply c2 r9 delay=3 ready_at=155 queued=1
+  [  152] pkt: deliver seq=106 0->3 reply c2 r9
+  [  152] pkt: replay seq=112 1->0 request c0 r9
+  [  152] pkt: send seq=114 1->0 request c0 r9 delay=2 ready_at=154 queued=1
+  [  152] pkt: deliver seq=112 1->0 request c0 r9
+  [  152] server: apply c0 r9 amount=846 balance=17888
+  [  152] pkt: send seq=115 0->1 reply c0 r9 delay=3 ready_at=155 queued=1
+  [  154] pkt: lost seq=114 1->0 request c0 r9
+  [  155] pkt: lost seq=115 0->1 reply c0 r9
+  [  155] pkt: deliver seq=113 0->3 reply c2 r9
+  [  168] client 0: timeout, resend r9 (attempt 1)
+  [  168] pkt: send seq=116 1->0 request c0 r9 delay=5 ready_at=173 queued=1
+  [  168] client 2: send r10 transfer(297)
+  [  168] pkt: send seq=117 3->0 request c2 r10 delay=7 ready_at=175 queued=1
+  [  169] client 3: timeout, resend r10 (attempt 2)
+  [  169] pkt: send seq=118 4->0 request c3 r10 delay=2 ready_at=171 queued=1
+  [  171] pkt: deliver seq=118 4->0 request c3 r10
+  [  171] server: duplicate c3 r10 -> cached reply balance=16545
+  [  171] pkt: send seq=119 0->4 reply c3 r10 delay=1 ready_at=172 queued=1
+  [  172] pkt: lost seq=119 0->4 reply c3 r10
+  [  173] pkt: deliver seq=116 1->0 request c0 r9
+  [  173] server: duplicate c0 r9 -> cached reply balance=17888
+  [  173] pkt: send seq=120 0->1 reply c0 r9 delay=1 ready_at=174 queued=1
+  [  174] pkt: deliver seq=120 0->1 reply c0 r9
+  [  174] client 0: reply r9 balance=17888
+  [  175] pkt: lost seq=117 3->0 request c2 r10
+  [  179] client 0: send r10 transfer(851)
+  [  179] pkt: send seq=121 1->0 request c0 r10 delay=2 ready_at=181 queued=1
+  [  181] pkt: deliver seq=121 1->0 request c0 r10
+  [  181] server: apply c0 r10 amount=851 balance=18739
+  [  181] pkt: send seq=122 0->1 reply c0 r10 delay=1 ready_at=182 queued=1
+  [  182] pkt: deliver seq=122 0->1 reply c0 r10
+  [  182] client 0: reply r10 balance=18739
+  [  182] client 1: send r6 transfer(505)
+  [  182] pkt: send seq=123 2->0 request c1 r6 delay=2 ready_at=184 queued=1
+  [  184] pkt: replay seq=123 2->0 request c1 r6
+  [  184] pkt: send seq=124 2->0 request c1 r6 delay=2 ready_at=186 queued=1
+  [  184] pkt: deliver seq=123 2->0 request c1 r6
+  [  184] server: apply c1 r6 amount=505 balance=19244
+  [  184] pkt: send seq=125 0->2 reply c1 r6 delay=3 ready_at=187 queued=1
+  [  184] client 2: timeout, resend r10 (attempt 1)
+  [  184] pkt: send seq=126 3->0 request c2 r10 delay=1 ready_at=185 queued=1
+  [  185] pkt: deliver seq=126 3->0 request c2 r10
+  [  185] server: apply c2 r10 amount=297 balance=19541
+  [  185] pkt: send seq=127 0->3 reply c2 r10 delay=3 ready_at=188 queued=1
+  [  186] pkt: deliver seq=124 2->0 request c1 r6
+  [  186] server: duplicate c1 r6 -> cached reply balance=19244
+  [  186] pkt: send seq=128 0->2 reply c1 r6 delay=1 ready_at=187 queued=2
+  [  187] pkt: deliver seq=125 0->2 reply c1 r6
+  [  187] client 1: reply r6 balance=19244
+  [  187] pkt: deliver seq=128 0->2 reply c1 r6
+  [  188] pkt: lost seq=127 0->3 reply c2 r10
+  [  189] client 1: send r7 transfer(875)
+  [  189] pkt: send seq=129 2->0 request c1 r7 delay=1 ready_at=190 queued=1
+  [  190] pkt: deliver seq=129 2->0 request c1 r7
+  [  190] server: apply c1 r7 amount=875 balance=20416
+  [  190] pkt: send seq=130 0->2 reply c1 r7 delay=1 ready_at=191 queued=1
+  [  191] pkt: deliver seq=130 0->2 reply c1 r7
+  [  191] client 1: reply r7 balance=20416
+  [  200] client 0: send r11 transfer(780)
+  [  200] pkt: send seq=131 1->0 request c0 r11 delay=2 ready_at=202 queued=1
+  [  202] pkt: replay seq=131 1->0 request c0 r11
+  [  202] pkt: send seq=132 1->0 request c0 r11 delay=1 ready_at=203 queued=1
+  [  202] pkt: deliver seq=131 1->0 request c0 r11
+  [  202] server: apply c0 r11 amount=780 balance=21196
+  [  202] pkt: send seq=133 0->1 reply c0 r11 delay=5 ready_at=207 queued=1
+  [  203] pkt: replay seq=132 1->0 request c0 r11
+  [  203] pkt: send seq=134 1->0 request c0 r11 delay=1 ready_at=204 queued=1
+  [  203] pkt: deliver seq=132 1->0 request c0 r11
+  [  203] server: duplicate c0 r11 -> cached reply balance=21196
+  [  203] pkt: send seq=135 0->1 reply c0 r11 delay=1 ready_at=204 queued=2
+  [  204] pkt: deliver seq=135 0->1 reply c0 r11
+  [  204] client 0: reply r11 balance=21196
+  [  204] pkt: deliver seq=134 1->0 request c0 r11
+  [  204] server: duplicate c0 r11 -> cached reply balance=21196
+  [  204] pkt: send seq=136 0->1 reply c0 r11 delay=2 ready_at=206 queued=2
+  [  206] pkt: deliver seq=136 0->1 reply c0 r11
+  [  207] pkt: deliver seq=133 0->1 reply c0 r11
+  [  210] client 3: timeout, resend r10 (attempt 3)
+  [  210] pkt: send seq=137 4->0 request c3 r10 delay=1 ready_at=211 queued=1
+  [  211] pkt: deliver seq=137 4->0 request c3 r10
+  [  211] server: duplicate c3 r10 -> cached reply balance=16545
+  [  211] pkt: send seq=138 0->4 reply c3 r10 delay=1 ready_at=212 queued=1
+  [  211] client 2: timeout, resend r10 (attempt 2)
+  [  211] pkt: send seq=139 3->0 request c2 r10 delay=2 ready_at=213 queued=1
+  [  212] pkt: deliver seq=138 0->4 reply c3 r10
+  [  212] client 3: reply r10 balance=16545
+  [  213] pkt: deliver seq=139 3->0 request c2 r10
+  [  213] server: duplicate c2 r10 -> cached reply balance=19541
+  [  213] pkt: send seq=140 0->3 reply c2 r10 delay=1 ready_at=214 queued=1
+  [  214] pkt: deliver seq=140 0->3 reply c2 r10
+  [  214] client 2: reply r10 balance=19541
+  [  214] client 1: send r8 transfer(818)
+  [  214] pkt: send seq=141 2->0 request c1 r8 delay=1 ready_at=215 queued=1
+  [  215] pkt: deliver seq=141 2->0 request c1 r8
+  [  215] server: apply c1 r8 amount=818 balance=22014
+  [  215] pkt: send seq=142 0->2 reply c1 r8 delay=1 ready_at=216 queued=1
+  [  216] pkt: deliver seq=142 0->2 reply c1 r8
+  [  216] client 1: reply r8 balance=22014
+  [  218] client 1: send r9 transfer(56)
+  [  218] pkt: send seq=143 2->0 request c1 r9 delay=8 ready_at=226 queued=1
+  [  218] client 3: send r11 transfer(633)
+  [  218] pkt: send seq=144 4->0 request c3 r11 delay=6 ready_at=224 queued=1
+  [  223] client 2: send r11 transfer(631)
+  [  223] pkt: send seq=145 3->0 request c2 r11 delay=10 ready_at=233 queued=1
+  [  224] pkt: deliver seq=144 4->0 request c3 r11
+  [  224] server: apply c3 r11 amount=633 balance=22647
+  [  224] pkt: send seq=146 0->4 reply c3 r11 delay=4 ready_at=228 queued=1
+  [  226] pkt: deliver seq=143 2->0 request c1 r9
+  [  226] server: apply c1 r9 amount=56 balance=22703
+  [  226] pkt: send seq=147 0->2 reply c1 r9 delay=1 ready_at=227 queued=1
+  [  227] pkt: lost seq=147 0->2 reply c1 r9
+  [  228] pkt: deliver seq=146 0->4 reply c3 r11
+  [  228] client 3: reply r11 balance=22647
+  [  229] client 1: timeout, resend r9 (attempt 1)
+  [  229] pkt: send seq=148 2->0 request c1 r9 delay=5 ready_at=234 queued=1
+  [  232] client 3: send r12 transfer(986)
+  [  232] pkt: send seq=149 4->0 request c3 r12 delay=1 ready_at=233 queued=1
+  [  233] pkt: replay seq=145 3->0 request c2 r11
+  [  233] pkt: send seq=150 3->0 request c2 r11 delay=3 ready_at=236 queued=1
+  [  233] pkt: deliver seq=145 3->0 request c2 r11
+  [  233] server: apply c2 r11 amount=631 balance=23334
+  [  233] pkt: send seq=151 0->3 reply c2 r11 delay=1 ready_at=234 queued=1
+  [  233] pkt: deliver seq=149 4->0 request c3 r12
+  [  233] server: apply c3 r12 amount=986 balance=24320
+  [  233] pkt: send seq=152 0->4 reply c3 r12 delay=1 ready_at=234 queued=1
+  [  234] net: path 2->0 clogged for 1 ticks
+  [  234] pkt: deliver seq=151 0->3 reply c2 r11
+  [  234] client 2: reply r11 balance=23334
+  [  234] pkt: deliver seq=152 0->4 reply c3 r12
+  [  234] client 3: reply r12 balance=24320
+  [  235] pkt: deliver seq=148 2->0 request c1 r9
+  [  235] server: duplicate c1 r9 -> cached reply balance=22703
+  [  235] pkt: send seq=153 0->2 reply c1 r9 delay=5 ready_at=240 queued=1
+  [  235] client 2: send r12 transfer(855)
+  [  235] pkt: send seq=154 3->0 request c2 r12 delay=1 ready_at=236 queued=2
+  [  235] client 3: send r13 transfer(59)
+  [  235] pkt: send seq=155 4->0 request c3 r13 delay=5 ready_at=240 queued=1
+  [  236] pkt: deliver seq=150 3->0 request c2 r11
+  [  236] server: duplicate c2 r11 -> cached reply balance=23334
+  [  236] pkt: send seq=156 0->3 reply c2 r11 delay=8 ready_at=244 queued=1
+  [  236] pkt: deliver seq=154 3->0 request c2 r12
+  [  236] server: apply c2 r12 amount=855 balance=25175
+  [  236] pkt: send seq=157 0->3 reply c2 r12 delay=4 ready_at=240 queued=2
+  [  240] pkt: deliver seq=153 0->2 reply c1 r9
+  [  240] client 1: reply r9 balance=22703
+  [  240] pkt: lost seq=157 0->3 reply c2 r12
+  [  240] pkt: deliver seq=155 4->0 request c3 r13
+  [  240] server: apply c3 r13 amount=59 balance=25234
+  [  240] pkt: send seq=158 0->4 reply c3 r13 delay=4 ready_at=244 queued=1
+  [  242] client 1: send r10 transfer(110)
+  [  242] pkt: send seq=159 2->0 request c1 r10 delay=3 ready_at=245 queued=1
+  [  243] client 0: send r12 transfer(169)
+  [  243] pkt: send seq=160 1->0 request c0 r12 delay=2 ready_at=245 queued=1
+  [  244] pkt: deliver seq=156 0->3 reply c2 r11
+  [  244] pkt: deliver seq=158 0->4 reply c3 r13
+  [  244] client 3: reply r13 balance=25234
+  [  245] pkt: deliver seq=160 1->0 request c0 r12
+  [  245] server: apply c0 r12 amount=169 balance=25403
+  [  245] pkt: send seq=161 0->1 reply c0 r12 delay=1 ready_at=246 queued=1
+  [  245] pkt: replay seq=159 2->0 request c1 r10
+  [  245] pkt: send seq=162 2->0 request c1 r10 delay=2 ready_at=247 queued=1
+  [  245] pkt: deliver seq=159 2->0 request c1 r10
+  [  245] server: apply c1 r10 amount=110 balance=25513
+  [  245] pkt: send seq=163 0->2 reply c1 r10 delay=1 ready_at=246 queued=1
+  [  246] pkt: deliver seq=161 0->1 reply c0 r12
+  [  246] client 0: reply r12 balance=25403
+  [  246] pkt: deliver seq=163 0->2 reply c1 r10
+  [  246] client 1: reply r10 balance=25513
+  [  247] pkt: deliver seq=162 2->0 request c1 r10
+  [  247] server: duplicate c1 r10 -> cached reply balance=25513
+  [  247] pkt: send seq=164 0->2 reply c1 r10 delay=1 ready_at=248 queued=1
+  [  248] pkt: deliver seq=164 0->2 reply c1 r10
+  [  250] client 2: timeout, resend r12 (attempt 1)
+  [  250] pkt: send seq=165 3->0 request c2 r12 delay=3 ready_at=253 queued=1
+  [  251] client 0: send r13 transfer(952)
+  [  251] pkt: send seq=166 1->0 request c0 r13 delay=1 ready_at=252 queued=1
+  [  251] client 1: send r11 transfer(77)
+  [  251] pkt: send seq=167 2->0 request c1 r11 delay=2 ready_at=253 queued=1
+  [  252] pkt: deliver seq=166 1->0 request c0 r13
+  [  252] server: apply c0 r13 amount=952 balance=26465
+  [  252] pkt: send seq=168 0->1 reply c0 r13 delay=3 ready_at=255 queued=1
+  [  253] pkt: deliver seq=167 2->0 request c1 r11
+  [  253] server: apply c1 r11 amount=77 balance=26542
+  [  253] pkt: send seq=169 0->2 reply c1 r11 delay=1 ready_at=254 queued=1
+  [  253] pkt: deliver seq=165 3->0 request c2 r12
+  [  253] server: duplicate c2 r12 -> cached reply balance=25175
+  [  253] pkt: send seq=170 0->3 reply c2 r12 delay=2 ready_at=255 queued=1
+  [  254] pkt: deliver seq=169 0->2 reply c1 r11
+  [  254] client 1: reply r11 balance=26542
+  [  255] pkt: deliver seq=168 0->1 reply c0 r13
+  [  255] client 0: reply r13 balance=26465
+  [  255] pkt: replay seq=170 0->3 reply c2 r12
+  [  255] pkt: send seq=171 0->3 reply c2 r12 delay=6 ready_at=261 queued=1
+  [  255] pkt: deliver seq=170 0->3 reply c2 r12
+  [  255] client 2: reply r12 balance=25175
+  [  258] client 3: send r14 transfer(693)
+  [  258] pkt: send seq=172 4->0 request c3 r14 delay=13 ready_at=271 queued=1
+  [  261] pkt: deliver seq=171 0->3 reply c2 r12
+  [  271] pkt: lost seq=172 4->0 request c3 r14
+  [  272] client 0: send r14 transfer(470)
+  [  272] pkt: send seq=173 1->0 request c0 r14 delay=1 ready_at=273 queued=1
+  [  272] client 2: send r13 transfer(555)
+  [  272] pkt: send seq=174 3->0 request c2 r13 delay=4 ready_at=276 queued=1
+  [  273] pkt: deliver seq=173 1->0 request c0 r14
+  [  273] server: apply c0 r14 amount=470 balance=27012
+  [  273] pkt: send seq=175 0->1 reply c0 r14 delay=1 ready_at=274 queued=1
+  [  274] pkt: replay seq=175 0->1 reply c0 r14
+  [  274] pkt: send seq=176 0->1 reply c0 r14 delay=1 ready_at=275 queued=1
+  [  274] pkt: deliver seq=175 0->1 reply c0 r14
+  [  274] client 0: reply r14 balance=27012
+  [  275] pkt: deliver seq=176 0->1 reply c0 r14
+  [  276] pkt: deliver seq=174 3->0 request c2 r13
+  [  276] server: apply c2 r13 amount=555 balance=27567
+  [  276] pkt: send seq=177 0->3 reply c2 r13 delay=2 ready_at=278 queued=1
+  [  276] client 1: send r12 transfer(866)
+  [  276] pkt: send seq=178 2->0 request c1 r12 delay=3 ready_at=279 queued=1
+  [  277] client 3: timeout, resend r14 (attempt 1)
+  [  277] pkt: send seq=179 4->0 request c3 r14 delay=3 ready_at=280 queued=1
+  [  278] pkt: replay seq=177 0->3 reply c2 r13
+  [  278] pkt: send seq=180 0->3 reply c2 r13 delay=7 ready_at=285 queued=1
+  [  278] pkt: deliver seq=177 0->3 reply c2 r13
+  [  278] client 2: reply r13 balance=27567
+  [  279] pkt: deliver seq=178 2->0 request c1 r12
+  [  279] server: apply c1 r12 amount=866 balance=28433
+  [  279] pkt: send seq=181 0->2 reply c1 r12 delay=2 ready_at=281 queued=1
+  [  280] pkt: replay seq=179 4->0 request c3 r14
+  [  280] pkt: send seq=182 4->0 request c3 r14 delay=7 ready_at=287 queued=1
+  [  280] pkt: deliver seq=179 4->0 request c3 r14
+  [  280] server: apply c3 r14 amount=693 balance=29126
+  [  280] pkt: send seq=183 0->4 reply c3 r14 delay=1 ready_at=281 queued=1
+  [  281] pkt: deliver seq=181 0->2 reply c1 r12
+  [  281] client 1: reply r12 balance=28433
+  [  281] pkt: replay seq=183 0->4 reply c3 r14
+  [  281] pkt: send seq=184 0->4 reply c3 r14 delay=1 ready_at=282 queued=1
+  [  281] pkt: deliver seq=183 0->4 reply c3 r14
+  [  281] client 3: reply r14 balance=29126
+  [  282] pkt: deliver seq=184 0->4 reply c3 r14
+  [  283] net: path 0->3 clogged for 0 ticks
+  [  285] pkt: deliver seq=180 0->3 reply c2 r13
+  [  287] pkt: deliver seq=182 4->0 request c3 r14
+  [  287] server: duplicate c3 r14 -> cached reply balance=29126
+  [  287] pkt: send seq=185 0->4 reply c3 r14 delay=1 ready_at=288 queued=1
+  [  288] pkt: deliver seq=185 0->4 reply c3 r14
+  [  292] client 0: send r15 transfer(413)
+  [  292] pkt: send seq=186 1->0 request c0 r15 delay=5 ready_at=297 queued=1
+  [  293] client 1: send r13 transfer(225)
+  [  293] pkt: send seq=187 2->0 request c1 r13 delay=1 ready_at=294 queued=1
+  [  294] pkt: deliver seq=187 2->0 request c1 r13
+  [  294] server: apply c1 r13 amount=225 balance=29351
+  [  294] pkt: send seq=188 0->2 reply c1 r13 delay=3 ready_at=297 queued=1
+  [  297] pkt: deliver seq=188 0->2 reply c1 r13
+  [  297] client 1: reply r13 balance=29351
+  [  297] pkt: deliver seq=186 1->0 request c0 r15
+  [  297] server: apply c0 r15 amount=413 balance=29764
+  [  297] pkt: send seq=189 0->1 reply c0 r15 delay=1 ready_at=298 queued=1
+  [  297] client 1: send r14 transfer(820)
+  [  297] pkt: send seq=190 2->0 request c1 r14 delay=1 ready_at=298 queued=1
+  [  298] pkt: deliver seq=189 0->1 reply c0 r15
+  [  298] client 0: reply r15 balance=29764
+  [  298] pkt: deliver seq=190 2->0 request c1 r14
+  [  298] server: apply c1 r14 amount=820 balance=30584
+  [  298] pkt: send seq=191 0->2 reply c1 r14 delay=1 ready_at=299 queued=1
+  [  299] pkt: deliver seq=191 0->2 reply c1 r14
+  [  299] client 1: reply r14 balance=30584
+  [  299] client 3: send r15 transfer(945)
+  [  299] pkt: send seq=192 4->0 request c3 r15 delay=1 ready_at=300 queued=1
+  [  300] pkt: deliver seq=192 4->0 request c3 r15
+  [  300] server: apply c3 r15 amount=945 balance=31529
+  [  300] pkt: send seq=193 0->4 reply c3 r15 delay=1 ready_at=301 queued=1
+  [  301] pkt: deliver seq=193 0->4 reply c3 r15
+  [  301] client 3: reply r15 balance=31529
+  [  307] client 0: send r16 transfer(336)
+  [  307] pkt: send seq=194 1->0 request c0 r16 delay=1 ready_at=308 queued=1
+  [  308] pkt: deliver seq=194 1->0 request c0 r16
+  [  308] server: apply c0 r16 amount=336 balance=31865
+  [  308] pkt: send seq=195 0->1 reply c0 r16 delay=1 ready_at=309 queued=1
+  [  309] pkt: deliver seq=195 0->1 reply c0 r16
+  [  309] client 0: reply r16 balance=31865
+  [  309] client 2: send r14 transfer(772)
+  [  309] pkt: send seq=196 3->0 request c2 r14 delay=5 ready_at=314 queued=1
+  [  311] net: path 4->0 clogged for 1 ticks
+  [  314] pkt: deliver seq=196 3->0 request c2 r14
+  [  314] server: apply c2 r14 amount=772 balance=32637
+  [  314] pkt: send seq=197 0->3 reply c2 r14 delay=1 ready_at=315 queued=1
+  [  315] pkt: replay seq=197 0->3 reply c2 r14
+  [  315] pkt: send seq=198 0->3 reply c2 r14 delay=4 ready_at=319 queued=1
+  [  315] pkt: deliver seq=197 0->3 reply c2 r14
+  [  315] client 2: reply r14 balance=32637
+  [  316] client 0: send r17 transfer(432)
+  [  316] pkt: send seq=199 1->0 request c0 r17 delay=1 ready_at=317 queued=1
+  [  317] pkt: replay seq=199 1->0 request c0 r17
+  [  317] pkt: send seq=200 1->0 request c0 r17 delay=1 ready_at=318 queued=1
+  [  317] pkt: deliver seq=199 1->0 request c0 r17
+  [  317] server: apply c0 r17 amount=432 balance=33069
+  [  317] pkt: send seq=201 0->1 reply c0 r17 delay=1 ready_at=318 queued=1
+  [  317] client 1: send r15 transfer(712)
+  [  317] pkt: send seq=202 2->0 request c1 r15 delay=5 ready_at=322 queued=1
+  [  317] client 3: send r16 transfer(316)
+  [  317] pkt: send seq=203 4->0 request c3 r16 delay=1 ready_at=318 queued=1
+  [  318] pkt: deliver seq=201 0->1 reply c0 r17
+  [  318] client 0: reply r17 balance=33069
+  [  318] pkt: deliver seq=200 1->0 request c0 r17
+  [  318] server: duplicate c0 r17 -> cached reply balance=33069
+  [  318] pkt: send seq=204 0->1 reply c0 r17 delay=3 ready_at=321 queued=1
+  [  318] pkt: lost seq=203 4->0 request c3 r16
+  [  319] pkt: deliver seq=198 0->3 reply c2 r14
+  [  321] pkt: deliver seq=204 0->1 reply c0 r17
+  [  321] client 0: send r18 transfer(760)
+  [  321] pkt: send seq=205 1->0 request c0 r18 delay=4 ready_at=325 queued=1
+  [  322] pkt: deliver seq=202 2->0 request c1 r15
+  [  322] server: apply c1 r15 amount=712 balance=33781
+  [  322] pkt: send seq=206 0->2 reply c1 r15 delay=1 ready_at=323 queued=1
+  [  323] pkt: deliver seq=206 0->2 reply c1 r15
+  [  323] client 1: reply r15 balance=33781
+  [  325] pkt: lost seq=205 1->0 request c0 r18
+  [  336] client 3: timeout, resend r16 (attempt 1)
+  [  336] pkt: send seq=207 4->0 request c3 r16 delay=6 ready_at=342 queued=1
+  [  337] client 0: timeout, resend r18 (attempt 1)
+  [  337] pkt: send seq=208 1->0 request c0 r18 delay=1 ready_at=338 queued=1
+  [  338] pkt: deliver seq=208 1->0 request c0 r18
+  [  338] server: apply c0 r18 amount=760 balance=34541
+  [  338] pkt: send seq=209 0->1 reply c0 r18 delay=7 ready_at=345 queued=1
+  [  342] pkt: deliver seq=207 4->0 request c3 r16
+  [  342] server: apply c3 r16 amount=316 balance=34857
+  [  342] pkt: send seq=210 0->4 reply c3 r16 delay=3 ready_at=345 queued=1
+  [  345] pkt: lost seq=209 0->1 reply c0 r18
+  [  345] pkt: deliver seq=210 0->4 reply c3 r16
+  [  345] client 3: reply r16 balance=34857
+  [  345] client 3: send r17 transfer(619)
+  [  345] pkt: send seq=211 4->0 request c3 r17 delay=3 ready_at=348 queued=1
+  [  348] pkt: deliver seq=211 4->0 request c3 r17
+  [  348] server: apply c3 r17 amount=619 balance=35476
+  [  348] pkt: send seq=212 0->4 reply c3 r17 delay=6 ready_at=354 queued=1
+  [  354] pkt: deliver seq=212 0->4 reply c3 r17
+  [  354] client 3: reply r17 balance=35476
+  [  356] client 1: send r16 transfer(296)
+  [  356] pkt: send seq=213 2->0 request c1 r16 delay=1 ready_at=357 queued=1
+  [  357] pkt: deliver seq=213 2->0 request c1 r16
+  [  357] server: apply c1 r16 amount=296 balance=35772
+  [  357] pkt: send seq=214 0->2 reply c1 r16 delay=3 ready_at=360 queued=1
+  [  359] net: path 0->4 clogged for 17 ticks
+  [  360] pkt: deliver seq=214 0->2 reply c1 r16
+  [  360] client 1: reply r16 balance=35772
+  [  360] client 1: send r17 transfer(440)
+  [  360] pkt: send seq=215 2->0 request c1 r17 delay=1 ready_at=361 queued=1
+  [  361] pkt: deliver seq=215 2->0 request c1 r17
+  [  361] server: apply c1 r17 amount=440 balance=36212
+  [  361] pkt: send seq=216 0->2 reply c1 r17 delay=1 ready_at=362 queued=1
+  [  362] pkt: deliver seq=216 0->2 reply c1 r17
+  [  362] client 1: reply r17 balance=36212
+  [  362] client 0: timeout, resend r18 (attempt 2)
+  [  362] pkt: send seq=217 1->0 request c0 r18 delay=1 ready_at=363 queued=1
+  [  363] pkt: deliver seq=217 1->0 request c0 r18
+  [  363] server: duplicate c0 r18 -> cached reply balance=34541
+  [  363] pkt: send seq=218 0->1 reply c0 r18 delay=7 ready_at=370 queued=1
+  [  367] client 1: send r18 transfer(251)
+  [  367] pkt: send seq=219 2->0 request c1 r18 delay=1 ready_at=368 queued=1
+  [  368] pkt: deliver seq=219 2->0 request c1 r18
+  [  368] server: apply c1 r18 amount=251 balance=36463
+  [  368] pkt: send seq=220 0->2 reply c1 r18 delay=7 ready_at=375 queued=1
+  [  370] pkt: deliver seq=218 0->1 reply c0 r18
+  [  370] client 0: reply r18 balance=34541
+  [  371] client 3: send r18 transfer(51)
+  [  371] pkt: send seq=221 4->0 request c3 r18 delay=8 ready_at=379 queued=1
+  [  375] pkt: deliver seq=220 0->2 reply c1 r18
+  [  375] client 1: reply r18 balance=36463
+  [  377] client 1: send r19 transfer(662)
+  [  377] pkt: send seq=222 2->0 request c1 r19 delay=4 ready_at=381 queued=1
+  [  379] pkt: deliver seq=221 4->0 request c3 r18
+  [  379] server: apply c3 r18 amount=51 balance=36514
+  [  379] pkt: send seq=223 0->4 reply c3 r18 delay=2 ready_at=381 queued=1
+  [  379] client 2: send r15 transfer(983)
+  [  379] pkt: send seq=224 3->0 request c2 r15 delay=1 ready_at=380 queued=1
+  [  380] pkt: deliver seq=224 3->0 request c2 r15
+  [  380] server: apply c2 r15 amount=983 balance=37497
+  [  380] pkt: send seq=225 0->3 reply c2 r15 delay=3 ready_at=383 queued=1
+  [  381] pkt: deliver seq=223 0->4 reply c3 r18
+  [  381] client 3: reply r18 balance=36514
+  [  381] pkt: deliver seq=222 2->0 request c1 r19
+  [  381] server: apply c1 r19 amount=662 balance=38159
+  [  381] pkt: send seq=226 0->2 reply c1 r19 delay=3 ready_at=384 queued=1
+  [  383] pkt: deliver seq=225 0->3 reply c2 r15
+  [  383] client 2: reply r15 balance=37497
+  [  384] pkt: deliver seq=226 0->2 reply c1 r19
+  [  384] client 1: reply r19 balance=38159
+  [  387] client 1: send r20 transfer(922)
+  [  387] pkt: send seq=227 2->0 request c1 r20 delay=1 ready_at=388 queued=1
+  [  388] pkt: deliver seq=227 2->0 request c1 r20
+  [  388] server: apply c1 r20 amount=922 balance=39081
+  [  388] pkt: send seq=228 0->2 reply c1 r20 delay=1 ready_at=389 queued=1
+  [  389] net: path 0->1 clogged for 33 ticks
+  [  389] pkt: deliver seq=228 0->2 reply c1 r20
+  [  389] client 1: reply r20 balance=39081
+  [  398] net: path 2->0 clogged for 12 ticks
+  [  399] client 1: send r21 transfer(960)
+  [  399] pkt: send seq=229 2->0 request c1 r21 delay=1 ready_at=400 queued=1
+  [  401] client 0: send r19 transfer(12)
+  [  401] pkt: send seq=230 1->0 request c0 r19 delay=1 ready_at=402 queued=1
+  [  402] pkt: deliver seq=230 1->0 request c0 r19
+  [  402] server: apply c0 r19 amount=12 balance=39093
+  [  402] pkt: send seq=231 0->1 reply c0 r19 delay=5 ready_at=407 queued=1
+  [  402] client 3: send r19 transfer(516)
+  [  402] pkt: send seq=232 4->0 request c3 r19 delay=1 ready_at=403 queued=1
+  [  403] pkt: deliver seq=232 4->0 request c3 r19
+  [  403] server: apply c3 r19 amount=516 balance=39609
+  [  403] pkt: send seq=233 0->4 reply c3 r19 delay=2 ready_at=405 queued=1
+  [  405] pkt: deliver seq=233 0->4 reply c3 r19
+  [  405] client 3: reply r19 balance=39609
+  [  410] pkt: deliver seq=229 2->0 request c1 r21
+  [  410] server: apply c1 r21 amount=960 balance=40569
+  [  410] pkt: send seq=234 0->2 reply c1 r21 delay=1 ready_at=411 queued=1
+  [  411] pkt: deliver seq=234 0->2 reply c1 r21
+  [  411] client 1: reply r21 balance=40569
+  [  411] client 1: send r22 transfer(295)
+  [  411] pkt: send seq=235 2->0 request c1 r22 delay=1 ready_at=412 queued=1
+  [  412] pkt: lost seq=235 2->0 request c1 r22
+  [  414] client 3: send r20 transfer(725)
+  [  414] pkt: send seq=236 4->0 request c3 r20 delay=1 ready_at=415 queued=1
+  [  415] pkt: deliver seq=236 4->0 request c3 r20
+  [  415] server: apply c3 r20 amount=725 balance=41294
+  [  415] pkt: send seq=237 0->4 reply c3 r20 delay=2 ready_at=417 queued=1
+  [  416] client 0: timeout, resend r19 (attempt 1)
+  [  416] pkt: send seq=238 1->0 request c0 r19 delay=3 ready_at=419 queued=1
+  [  417] pkt: deliver seq=237 0->4 reply c3 r20
+  [  417] client 3: reply r20 balance=41294
+  [  418] client 3: send r21 transfer(540)
+  [  418] pkt: send seq=239 4->0 request c3 r21 delay=3 ready_at=421 queued=1
+  [  419] pkt: deliver seq=238 1->0 request c0 r19
+  [  419] server: duplicate c0 r19 -> cached reply balance=39093
+  [  419] pkt: send seq=240 0->1 reply c0 r19 delay=1 ready_at=420 queued=2
+  [  421] pkt: deliver seq=239 4->0 request c3 r21
+  [  421] server: apply c3 r21 amount=540 balance=41834
+  [  421] pkt: send seq=241 0->4 reply c3 r21 delay=9 ready_at=430 queued=1
+  [  422] pkt: replay seq=231 0->1 reply c0 r19
+  [  422] pkt: send seq=242 0->1 reply c0 r19 delay=11 ready_at=433 queued=2
+  [  422] pkt: deliver seq=231 0->1 reply c0 r19
+  [  422] client 0: reply r19 balance=39093
+  [  422] pkt: deliver seq=240 0->1 reply c0 r19
+  [  424] net: path 0->2 clogged for 16 ticks
+  [  424] client 2: send r16 transfer(923)
+  [  424] pkt: send seq=243 3->0 request c2 r16 delay=1 ready_at=425 queued=1
+  [  425] pkt: replay seq=243 3->0 request c2 r16
+  [  425] pkt: send seq=244 3->0 request c2 r16 delay=1 ready_at=426 queued=1
+  [  425] pkt: deliver seq=243 3->0 request c2 r16
+  [  425] server: apply c2 r16 amount=923 balance=42757
+  [  425] pkt: send seq=245 0->3 reply c2 r16 delay=1 ready_at=426 queued=1
+  [  425] client 1: timeout, resend r22 (attempt 1)
+  [  425] pkt: send seq=246 2->0 request c1 r22 delay=5 ready_at=430 queued=1
+  [  426] pkt: deliver seq=245 0->3 reply c2 r16
+  [  426] client 2: reply r16 balance=42757
+  [  426] pkt: lost seq=244 3->0 request c2 r16
+  [  426] client 0: send r20 transfer(4)
+  [  426] pkt: send seq=247 1->0 request c0 r20 delay=1 ready_at=427 queued=1
+  [  427] pkt: deliver seq=247 1->0 request c0 r20
+  [  427] server: apply c0 r20 amount=4 balance=42761
+  [  427] pkt: send seq=248 0->1 reply c0 r20 delay=4 ready_at=431 queued=2
+  [  430] pkt: deliver seq=241 0->4 reply c3 r21
+  [  430] client 3: reply r21 balance=41834
+  [  430] pkt: deliver seq=246 2->0 request c1 r22
+  [  430] server: apply c1 r22 amount=295 balance=43056
+  [  430] pkt: send seq=249 0->2 reply c1 r22 delay=8 ready_at=438 queued=1
+  [  431] pkt: deliver seq=248 0->1 reply c0 r20
+  [  431] client 0: reply r20 balance=42761
+  [  432] client 0: send r21 transfer(806)
+  [  432] pkt: send seq=250 1->0 request c0 r21 delay=1 ready_at=433 queued=1
+  [  432] client 3: send r22 transfer(408)
+  [  432] pkt: send seq=251 4->0 request c3 r22 delay=3 ready_at=435 queued=1
+  [  433] pkt: deliver seq=242 0->1 reply c0 r19
+  [  433] pkt: lost seq=250 1->0 request c0 r21
+  [  434] net: path 1->0 clogged for 3 ticks
+  [  435] pkt: lost seq=251 4->0 request c3 r22
+  [  440] pkt: deliver seq=249 0->2 reply c1 r22
+  [  440] client 1: reply r22 balance=43056
+  [  449] client 1: send r23 transfer(232)
+  [  449] pkt: send seq=252 2->0 request c1 r23 delay=2 ready_at=451 queued=1
+  [  450] client 0: timeout, resend r21 (attempt 1)
+  [  450] pkt: send seq=253 1->0 request c0 r21 delay=7 ready_at=457 queued=1
+  [  451] pkt: lost seq=252 2->0 request c1 r23
+  [  451] client 3: timeout, resend r22 (attempt 1)
+  [  451] pkt: send seq=254 4->0 request c3 r22 delay=6 ready_at=457 queued=1
+  [  454] net: path 2->0 clogged for 0 ticks
+  [  457] pkt: replay seq=253 1->0 request c0 r21
+  [  457] pkt: send seq=255 1->0 request c0 r21 delay=4 ready_at=461 queued=1
+  [  457] pkt: deliver seq=253 1->0 request c0 r21
+  [  457] server: apply c0 r21 amount=806 balance=43862
+  [  457] pkt: send seq=256 0->1 reply c0 r21 delay=1 ready_at=458 queued=1
+  [  457] pkt: lost seq=254 4->0 request c3 r22
+  [  458] pkt: deliver seq=256 0->1 reply c0 r21
+  [  458] client 0: reply r21 balance=43862
+  [  459] client 1: timeout, resend r23 (attempt 1)
+  [  459] pkt: send seq=257 2->0 request c1 r23 delay=2 ready_at=461 queued=1
+  [  459] client 2: send r17 transfer(598)
+  [  459] pkt: send seq=258 3->0 request c2 r17 delay=4 ready_at=463 queued=1
+  [  461] pkt: deliver seq=255 1->0 request c0 r21
+  [  461] server: duplicate c0 r21 -> cached reply balance=43862
+  [  461] pkt: send seq=259 0->1 reply c0 r21 delay=1 ready_at=462 queued=1
+  [  461] pkt: replay seq=257 2->0 request c1 r23
+  [  461] pkt: send seq=260 2->0 request c1 r23 delay=2 ready_at=463 queued=1
+  [  461] pkt: deliver seq=257 2->0 request c1 r23
+  [  461] server: apply c1 r23 amount=232 balance=44094
+  [  461] pkt: send seq=261 0->2 reply c1 r23 delay=1 ready_at=462 queued=1
+  [  462] pkt: deliver seq=259 0->1 reply c0 r21
+  [  462] pkt: deliver seq=261 0->2 reply c1 r23
+  [  462] client 1: reply r23 balance=44094
+  [  463] pkt: deliver seq=260 2->0 request c1 r23
+  [  463] server: duplicate c1 r23 -> cached reply balance=44094
+  [  463] pkt: send seq=262 0->2 reply c1 r23 delay=2 ready_at=465 queued=1
+  [  463] pkt: lost seq=258 3->0 request c2 r17
+  [  465] pkt: deliver seq=262 0->2 reply c1 r23
+  [  469] client 1: send r24 transfer(515)
+  [  469] pkt: send seq=263 2->0 request c1 r24 delay=9 ready_at=478 queued=1
+  [  474] client 3: timeout, resend r22 (attempt 2)
+  [  474] pkt: send seq=264 4->0 request c3 r22 delay=1 ready_at=475 queued=1
+  [  475] pkt: deliver seq=264 4->0 request c3 r22
+  [  475] server: apply c3 r22 amount=408 balance=44502
+  [  475] pkt: send seq=265 0->4 reply c3 r22 delay=1 ready_at=476 queued=1
+  [  476] pkt: deliver seq=265 0->4 reply c3 r22
+  [  476] client 3: reply r22 balance=44502
+  [  476] client 2: timeout, resend r17 (attempt 1)
+  [  476] pkt: send seq=266 3->0 request c2 r17 delay=2 ready_at=478 queued=1
+  [  476] client 3: send r23 transfer(109)
+  [  476] pkt: send seq=267 4->0 request c3 r23 delay=4 ready_at=480 queued=1
+  [  478] pkt: replay seq=263 2->0 request c1 r24
+  [  478] pkt: send seq=268 2->0 request c1 r24 delay=1 ready_at=479 queued=1
+  [  478] pkt: deliver seq=263 2->0 request c1 r24
+  [  478] server: apply c1 r24 amount=515 balance=45017
+  [  478] pkt: send seq=269 0->2 reply c1 r24 delay=8 ready_at=486 queued=1
+  [  478] pkt: deliver seq=266 3->0 request c2 r17
+  [  478] server: apply c2 r17 amount=598 balance=45615
+  [  478] pkt: send seq=270 0->3 reply c2 r17 delay=2 ready_at=480 queued=1
+  [  479] pkt: deliver seq=268 2->0 request c1 r24
+  [  479] server: duplicate c1 r24 -> cached reply balance=45017
+  [  479] pkt: send seq=271 0->2 reply c1 r24 delay=2 ready_at=481 queued=2
+  [  480] pkt: replay seq=270 0->3 reply c2 r17
+  [  480] pkt: send seq=272 0->3 reply c2 r17 delay=1 ready_at=481 queued=1
+  [  480] pkt: deliver seq=270 0->3 reply c2 r17
+  [  480] client 2: reply r17 balance=45615
+  [  480] pkt: deliver seq=267 4->0 request c3 r23
+  [  480] server: apply c3 r23 amount=109 balance=45724
+  [  480] pkt: send seq=273 0->4 reply c3 r23 delay=1 ready_at=481 queued=1
+  [  481] pkt: deliver seq=271 0->2 reply c1 r24
+  [  481] client 1: reply r24 balance=45017
+  [  481] pkt: deliver seq=272 0->3 reply c2 r17
+  [  481] pkt: replay seq=273 0->4 reply c3 r23
+  [  481] pkt: send seq=274 0->4 reply c3 r23 delay=2 ready_at=483 queued=1
+  [  481] pkt: deliver seq=273 0->4 reply c3 r23
+  [  481] client 3: reply r23 balance=45724
+  [  481] client 2: send r18 transfer(87)
+  [  481] pkt: send seq=275 3->0 request c2 r18 delay=2 ready_at=483 queued=1
+  [  483] pkt: deliver seq=274 0->4 reply c3 r23
+  [  483] pkt: deliver seq=275 3->0 request c2 r18
+  [  483] server: apply c2 r18 amount=87 balance=45811
+  [  483] pkt: send seq=276 0->3 reply c2 r18 delay=2 ready_at=485 queued=1
+  [  485] pkt: deliver seq=276 0->3 reply c2 r18
+  [  485] client 2: reply r18 balance=45811
+  [  486] pkt: deliver seq=269 0->2 reply c1 r24
+  [  487] client 3: send r24 transfer(173)
+  [  487] pkt: send seq=277 4->0 request c3 r24 delay=5 ready_at=492 queued=1
+  [  488] client 2: send r19 transfer(707)
+  [  488] pkt: send seq=278 3->0 request c2 r19 delay=1 ready_at=489 queued=1
+  [  489] pkt: deliver seq=278 3->0 request c2 r19
+  [  489] server: apply c2 r19 amount=707 balance=46518
+  [  489] pkt: send seq=279 0->3 reply c2 r19 delay=1 ready_at=490 queued=1
+  [  490] pkt: deliver seq=279 0->3 reply c2 r19
+  [  490] client 2: reply r19 balance=46518
+  [  492] pkt: replay seq=277 4->0 request c3 r24
+  [  492] pkt: send seq=280 4->0 request c3 r24 delay=1 ready_at=493 queued=1
+  [  492] pkt: deliver seq=277 4->0 request c3 r24
+  [  492] server: apply c3 r24 amount=173 balance=46691
+  [  492] pkt: send seq=281 0->4 reply c3 r24 delay=2 ready_at=494 queued=1
+  [  493] pkt: deliver seq=280 4->0 request c3 r24
+  [  493] server: duplicate c3 r24 -> cached reply balance=46691
+  [  493] pkt: send seq=282 0->4 reply c3 r24 delay=1 ready_at=494 queued=2
+  [  494] pkt: deliver seq=281 0->4 reply c3 r24
+  [  494] client 3: reply r24 balance=46691
+  [  494] pkt: replay seq=282 0->4 reply c3 r24
+  [  494] pkt: send seq=283 0->4 reply c3 r24 delay=4 ready_at=498 queued=1
+  [  494] pkt: deliver seq=282 0->4 reply c3 r24
+  [  496] net: path 3->0 clogged for 0 ticks
+  [  498] pkt: replay seq=283 0->4 reply c3 r24
+  [  498] pkt: send seq=284 0->4 reply c3 r24 delay=2 ready_at=500 queued=1
+  [  498] pkt: deliver seq=283 0->4 reply c3 r24
+  [  500] pkt: deliver seq=284 0->4 reply c3 r24
+  [  510] client 0: send r22 transfer(221)
+  [  510] pkt: send seq=285 1->0 request c0 r22 delay=1 ready_at=511 queued=1
+  [  511] pkt: deliver seq=285 1->0 request c0 r22
+  [  511] server: apply c0 r22 amount=221 balance=46912
+  [  511] pkt: send seq=286 0->1 reply c0 r22 delay=11 ready_at=522 queued=1
+  [  515] client 2: send r20 transfer(41)
+  [  515] pkt: send seq=287 3->0 request c2 r20 delay=6 ready_at=521 queued=1
+  [  521] pkt: deliver seq=287 3->0 request c2 r20
+  [  521] server: apply c2 r20 amount=41 balance=46953
+  [  521] pkt: send seq=288 0->3 reply c2 r20 delay=1 ready_at=522 queued=1
+  [  522] pkt: deliver seq=286 0->1 reply c0 r22
+  [  522] client 0: reply r22 balance=46912
+  [  522] pkt: deliver seq=288 0->3 reply c2 r20
+  [  522] client 2: reply r20 balance=46953
+  [  522] client 0: send r23 transfer(63)
+  [  522] pkt: send seq=289 1->0 request c0 r23 delay=2 ready_at=524 queued=1
+  [  523] client 2: send r21 transfer(629)
+  [  523] pkt: send seq=290 3->0 request c2 r21 delay=1 ready_at=524 queued=1
+  [  524] pkt: deliver seq=289 1->0 request c0 r23
+  [  524] server: apply c0 r23 amount=63 balance=47016
+  [  524] pkt: send seq=291 0->1 reply c0 r23 delay=1 ready_at=525 queued=1
+  [  524] pkt: deliver seq=290 3->0 request c2 r21
+  [  524] server: apply c2 r21 amount=629 balance=47645
+  [  524] pkt: send seq=292 0->3 reply c2 r21 delay=5 ready_at=529 queued=1
+  [  525] pkt: deliver seq=291 0->1 reply c0 r23
+  [  525] client 0: reply r23 balance=47016
+  [  529] pkt: deliver seq=292 0->3 reply c2 r21
+  [  529] client 2: reply r21 balance=47645
+  [  533] client 0: send r24 transfer(701)
+  [  533] pkt: send seq=293 1->0 request c0 r24 delay=4 ready_at=537 queued=1
+  [  536] client 2: send r22 transfer(822)
+  [  536] pkt: send seq=294 3->0 request c2 r22 delay=1 ready_at=537 queued=1
+  [  537] net: path 2->0 clogged for 1 ticks
+  [  537] pkt: deliver seq=293 1->0 request c0 r24
+  [  537] server: apply c0 r24 amount=701 balance=48346
+  [  537] pkt: send seq=295 0->1 reply c0 r24 delay=10 ready_at=547 queued=1
+  [  537] pkt: deliver seq=294 3->0 request c2 r22
+  [  537] server: apply c2 r22 amount=822 balance=49168
+  [  537] pkt: send seq=296 0->3 reply c2 r22 delay=1 ready_at=538 queued=1
+  [  538] net: path 4->0 clogged for 6 ticks
+  [  538] pkt: deliver seq=296 0->3 reply c2 r22
+  [  538] client 2: reply r22 balance=49168
+  [  539] net: path 0->2 clogged for 7 ticks
+  [  547] pkt: replay seq=295 0->1 reply c0 r24
+  [  547] pkt: send seq=297 0->1 reply c0 r24 delay=5 ready_at=552 queued=1
+  [  547] pkt: deliver seq=295 0->1 reply c0 r24
+  [  547] client 0: reply r24 balance=48346
+  [  552] pkt: deliver seq=297 0->1 reply c0 r24
+  [  567] client 2: send r23 transfer(66)
+  [  567] pkt: send seq=298 3->0 request c2 r23 delay=3 ready_at=570 queued=1
+  [  570] pkt: deliver seq=298 3->0 request c2 r23
+  [  570] server: apply c2 r23 amount=66 balance=49234
+  [  570] pkt: send seq=299 0->3 reply c2 r23 delay=3 ready_at=573 queued=1
+  [  573] net: path 0->3 clogged for 0 ticks
+  [  573] pkt: deliver seq=299 0->3 reply c2 r23
+  [  573] client 2: reply r23 balance=49234
+  [  573] client 2: send r24 transfer(980)
+  [  573] pkt: send seq=300 3->0 request c2 r24 delay=4 ready_at=577 queued=1
+  [  577] pkt: replay seq=300 3->0 request c2 r24
+  [  577] pkt: send seq=301 3->0 request c2 r24 delay=1 ready_at=578 queued=1
+  [  577] pkt: deliver seq=300 3->0 request c2 r24
+  [  577] server: apply c2 r24 amount=980 balance=50214
+  [  577] pkt: send seq=302 0->3 reply c2 r24 delay=1 ready_at=578 queued=1
+  [  578] pkt: deliver seq=302 0->3 reply c2 r24
+  [  578] client 2: reply r24 balance=50214
+  [  578] pkt: deliver seq=301 3->0 request c2 r24
+  [  578] server: duplicate c2 r24 -> cached reply balance=50214
+  [  578] pkt: send seq=303 0->3 reply c2 r24 delay=1 ready_at=579 queued=1
+  [  578] transition_to_liveness_mode: loss=0 replay=0 delay=1
+
+  balance=50214 sent=303 lost=32 replayed=50 capacity_dropped=0 clogs=21
+seed=0 ticks=578 trace=1e84e7c45a1d42c1 PASS

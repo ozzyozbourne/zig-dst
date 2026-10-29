@@ -1,0 +1,5153 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>01 · Seeded randomness — DST guide</title><link rel="stylesheet" href="assets/style.css">
+<style>
+  .node rect { transition: stroke .2s, filter .2s; }
+  .node.on rect { stroke: var(--yellow) !important; stroke-width: 2.5; filter: drop-shadow(0 0 8px rgba(245,230,99,.45)); }
+  .tape { display: flex; gap: 6px; flex-wrap: wrap; font-family: var(--mono); font-size: .78rem; margin-top: 10px; }
+  .tape .cell { border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; background: #0f1726; opacity: .28; transition: opacity .2s, border-color .2s; min-width: 74px; }
+  .tape .cell b { display: block; color: var(--text); font-weight: 600; }
+  .tape .cell span { color: var(--dim); font-size: .7rem; }
+  .tape .cell.seen { opacity: 1; }
+  .tape .cell.cur { border-color: var(--yellow); box-shadow: 0 0 0 1px var(--yellow); }
+  .tape .cell.typical b { color: var(--accent); } .tape .cell.anywhere b { color: var(--violet); } .tape .cell.edge b { color: var(--warn); }
+  .tape .cell.fail { border-color: var(--bug); } .tape .cell.fail b { color: var(--bug); }
+  .tape .cell.ok b { color: var(--ok); }
+  .explain { font-family: var(--mono); font-size: .85rem; color: #cfd8ee; background: #0a101b; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-height: 48px; }
+  .seedgrid { display: grid; grid-template-columns: repeat(50, 1fr); gap: 2px; }
+  .seedgrid i { aspect-ratio: 1; border-radius: 2px; background: #1d3a2c; }
+  .seedgrid i.f { background: var(--bug); }
+  .same { color: var(--ok); font-family: var(--mono); font-weight: 700; }
+  .mini-out { font-family: var(--mono); font-size: .8rem; }
+</style></head>
+<body><main>
+  <div class="hero fade-in"><div class="tags"><span class="tag easy">Easy</span><span class="tag">Example 01</span><span class="tag">std.Random · Wyhash</span></div>
+    <h1>The seed is everything</h1>
+    <p class="lede">The smallest possible deterministic simulation. One <code>u64</code> seed feeds one PRNG, and that PRNG is the
+      <em>only</em> source of randomness in the test. When the test fails, the printed seed is a complete bug report: replay it and
+      you get the same inputs, the same failure and the same trace hash. The system under test is a tiny function,
+      <code>average(a, b)</code> on <code>u32</code>, whose buggy version overflows. Everything below comes from real runs of
+      <code>examples/01-seeded-randomness/main.zig</code> (Zig 0.17, ReleaseSafe).</p>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span>One seed drives every draw</h2>
+    <p>The diagram shows the whole program. Teal boxes are the <strong>simulated world</strong>: everything derived from the seed.
+      Orange is the <strong>real code under test</strong>. Step through the real replay of <code>run 0 --bug</code> below. Each cell
+      of the tape is one value the PRNG produced, in the exact order <code>main.zig</code> consumed it. The values come from the
+      opt-in <code>--dump</code> flag, which prints each step without changing the trace hash.</p>
+    <div class="viz">
+      <div class="controls" id="modeBtns"></div>
+      <div id="flow"></div>
+      <div class="explain" id="explain"></div>
+      <div class="tape" id="tape"></div>
+      <div id="player"></div>
+      <div class="legend"><span><i class="sw" style="background:var(--accent2)"></i>simulated (from the seed)</span><span><i class="sw" style="background:var(--warn)"></i>real code under test</span><span><i class="sw" style="background:var(--violet)"></i>oracle &amp; trace</span><span><i class="sw" style="background:var(--yellow)"></i>active in this step</span></div>
+    </div>
+    <p class="src">Source: <code>run_seed()</code> in <code>examples/01-seeded-randomness/main.zig</code>. The draw for <code>steps</code> happens first. With the bug, the run stops at the first wrong answer, so its <code>steps=</code> field counts only the steps it executed.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>The biased generator: generate the inputs that matter</h2>
+    <div class="grid g2">
+      <div>
+        <pre class="code"><span class="kw">fn</span> <span class="fn">gen_value</span>(random: std.Random) <span class="kw">u32</span> {
+    <span class="kw">return switch</span> (random.<span class="fn">uintLessThan</span>(<span class="kw">u8</span>, <span class="n">100</span>)) {
+        <span class="n">0</span>...<span class="n">97</span> =&gt; random.<span class="fn">uintAtMost</span>(<span class="kw">u32</span>, <span class="n">1_000_000</span>), <span class="c">// typical</span>
+        <span class="n">98</span> =&gt; random.<span class="fn">int</span>(<span class="kw">u32</span>), <span class="c">// anywhere</span>
+        <span class="kw">else</span> =&gt; std.math.<span class="fn">maxInt</span>(<span class="kw">u32</span>) - random.<span class="fn">uintAtMost</span>(<span class="kw">u32</span>, <span class="n">16</span>), <span class="c">// edge</span>
+    };
+}</pre>
+        <p>Every value costs two PRNG draws: a roll in <code>0..99</code> that picks a bucket, then the value itself. Real bugs live at
+          the edges, so 1% of values sit within 16 of <code>maxInt(u32)</code>. A uniform generator puts nearly all of its mass in
+          the "anywhere" range and almost never hits an exact edge.</p>
+      </div>
+      <div class="viz" style="margin-top:0">
+        <div id="rollsChart"></div>
+        <div id="bucketChart"></div>
+        <div class="cap" id="rollsCap"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Where the inputs land: the overflow region</h2>
+    <p><code>(a +% b) / 2</code> is wrong exactly when <code>a + b &gt; 2³² − 1</code>, the shaded triangle. Each dot is one real
+      <code>(a, b)</code> pair from the first 400 seeds (<code>sweep 400 --dump</code>). The left plot uses the shipped biased
+      generator. The right plot uses the opt-in <code>--uniform</code> flag (exercise 1 in NOTES.md). Switch to log axes to see the
+      three buckets separate.</p>
+    <div class="controls" id="scaleBtns"></div>
+    <div class="grid g2">
+      <div class="viz" style="margin:0"><div id="scatterB"></div><div class="cap" id="capB"></div></div>
+      <div class="viz" style="margin:0"><div id="scatterU"></div><div class="cap" id="capU"></div></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>typical (roll 0–97)</span><span><i class="sw" style="background:var(--violet)"></i>anywhere (roll 98)</span><span><i class="sw" style="background:var(--warn)"></i>edge (roll 99)</span><span><i class="sw" style="background:var(--accent2)"></i>uniform</span><span><i class="sw" style="background:rgba(255,92,122,.35)"></i>a + b &gt; 2³² − 1 (bug fires)</span><span><i class="sw" style="background:var(--yellow)"></i>a hand-written test: average(2, 4)</span></div>
+    <div class="callout warn"><strong>So why not use uniform inputs?</strong>
+      <span id="uniformNote"></span> A uniform generator would find this bug instantly, but it hides the lesson. Most real bugs are
+      not "half of all inputs are wrong". They sit on narrow edges such as <code>maxInt</code>, zero, or a boundary
+      <code>±1</code>, and uniform sampling almost never lands on those. Hand-written tests stay in the bottom-left corner
+      (<code>average(2, 4)</code>) and never reach the triangle. The biased generator reaches it on purpose, at a controlled rate.</div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>Failure rate per seed, biased vs uniform</h2>
+    <p>The capture script runs <code>run &lt;seed&gt; --bug</code> for seeds 0–999, with and without <code>--uniform</code>. Each
+      square below is one seed. Red means the seed found the overflow.</p>
+    <div class="grid g2">
+      <div class="viz" style="margin:0"><h4 style="margin:0 0 8px">biased (shipped) — <span id="gB"></span></h4><div class="seedgrid" id="gridB"></div></div>
+      <div class="viz" style="margin:0"><h4 style="margin:0 0 8px">uniform (<code>--uniform</code>) — <span id="gU"></span></h4><div class="seedgrid" id="gridU"></div></div>
+    </div>
+    <div class="grid g2">
+      <div class="viz"><div id="cumChart"></div><div class="cap">Cumulative failing seeds as the sweep goes through seeds 0..999.</div></div>
+      <div class="viz"><div id="stepChart"></div><div class="cap">Biased generator: the step at which each failing seed hit the bug (<code>steps=</code> on its FAIL line).</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>The bug, bit by bit</h2>
+    <div class="grid g2">
+      <div><h4>Buggy (<code>--bug</code>)</h4>
+<pre class="code"><span class="kw">fn</span> <span class="fn">average</span>(a: <span class="kw">u32</span>, b: <span class="kw">u32</span>) <span class="kw">u32</span> {
+    <span class="kw">if</span> (bug_enabled) {
+        <span class="c">// Wrapping add so the bug shows up as a wrong</span>
+        <span class="c">// answer instead of a Zig safety panic.</span>
+<span class="bad">        <span class="kw">return</span> (a +% b) / <span class="n">2</span>;</span>
+    }
+    ...</pre></div>
+      <div><h4>Correct</h4>
+<pre class="code"><span class="kw">fn</span> <span class="fn">average</span>(a: <span class="kw">u32</span>, b: <span class="kw">u32</span>) <span class="kw">u32</span> {
+    ...
+    <span class="c">// Correct: never overflows.</span>
+<span class="good">    <span class="kw">return</span> a / <span class="n">2</span> + b / <span class="n">2</span> + (a &amp; b &amp; <span class="n">1</span>);</span>
+}
+
+<span class="c">// Oracle in run_seed(): a wider type cannot overflow.</span>
+<span class="kw">const</span> want: <span class="kw">u32</span> = <span class="fn">@intCast</span>((<span class="fn">@as</span>(<span class="kw">u64</span>, a) + <span class="fn">@as</span>(<span class="kw">u64</span>, b)) / <span class="n">2</span>);</pre></div>
+    </div>
+    <p>These are the inputs of the failing step of seed 0, parsed from the captured log. A 32-bit adder produces 33 bits of result.
+      <code>+%</code> keeps the low 32 and silently drops the carry out of bit 31, which is worth 2³² = 4,294,967,296. Halving the
+      wrapped sum gives a value that is too small by exactly 2³¹.</p>
+    <div class="viz"><div class="controls"><button class="primary" id="bitsGo">▶ replay the addition</button><span class="out" id="bitsOut"></span></div><div id="bits"></div>
+      <div class="cap" id="bitsCap"></div></div>
+    <div id="failLog"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>Determinism: replay twice, get the same trace</h2>
+    <p>Every step folds <code>[a, b, got]</code> into a Wyhash: <code>trace.update(std.mem.asBytes(&amp;[3]u32{ a, b, got }))</code>.
+      The capture script ran <code>run 0 --bug</code> twice, as separate processes:</p>
+    <div class="grid g2"><div id="replayA"></div><div id="replayB"></div></div>
+    <div class="callout ok" id="sameNote"></div>
+    <p>The run without the bug (<code>run 0</code>) draws the <em>same</em> inputs. Only <code>got</code> differs at the step where
+      the bug fires, so the hash differs from there on and the passing run continues to its third step:</p>
+    <div class="viz"><table class="data" id="cmpTable"></table></div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>Try it in the browser: a seed-driven mini sweep</h2>
+    <div class="callout info"><strong>JavaScript re-implementation, for illustration only.</strong> It uses the guide's
+      <code>DST.Rand</code> (sfc32), not Zig's Xoshiro256++, so seed N here does <em>not</em> produce the same values as seed N of the
+      real program. It does follow the same rules: one seed, one PRNG, the same three buckets, a 32-bit wrapping add, and the same
+      oracle. The same seed always gives the same run.</div>
+    <div class="viz">
+      <div class="controls">seed <input type="number" id="mSeed" value="0" min="0" style="width:110px">
+        <select id="mGen"><option value="biased">biased generator</option><option value="uniform">uniform generator</option></select>
+        <button class="primary" id="mRun">run seed</button><button id="mSweep">sweep 1000 seeds</button><span class="out" id="mSum"></span></div>
+      <div class="mini-out" id="mOut"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span>How TigerBeetle does the same thing</h2>
+    <div class="grid g2">
+      <div class="card"><h4><a class="file" href="https://github.com/tigerbeetle/tigerbeetle/blob/0450c32b2/src/vopr.zig#L127-L150">src/vopr.zig</a> · <code>main</code></h4>
+<pre class="code"><span class="kw">const</span> seed_random = stdx.<span class="fn">crypto_random_int</span>(init.io, <span class="kw">u64</span>);
+<span class="kw">const</span> seed = seed_from_arg: {
+    <span class="kw">const</span> seed_argument = cli_args.seed <span class="kw">orelse break</span> :seed_from_arg seed_random;
+    <span class="kw">break</span> :seed_from_arg vsr.testing.<span class="fn">parse_seed</span>(seed_argument);
+};
+...
+<span class="kw">var</span> prng = stdx.PRNG.<span class="fn">from_seed</span>(seed);
+
+<span class="kw">var</span> options = <span class="kw">if</span> (cli_args.lite)
+    <span class="fn">options_lite</span>(&amp;prng)
+<span class="kw">else if</span> (cli_args.performance)
+    <span class="fn">options_performance</span>(&amp;prng)
+<span class="kw">else</span>
+    <span class="fn">options_swarm</span>(&amp;prng);</pre>
+        <p>The same pattern at full scale. Either the seed is given, or one fresh random seed is drawn. It is logged first
+          (<code>SEED={}</code>), and every cluster option and sub-seed is then derived from that single PRNG. When the run fails, it
+          logs <code>you can reproduce this failure with seed={}</code> (line 349).</p></div>
+      <div class="card"><h4><a class="file" href="https://github.com/tigerbeetle/tigerbeetle/blob/0450c32b2/src/testing/fuzz.zig#L14-L29">src/testing/fuzz.zig</a> · biased distributions</h4>
+<pre class="code"><span class="c">/// Returns an integer of type `T` with an exponential distribution of rate `avg`.</span>
+<span class="kw">pub fn</span> <span class="fn">random_int_exponential</span>(prng: *stdx.PRNG, <span class="kw">comptime</span> T: <span class="kw">type</span>, avg: T) T {
+    ...
+    <span class="kw">const</span> random = std.Random.<span class="fn">init</span>(prng, stdx.PRNG.fill);
+    <span class="kw">const</span> exp = random.<span class="fn">floatExp</span>(<span class="kw">f64</span>) * <span class="fn">@as</span>(<span class="kw">f64</span>, <span class="fn">@floatFromInt</span>(avg));
+    <span class="kw">return</span> std.math.<span class="fn">lossyCast</span>(T, exp);
+}</pre>
+        <p>TigerBeetle's fuzzers do not draw uniformly either. Sizes and counts are mostly small and occasionally huge
+          (exponential). <code>range_inclusive_ms</code> (line 71) draws durations, and the swarm-testing helpers turn whole
+          features off for some seeds. All of these exist so that seeds keep reaching the rare edges.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span>Run it yourself</h2>
+<pre class="term"><span class="p">$ cd examples/01-seeded-randomness</span>
+<span class="p">$ zig run main.zig -- sweep 10000</span>            <span class="d"># correct code: every seed passes</span>
+<span class="p">$ zig run main.zig -- sweep 10000 --bug</span>      <span class="d"># stops at the first failing seed and prints the replay command</span>
+<span class="p">$ zig run main.zig -- run 0 --bug</span>            <span class="d"># the replay: same inputs, same trace hash, every time</span>
+<span class="p">$ zig run main.zig -- run 0 --bug --dump</span>     <span class="d"># opt-in: print every step's bucket rolls and (a, b)</span>
+<span class="p">$ zig run main.zig -- sweep 10000 --bug --uniform</span>  <span class="d"># opt-in: uniform u32 inputs (exercise 1)</span></pre>
+    <p>The real outputs captured for this page:</p>
+    <div class="grid g3"><div id="tSweep"></div><div id="tSweepBug"></div><div id="tSweepU"></div></div>
+  </section>
+</main>
+<script type="text/plain" id="log-sweep" data-src="data/01/sweep.txt">
+PASS: 10000 seeds
+</script>
+<script type="text/plain" id="log-sweep-bug" data-src="data/01/sweep-bug.txt">
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug
+</script>
+<script type="text/plain" id="log-sweep-bug-uniform" data-src="data/01/sweep-bug-uniform.txt">
+FAIL at seed=0 after 1 seeds. Replay with:
+  zig run main.zig -- run 0 --bug
+</script>
+<script type="text/plain" id="log-run0-bug-a" data-src="data/01/run0-bug-a.txt">
+  step 1: average(274594, 4294967283) = 137290, want 2147620938
+seed=0 steps=2 trace=5e8db608ab3a4b37 FAIL
+</script>
+<script type="text/plain" id="log-run0-bug-b" data-src="data/01/run0-bug-b.txt">
+  step 1: average(274594, 4294967283) = 137290, want 2147620938
+seed=0 steps=2 trace=5e8db608ab3a4b37 FAIL
+</script>
+<script type="text/plain" id="log-run0" data-src="data/01/run0.txt">
+seed=0 steps=3 trace=842142446d687ff3 PASS
+</script>
+<script type="text/plain" id="log-run0-bug-dump" data-src="data/01/run0-bug-dump.txt">
+  dump seed=0 step=0 roll_a=2 a=924233 roll_b=91 b=343514 got=633873 want=633873
+  dump seed=0 step=1 roll_a=42 a=274594 roll_b=99 b=4294967283 got=137290 want=2147620938
+  step 1: average(274594, 4294967283) = 137290, want 2147620938
+seed=0 steps=2 trace=5e8db608ab3a4b37 FAIL
+</script>
+<script type="text/plain" id="log-run0-dump" data-src="data/01/run0-dump.txt">
+  dump seed=0 step=0 roll_a=2 a=924233 roll_b=91 b=343514 got=633873 want=633873
+  dump seed=0 step=1 roll_a=42 a=274594 roll_b=99 b=4294967283 got=2147620938 want=2147620938
+  dump seed=0 step=2 roll_a=40 a=912755 roll_b=75 b=66328 got=489541 want=489541
+seed=0 steps=3 trace=842142446d687ff3 PASS
+</script>
+<script type="text/plain" id="tsv-pairs-biased" data-src="data/01/pairs-biased.tsv">
+0 0 2 924233 91 343514
+0 1 42 274594 99 4294967283
+0 2 40 912755 75 66328
+1 0 12 22664 26 34974
+1 1 12 51564 8 862548
+1 2 69 411961 28 833169
+1 3 63 644397 61 251954
+2 0 44 439850 9 148548
+2 1 8 217079 28 708421
+2 2 86 719095 81 949392
+2 3 59 175200 62 376333
+2 4 33 191488 72 378914
+2 5 39 607373 41 807338
+3 0 21 588244 41 508553
+3 1 58 337749 5 570976
+3 2 64 290288 85 501410
+3 3 3 755313 75 955266
+3 4 72 474602 19 680691
+3 5 71 894859 10 605164
+4 0 20 542289 51 151408
+4 1 34 322714 87 181428
+4 2 64 98945 50 202451
+4 3 81 35363 54 427726
+4 4 70 727647 36 754634
+5 0 89 459579 61 508532
+5 1 66 184524 78 736508
+5 2 21 171576 38 483127
+5 3 37 413291 60 916167
+5 4 90 34153 1 62404
+5 5 94 44954 5 981994
+5 6 69 702209 54 391227
+5 7 71 647999 22 87351
+6 0 43 300453 53 819863
+6 1 41 57068 22 175742
+6 2 89 644829 3 805877
+6 3 24 595460 73 299159
+6 4 82 676897 74 300788
+6 5 20 50385 55 459547
+6 6 51 836442 75 163489
+6 7 21 760155 35 985968
+7 0 7 690740 23 958878
+7 1 53 383280 15 76599
+8 0 96 285564 21 608346
+8 1 6 371950 12 511832
+8 2 85 428029 70 337528
+8 3 38 31625 76 746117
+8 4 62 959141 3 389962
+8 5 63 42923 94 92807
+8 6 57 514683 94 679305
+8 7 87 389350 67 144012
+9 0 18 69140 79 161090
+9 1 63 569320 12 166346
+10 0 91 465887 23 750814
+10 1 26 23115 90 547948
+10 2 57 401767 4 432702
+10 3 97 453628 62 175106
+10 4 26 491449 22 249244
+10 5 15 745117 73 641838
+10 6 48 7260 55 230781
+10 7 74 367417 18 331398
+11 0 22 520229 62 253097
+11 1 95 359207 65 183229
+11 2 74 19838 42 738086
+11 3 42 499751 67 586298
+12 0 57 365760 31 735396
+13 0 95 583778 41 797270
+13 1 65 939282 7 899950
+13 2 43 918647 41 952248
+13 3 79 501124 27 229717
+13 4 87 609626 21 647154
+13 5 80 351844 40 425091
+14 0 81 533001 8 449498
+14 1 64 377323 16 70978
+14 2 64 42458 84 835121
+14 3 45 410106 4 654402
+14 4 85 861326 72 284100
+15 0 9 937886 18 655120
+15 1 30 896239 35 618722
+15 2 32 794910 47 971880
+16 0 97 500354 0 521505
+16 1 72 456948 62 894205
+17 0 80 715951 79 467312
+17 1 3 65153 38 507334
+17 2 75 177428 27 76198
+17 3 59 20704 59 485275
+17 4 31 147923 83 348464
+17 5 22 808299 3 225247
+17 6 42 100031 73 253564
+17 7 73 555579 15 233362
+18 0 0 953562 89 754883
+18 1 19 971265 87 100945
+18 2 94 421277 32 387933
+18 3 7 648890 76 835951
+18 4 19 529891 62 415593
+18 5 70 148618 28 630615
+18 6 7 559411 70 268844
+18 7 26 996036 46 754960
+19 0 6 660271 72 180516
+19 1 75 432228 81 277120
+19 2 23 190726 32 486949
+19 3 92 688217 50 169610
+19 4 94 952184 83 899690
+19 5 33 943426 14 315064
+20 0 29 809761 55 794239
+20 1 17 13204 62 664592
+20 2 54 735310 1 201725
+21 0 8 844504 98 95766828
+21 1 91 624859 2 8075
+21 2 88 497760 1 446028
+21 3 69 751028 93 810309
+22 0 39 347508 89 151134
+22 1 50 688932 37 185784
+22 2 39 396729 49 343731
+22 3 5 745413 13 589054
+22 4 88 393391 59 923683
+22 5 35 400606 44 249232
+22 6 56 837957 89 842589
+22 7 3 135545 5 353541
+23 0 9 619972 45 598996
+24 0 94 126387 83 869759
+25 0 99 4294967287 13 12358
+25 1 79 378838 53 758330
+25 2 40 413006 7 462461
+25 3 36 649271 14 554880
+26 0 9 137864 49 610927
+26 1 12 152283 91 63178
+26 2 86 530648 10 344861
+27 0 85 730015 1 747030
+28 0 57 583989 65 27795
+28 1 97 453970 2 331024
+28 2 92 102578 84 525721
+29 0 49 557739 55 831081
+30 0 87 388052 13 584756
+30 1 24 214971 38 419197
+30 2 67 117535 42 455072
+30 3 76 161899 32 218371
+30 4 91 645025 56 37340
+30 5 40 428863 90 898278
+31 0 3 669664 81 529019
+31 1 60 154531 60 120614
+31 2 77 415738 66 12040
+31 3 66 938850 1 132005
+31 4 19 208072 10 361851
+31 5 92 309180 78 268215
+32 0 63 456243 35 893965
+32 1 90 726683 86 937289
+32 2 24 292428 42 523276
+32 3 19 491635 57 568267
+32 4 28 933773 87 419937
+32 5 99 4294967287 13 716307
+32 6 24 658070 94 719380
+32 7 34 789762 1 481805
+33 0 69 401705 4 46077
+33 1 72 457037 56 270743
+33 2 4 934453 7 490371
+34 0 9 774910 49 509361
+34 1 52 612734 97 984832
+34 2 32 977714 40 237805
+34 3 55 980744 28 651395
+34 4 3 136995 73 894690
+34 5 31 620536 41 397460
+34 6 20 256580 28 670268
+35 0 8 755970 22 125989
+35 1 26 957214 25 128111
+35 2 28 856953 3 807264
+35 3 83 222770 92 580305
+35 4 17 266642 24 906207
+36 0 11 40422 92 513576
+36 1 34 557510 65 397834
+36 2 83 854552 61 79034
+36 3 75 912256 26 987713
+36 4 15 133557 95 702597
+36 5 9 10187 76 311027
+37 0 95 848014 55 763946
+37 1 37 535371 1 166326
+37 2 71 312417 62 682469
+37 3 25 1306 19 260656
+37 4 83 444944 79 62329
+37 5 33 719357 27 816266
+38 0 52 815838 43 635781
+38 1 79 651158 9 465941
+39 0 8 41606 54 306958
+39 1 85 270815 51 272321
+39 2 48 50805 53 39006
+39 3 1 365571 88 309174
+39 4 91 43309 21 520992
+39 5 61 907839 96 80635
+40 0 94 286660 16 204159
+40 1 17 830934 61 104280
+41 0 19 78341 26 247938
+41 1 22 186957 29 550997
+41 2 65 89010 10 301225
+41 3 60 865502 44 373149
+41 4 81 113678 36 879605
+42 0 56 47438 71 455145
+42 1 48 133212 27 939786
+42 2 82 8033 59 212296
+43 0 26 506478 5 666433
+43 1 14 84052 13 417729
+43 2 74 63338 19 204863
+43 3 82 576543 40 919255
+44 0 85 20707 74 403352
+45 0 68 803942 20 213618
+45 1 6 725886 73 219286
+45 2 5 355783 29 257791
+45 3 66 449298 2 818427
+45 4 24 325336 60 622301
+46 0 67 700921 36 360943
+46 1 90 766812 43 925114
+46 2 49 318271 89 657135
+46 3 65 886412 86 855750
+46 4 22 620069 30 206092
+47 0 41 941117 62 378617
+48 0 75 742802 88 760339
+48 1 88 52740 86 169543
+48 2 47 987804 19 591741
+49 0 19 229205 16 82081
+49 1 6 244929 95 97719
+49 2 36 577691 23 189351
+49 3 55 541561 4 497207
+49 4 52 988724 47 329405
+49 5 55 16788 80 878782
+49 6 47 559772 24 53088
+49 7 93 670007 80 533913
+50 0 31 193046 83 651176
+51 0 8 960926 22 207709
+52 0 85 127550 48 279019
+52 1 27 522597 81 532106
+52 2 97 493639 25 574061
+52 3 84 979200 53 56649
+52 4 58 294621 85 586126
+53 0 4 251344 60 921054
+53 1 88 467988 71 94550
+53 2 89 500929 39 198910
+53 3 56 41849 90 371514
+53 4 46 260072 53 388659
+53 5 37 519423 13 801192
+54 0 39 283885 56 678628
+54 1 37 655835 11 771575
+54 2 34 146233 92 822468
+54 3 13 112049 8 160444
+54 4 95 647063 30 877367
+55 0 96 562242 48 923568
+55 1 41 753023 46 623191
+55 2 45 804373 41 510443
+55 3 99 4294967285 14 601109
+55 4 78 786628 23 691856
+56 0 4 148590 15 935600
+56 1 80 274103 90 438618
+56 2 46 832271 77 30383
+57 0 64 619190 31 920529
+57 1 4 289776 19 389125
+57 2 50 276878 70 776449
+58 0 39 288485 22 583648
+58 1 19 218266 14 481284
+58 2 99 4294967292 75 130941
+58 3 85 529000 79 578675
+58 4 37 567542 0 735524
+58 5 83 871836 69 278029
+59 0 56 649466 95 675956
+59 1 0 225230 11 548551
+59 2 6 418371 15 617882
+59 3 88 138484 86 449910
+59 4 13 311394 5 311570
+59 5 44 472768 22 733926
+59 6 40 517153 73 709744
+59 7 29 435818 78 590887
+60 0 87 978015 60 668647
+60 1 19 560489 38 900656
+60 2 49 507347 36 504077
+60 3 16 376185 27 660010
+60 4 76 515478 76 796647
+61 0 82 324138 2 713892
+61 1 97 48452 80 786643
+61 2 75 448486 64 4133
+62 0 85 386876 58 966282
+63 0 1 880628 45 753567
+63 1 47 537650 18 51956
+63 2 87 914666 57 103716
+63 3 58 579444 36 870318
+63 4 62 799678 53 688389
+64 0 24 668458 13 84276
+65 0 33 999597 22 688265
+65 1 62 489271 92 919252
+65 2 52 575285 32 700700
+65 3 80 741850 83 793297
+65 4 10 101038 69 503210
+66 0 5 830362 24 773770
+66 1 27 954161 12 80462
+66 2 81 865042 6 560591
+66 3 83 787846 39 703963
+67 0 98 4158376947 18 42891
+67 1 43 861935 55 638057
+68 0 69 947606 5 190664
+69 0 2 774050 52 481464
+69 1 47 854856 45 518103
+69 2 7 205793 43 797536
+69 3 31 949314 85 428574
+69 4 42 447751 74 842910
+69 5 81 965982 9 483231
+69 6 38 830243 80 893568
+70 0 88 464912 5 656673
+70 1 36 421057 48 166259
+70 2 41 659251 66 75218
+70 3 80 973421 27 587146
+70 4 10 868238 94 570187
+70 5 27 126069 64 935140
+70 6 52 869860 65 644250
+70 7 16 36880 14 857433
+71 0 80 23978 45 595793
+71 1 61 271254 93 357780
+71 2 95 230257 64 955144
+72 0 56 752685 9 854534
+72 1 26 956373 12 684224
+72 2 55 748095 6 186166
+72 3 36 750424 95 151216
+72 4 2 466906 43 680669
+72 5 69 906032 70 546244
+73 0 87 906993 70 534228
+73 1 7 507050 80 194995
+73 2 27 236938 53 375877
+73 3 3 920227 0 678198
+74 0 44 129127 93 956304
+74 1 39 181479 77 355302
+75 0 67 77230 71 190488
+75 1 41 318641 22 791689
+75 2 33 334064 5 526236
+75 3 80 540828 26 480184
+76 0 96 982292 55 71196
+76 1 17 611284 34 337711
+76 2 43 159153 94 988316
+76 3 37 360248 52 951930
+76 4 74 189162 51 678362
+76 5 17 136350 98 1888195308
+76 6 35 964049 74 140756
+77 0 31 12200 82 881728
+77 1 43 168852 61 629248
+77 2 29 182445 34 829876
+77 3 73 844988 69 878460
+77 4 87 37881 44 210818
+78 0 13 635200 4 602906
+78 1 19 835951 86 819553
+78 2 71 298497 50 484822
+78 3 14 706842 53 769014
+79 0 40 988274 67 78404
+79 1 40 122833 8 577626
+79 2 40 297033 94 696767
+80 0 33 777209 27 491005
+80 1 52 920670 19 424807
+80 2 62 145672 16 754908
+80 3 65 815137 87 842670
+80 4 29 101496 56 975369
+81 0 15 748093 16 384603
+81 1 85 839843 87 270474
+81 2 60 468724 91 761706
+82 0 81 905975 64 95866
+82 1 36 450081 2 984890
+82 2 96 611858 11 338634
+82 3 42 102249 95 980744
+82 4 27 649935 78 50215
+82 5 9 125854 73 315484
+82 6 60 343933 33 931888
+82 7 3 871577 58 218257
+83 0 75 914352 21 425619
+83 1 74 43305 46 70018
+83 2 38 629930 16 527346
+83 3 16 112268 45 332001
+83 4 64 977176 35 408678
+83 5 77 946906 39 993332
+84 0 16 139480 32 560720
+84 1 22 222461 1 108359
+84 2 5 537124 81 626496
+84 3 93 410256 64 665118
+84 4 1 915815 98 2160570482
+85 0 33 982857 84 211925
+85 1 0 996105 74 116971
+85 2 25 377612 19 429167
+86 0 99 4294967284 28 515919
+86 1 59 509256 37 919231
+87 0 24 920264 9 32643
+87 1 51 17812 83 777139
+88 0 56 620933 33 480036
+88 1 79 737605 28 71231
+88 2 37 468713 9 692279
+88 3 95 982050 56 560296
+89 0 47 826996 33 434042
+89 1 45 107014 25 364333
+89 2 2 58969 42 909180
+89 3 4 879292 44 60699
+89 4 94 232850 1 240018
+89 5 78 325224 18 745864
+90 0 84 549337 38 717284
+90 1 86 142363 34 245787
+91 0 98 576184363 99 4294967281
+91 1 89 804408 80 795726
+91 2 14 458942 48 481134
+91 3 5 461425 59 853516
+91 4 34 213343 8 977581
+92 0 27 103536 12 717201
+92 1 22 283078 38 924663
+92 2 87 126060 84 736592
+92 3 19 789528 16 241375
+93 0 63 948977 54 264841
+93 1 76 437192 91 228398
+93 2 47 885845 18 23213
+94 0 47 684917 31 775117
+94 1 94 908924 85 61459
+94 2 30 981281 69 130726
+94 3 30 835364 28 461432
+94 4 97 444051 74 8870
+94 5 77 536646 58 7998
+94 6 18 257703 3 645725
+94 7 44 208592 94 414260
+95 0 57 760791 16 666374
+96 0 19 843760 75 467067
+97 0 55 715177 27 283497
+97 1 84 29990 44 753337
+97 2 90 801498 95 97988
+98 0 88 862479 33 282095
+98 1 59 791447 33 406280
+98 2 52 817478 13 570186
+98 3 93 112736 46 872004
+98 4 9 769448 14 975387
+98 5 64 672077 89 558855
+98 6 29 371948 24 193376
+99 0 2 147697 1 938154
+99 1 77 426206 25 378262
+99 2 34 891091 90 918901
+99 3 71 585779 30 275562
+99 4 34 824153 95 753211
+99 5 97 884216 38 830903
+100 0 30 777988 34 312661
+100 1 76 95343 65 634680
+100 2 72 648768 35 601374
+100 3 36 668628 7 206781
+100 4 40 55941 12 460599
+100 5 13 108665 37 741837
+100 6 66 814876 87 214067
+101 0 43 985631 31 198803
+101 1 27 547868 77 737059
+101 2 9 444457 28 236365
+102 0 51 947791 79 617308
+102 1 89 471612 74 284143
+102 2 68 155659 28 417886
+102 3 96 595090 52 249796
+102 4 30 902050 47 189904
+102 5 13 737744 83 241262
+103 0 33 78730 41 220565
+104 0 76 745704 97 274871
+105 0 41 28273 7 162304
+105 1 16 162086 64 103684
+105 2 73 673914 11 772334
+105 3 47 188950 7 971872
+105 4 14 418746 62 679262
+105 5 42 70661 42 561879
+106 0 35 322462 95 917462
+107 0 52 166256 10 86614
+107 1 75 804721 71 309209
+107 2 70 97 54 997743
+107 3 59 423505 71 816587
+108 0 90 745676 99 4294967285
+108 1 13 358695 51 739844
+108 2 20 385933 67 467272
+108 3 2 434924 15 120525
+108 4 82 114 37 690967
+108 5 58 61686 74 956641
+108 6 33 458856 93 431206
+108 7 10 924260 96 728656
+109 0 41 125939 37 725473
+109 1 66 17810 1 212999
+109 2 74 736197 15 852769
+109 3 24 84913 74 207259
+109 4 68 471706 25 972008
+109 5 62 54757 29 517276
+109 6 14 110721 48 78900
+109 7 59 718076 75 197238
+110 0 4 400383 46 450816
+110 1 14 124334 0 683806
+110 2 84 692789 50 33225
+110 3 50 919460 66 850995
+110 4 33 975022 41 994735
+110 5 54 27591 55 978021
+111 0 65 30629 32 9167
+111 1 10 469150 9 334523
+111 2 8 110648 76 392967
+111 3 29 946644 62 475500
+111 4 71 707927 96 474515
+112 0 2 113761 75 853179
+112 1 39 429394 14 212165
+112 2 59 127209 18 830951
+112 3 28 561608 89 85382
+112 4 46 930080 46 62306
+112 5 45 814540 89 444792
+112 6 67 295912 47 229553
+112 7 47 676527 77 673941
+113 0 48 558649 58 704580
+113 1 68 185041 2 298211
+113 2 86 979086 23 956272
+113 3 31 250300 51 473295
+114 0 67 210826 36 878695
+115 0 23 850577 23 653467
+115 1 95 782877 47 337158
+115 2 50 248671 78 857101
+115 3 42 710471 98 304038388
+116 0 76 98983 97 434286
+116 1 4 661633 40 553997
+116 2 28 968730 73 866733
+116 3 90 634678 54 577995
+116 4 48 382609 14 323458
+117 0 19 818393 4 967447
+118 0 1 636939 18 778742
+118 1 13 230441 97 559303
+118 2 66 735883 49 130936
+118 3 10 56669 42 505292
+119 0 14 522139 79 781416
+119 1 38 840168 41 919723
+119 2 50 206989 99 4294967291
+119 3 91 234149 52 449829
+120 0 38 616867 47 729513
+120 1 56 664790 77 760423
+120 2 42 878537 83 976930
+120 3 86 570725 11 107439
+120 4 73 752008 9 739330
+121 0 25 17273 77 342869
+121 1 63 563939 91 668704
+121 2 25 582013 24 542214
+121 3 9 846030 86 234039
+121 4 20 564306 76 599489
+121 5 21 55067 42 787919
+121 6 69 563586 23 476220
+122 0 79 783987 15 384232
+122 1 77 920970 20 304353
+122 2 43 703744 78 583934
+123 0 17 714989 46 887039
+123 1 28 869129 25 707401
+123 2 1 101092 48 43671
+123 3 4 344993 8 68273
+123 4 1 32871 99 4294967287
+123 5 96 281556 54 877023
+123 6 42 506512 32 187186
+123 7 33 42712 86 16327
+124 0 21 808388 62 165219
+125 0 4 39297 92 538850
+125 1 65 996214 20 546853
+125 2 12 523371 21 674362
+126 0 76 409761 66 826831
+126 1 93 698821 16 524040
+126 2 42 730550 16 272176
+127 0 81 560614 84 823441
+127 1 21 557215 64 974429
+127 2 37 60299 96 238160
+127 3 74 470622 79 935169
+127 4 37 902913 40 768476
+128 0 58 618971 62 723361
+128 1 24 123867 33 687103
+128 2 89 486696 68 154462
+129 0 52 3902 80 432525
+129 1 31 420711 61 42238
+129 2 5 640184 7 847630
+129 3 35 349351 16 399719
+129 4 50 676408 89 972606
+129 5 34 752092 26 136229
+130 0 61 509212 37 623726
+130 1 29 359261 92 250952
+130 2 83 913191 33 666721
+130 3 97 967359 42 727029
+131 0 80 195358 14 420753
+132 0 77 195220 20 363785
+132 1 72 692890 2 592364
+132 2 83 645088 17 681571
+132 3 69 345053 58 513671
+132 4 58 638460 67 701555
+132 5 88 528546 86 133840
+133 0 80 760501 67 839621
+133 1 64 953031 26 353155
+133 2 60 228092 84 482766
+133 3 23 14453 40 48297
+134 0 12 968322 6 607710
+134 1 83 937394 80 28265
+134 2 59 323327 85 972152
+134 3 71 519074 86 487475
+134 4 73 737913 18 22021
+134 5 47 52311 79 333672
+134 6 1 921997 99 4294967282
+135 0 50 565721 10 871110
+135 1 11 421317 4 103158
+135 2 4 782680 5 929636
+135 3 39 803274 50 50221
+136 0 4 345989 70 24454
+136 1 41 627123 13 512039
+136 2 77 301355 36 439224
+136 3 27 283480 50 319701
+136 4 75 832451 87 117818
+137 0 2 83897 30 861851
+137 1 93 782594 50 689983
+137 2 98 1647915849 43 717593
+137 3 7 19985 71 814162
+138 0 96 218863 14 147562
+138 1 57 586703 44 518377
+138 2 80 288381 25 453224
+138 3 52 606870 8 923227
+138 4 13 452642 49 20151
+138 5 71 904817 85 647442
+138 6 70 705403 57 208596
+139 0 89 255491 81 619827
+139 1 7 840290 64 440233
+139 2 21 909124 60 450850
+139 3 76 13604 10 819581
+140 0 7 122554 80 460137
+140 1 91 371458 90 258013
+140 2 26 744562 94 412899
+140 3 59 948023 17 215576
+140 4 96 533121 10 799916
+140 5 22 603442 27 735615
+140 6 75 802589 86 805199
+140 7 96 826409 69 901836
+141 0 29 915116 41 177505
+141 1 24 271780 61 522684
+141 2 67 15473 53 383874
+142 0 62 481380 65 923937
+142 1 45 17381 68 492028
+142 2 11 316874 88 652108
+142 3 23 185363 89 834235
+142 4 7 786713 63 711722
+143 0 22 139635 5 177383
+143 1 28 97313 70 759342
+143 2 3 832735 77 296555
+143 3 10 957626 63 832169
+143 4 98 2936649346 87 279849
+144 0 39 477606 95 674344
+144 1 89 525733 13 365651
+144 2 69 33680 30 344504
+145 0 44 997565 79 419744
+145 1 18 780030 13 528714
+145 2 89 49708 19 222242
+145 3 33 22619 22 304357
+145 4 46 391102 42 929728
+145 5 7 694945 65 678529
+145 6 54 581729 14 498942
+146 0 44 71854 96 236550
+146 1 75 128751 82 806965
+146 2 18 573799 25 36009
+146 3 3 424116 44 258267
+146 4 12 755634 62 92399
+146 5 31 58297 92 660288
+147 0 28 40876 89 752231
+147 1 59 1851 99 4294967292
+148 0 71 139187 87 815972
+148 1 47 983327 60 293307
+148 2 66 362017 52 332392
+148 3 84 447044 64 97068
+148 4 77 505005 82 439183
+148 5 52 701172 20 473686
+149 0 50 85418 23 97891
+149 1 47 975525 69 949148
+149 2 91 438539 33 854697
+150 0 10 668542 3 863030
+150 1 48 814353 85 235921
+151 0 27 419196 99 4294967289
+151 1 51 84500 26 789988
+151 2 43 982460 76 838768
+151 3 47 772678 82 790371
+151 4 40 871118 86 887035
+151 5 15 474379 58 618629
+151 6 99 4294967289 22 367022
+151 7 3 118021 57 666415
+152 0 84 91608 86 716153
+152 1 6 351674 82 197940
+152 2 88 342154 30 75020
+152 3 17 634972 79 40850
+152 4 51 422637 40 506432
+153 0 11 798297 6 125151
+153 1 90 90302 13 515113
+153 2 63 365538 31 718516
+153 3 28 807682 36 962151
+153 4 27 964135 87 254659
+153 5 61 782911 20 253322
+153 6 89 446103 67 605328
+154 0 89 525690 41 732997
+154 1 16 132467 65 733786
+154 2 27 468778 63 804911
+155 0 34 848702 96 12570
+155 1 66 590595 96 829755
+156 0 98 1530730900 31 251945
+157 0 67 494640 3 571979
+158 0 0 409055 99 4294967280
+158 1 79 119661 15 466631
+158 2 75 936100 4 775016
+158 3 15 671047 12 308040
+158 4 39 373187 60 212223
+158 5 97 316830 65 759904
+159 0 52 879384 25 104432
+159 1 50 440856 6 114224
+159 2 83 660021 73 679916
+159 3 70 632083 82 442116
+159 4 94 575405 73 9072
+159 5 73 180169 53 563388
+159 6 95 293564 45 512718
+160 0 92 14153 50 229275
+160 1 88 434692 96 513359
+160 2 20 861560 87 292377
+160 3 51 972392 78 93932
+160 4 65 693203 40 534002
+161 0 38 144813 22 875246
+161 1 78 889033 31 335524
+161 2 34 773557 71 134668
+161 3 19 864650 99 4294967295
+161 4 31 597156 28 295503
+161 5 65 381823 53 613574
+161 6 21 116949 80 10922
+162 0 46 634443 60 477111
+162 1 73 272830 65 138224
+163 0 47 501389 57 50403
+163 1 67 446503 81 538528
+164 0 24 346178 82 721898
+164 1 95 588534 57 550999
+164 2 71 469581 9 420514
+164 3 56 232342 71 334883
+164 4 27 725733 92 253093
+165 0 83 659921 57 634177
+165 1 13 859138 41 733840
+165 2 2 125633 78 897674
+165 3 67 794355 88 422969
+165 4 45 326549 70 484097
+165 5 49 741443 9 257074
+165 6 16 190055 59 870610
+165 7 2 588338 57 451210
+166 0 56 762471 42 554222
+167 0 34 869109 26 701716
+167 1 92 947651 67 912672
+167 2 89 807847 35 909902
+167 3 60 724829 32 926489
+167 4 83 973477 78 395167
+168 0 38 948020 91 931343
+168 1 16 851856 88 695338
+168 2 37 552147 79 312106
+168 3 17 751527 59 237312
+168 4 12 329568 19 260669
+169 0 42 408186 44 165653
+170 0 39 657994 96 422502
+170 1 37 78918 52 146782
+170 2 24 250178 63 915326
+170 3 18 575259 96 260343
+170 4 86 804230 12 262519
+170 5 53 738513 26 985722
+170 6 80 59047 18 609378
+170 7 59 90782 37 892252
+171 0 94 405967 53 415323
+171 1 27 204999 98 3041719095
+171 2 58 782130 11 793481
+171 3 57 578672 47 876085
+171 4 95 216487 88 252069
+171 5 86 480382 33 810381
+171 6 79 200053 83 619491
+171 7 37 479693 25 144467
+172 0 97 953093 62 320371
+172 1 59 848129 12 679813
+172 2 43 841993 31 425450
+172 3 79 733657 12 929626
+172 4 7 4210 98 3568726656
+172 5 80 889561 98 3761285291
+172 6 60 863307 28 638768
+173 0 36 537717 47 554715
+173 1 74 362790 6 553518
+174 0 67 637170 32 275347
+175 0 45 930661 27 812993
+175 1 85 161678 96 390943
+175 2 68 939928 95 79134
+176 0 63 698619 93 111183
+176 1 40 573353 77 201553
+176 2 17 879803 70 324910
+176 3 95 400431 33 273657
+176 4 12 496066 91 484198
+176 5 88 870160 83 754061
+176 6 7 909181 37 722185
+176 7 69 383534 91 91712
+177 0 94 515567 82 200489
+177 1 28 933418 77 247666
+177 2 34 416392 35 737165
+178 0 5 873286 99 4294967287
+178 1 2 1672 57 2723
+178 2 94 413975 80 861881
+178 3 59 601430 98 1670832048
+178 4 34 255787 52 892605
+178 5 5 283951 37 620472
+178 6 5 643830 61 368205
+179 0 70 907328 14 948341
+179 1 93 508324 68 940662
+180 0 83 571350 9 214584
+180 1 37 578876 60 74435
+181 0 57 595367 27 322327
+181 1 80 994545 91 228929
+181 2 2 695310 75 315133
+181 3 70 228564 2 990007
+182 0 63 433252 49 393801
+182 1 32 13207 71 57084
+182 2 33 81676 36 581113
+182 3 86 807772 29 130134
+183 0 54 364626 34 923175
+183 1 70 772954 9 308836
+183 2 47 695875 53 485177
+183 3 30 562117 98 1188580813
+183 4 41 888700 58 212461
+183 5 89 82741 9 153786
+184 0 79 736728 78 426767
+184 1 58 209326 84 991183
+184 2 9 564798 28 641304
+185 0 88 321234 64 691427
+186 0 95 685130 10 268191
+186 1 29 878099 75 198078
+186 2 94 722319 37 589298
+186 3 75 361298 90 538606
+186 4 77 382499 44 197862
+186 5 98 740440597 51 388189
+187 0 97 353319 30 392738
+187 1 75 90007 11 751269
+188 0 59 663321 33 689253
+188 1 43 335022 88 582219
+188 2 73 157446 28 740990
+189 0 93 355156 55 346424
+190 0 11 529360 81 109409
+190 1 39 196436 2 398275
+190 2 24 346222 49 924141
+190 3 9 49867 21 202210
+191 0 83 368985 53 636633
+191 1 52 845170 6 614678
+191 2 97 495686 44 685616
+191 3 36 688305 52 461253
+191 4 73 393068 16 375273
+192 0 2 126546 1 834315
+192 1 98 1903015297 87 672208
+192 2 8 536709 21 534955
+192 3 52 4825 0 578957
+192 4 99 4294967281 52 785534
+193 0 6 155124 60 911870
+193 1 3 664786 86 821382
+193 2 51 775604 0 729137
+194 0 7 28379 88 71628
+194 1 15 47836 7 164757
+194 2 96 344964 14 499067
+194 3 45 96696 60 327685
+195 0 67 154111 79 186568
+195 1 25 91366 52 83534
+195 2 91 108856 66 168514
+196 0 50 924255 78 795534
+196 1 20 963729 3 128489
+196 2 37 278005 38 955812
+196 3 33 862948 71 259470
+196 4 28 807220 60 261430
+196 5 2 847940 87 880629
+196 6 65 293296 65 475704
+197 0 82 223611 87 319868
+197 1 36 908806 62 340634
+197 2 55 121541 26 232501
+197 3 47 167092 55 232225
+197 4 3 690249 62 447776
+198 0 25 968692 62 825343
+198 1 63 551589 42 739635
+198 2 81 165255 26 946039
+198 3 60 552005 14 399636
+198 4 18 98359 43 325966
+198 5 40 555289 54 819551
+199 0 36 701034 44 855834
+199 1 21 58084 38 621174
+199 2 11 436721 75 973089
+199 3 9 422758 91 667902
+199 4 36 240218 2 966792
+199 5 34 850252 62 932567
+199 6 46 386132 58 182834
+200 0 67 402009 1 512236
+200 1 38 593699 45 942931
+200 2 76 598450 70 727478
+201 0 44 633526 71 756446
+202 0 88 345497 87 758336
+203 0 62 192564 85 452171
+203 1 63 549745 3 51526
+203 2 7 1510 38 74675
+204 0 0 334904 81 298359
+204 1 65 794382 46 931849
+205 0 29 983009 78 148269
+206 0 51 929340 91 57196
+206 1 42 844263 31 272620
+206 2 89 822382 93 657993
+206 3 54 455110 46 161417
+206 4 88 142539 78 396478
+207 0 27 445468 13 443507
+207 1 22 933431 19 162165
+207 2 97 295146 20 442615
+208 0 44 856587 17 663915
+208 1 72 307195 46 818702
+208 2 21 94873 17 712040
+208 3 58 584781 62 525120
+208 4 74 145251 18 518937
+208 5 54 198084 76 282657
+208 6 16 543955 22 389850
+209 0 46 396021 50 400072
+209 1 78 44983 99 4294967286
+209 2 23 229857 77 693917
+209 3 5 599593 29 561512
+210 0 41 730841 2 784155
+210 1 74 836728 57 799618
+211 0 71 901456 17 180187
+211 1 21 717751 56 799305
+211 2 26 518358 86 637431
+211 3 8 736030 55 80833
+211 4 23 725590 79 217878
+211 5 47 629088 57 818354
+212 0 28 504136 24 204824
+213 0 80 1320 71 802227
+213 1 72 901436 28 486998
+213 2 60 405007 40 697986
+213 3 35 289434 22 937535
+213 4 53 420111 57 874173
+213 5 73 543750 31 718976
+213 6 46 652459 7 922190
+214 0 20 592371 72 471318
+214 1 21 962498 73 608709
+214 2 35 570901 81 933242
+214 3 43 620302 38 566949
+214 4 18 801835 14 900806
+214 5 78 173718 92 215718
+214 6 95 300874 48 882374
+215 0 15 420058 29 216839
+216 0 85 444487 21 529552
+216 1 75 444265 81 936858
+216 2 16 422251 24 939242
+216 3 26 223942 67 782006
+216 4 20 770373 58 867425
+216 5 63 82749 1 219218
+217 0 29 63596 71 780254
+217 1 87 239730 97 562143
+217 2 43 337657 19 288205
+217 3 25 647078 53 741504
+217 4 10 336980 95 693417
+217 5 34 244771 1 558323
+217 6 42 953205 7 67875
+218 0 27 22552 56 894091
+218 1 46 510318 22 648398
+218 2 17 896280 7 537300
+218 3 19 917411 72 17095
+219 0 44 256123 45 745925
+219 1 45 364579 52 25019
+219 2 87 882095 78 365652
+219 3 36 788615 98 3607665371
+219 4 29 364928 41 692535
+219 5 97 846567 54 273794
+219 6 44 125727 5 534733
+219 7 20 392964 34 363321
+220 0 65 404789 79 48486
+221 0 62 89670 36 108423
+221 1 43 536963 20 418814
+221 2 58 746963 59 830407
+221 3 89 735481 80 175716
+221 4 2 378991 28 994011
+221 5 60 50877 88 689170
+222 0 87 990729 46 685708
+222 1 49 399544 7 953521
+222 2 72 311762 59 709595
+222 3 87 376966 58 146619
+222 4 33 592189 54 888705
+222 5 28 607360 62 265614
+222 6 38 347599 35 353960
+222 7 37 587399 51 120213
+223 0 47 664763 57 64717
+223 1 54 392471 36 77581
+223 2 65 614569 36 129920
+223 3 78 656907 10 80998
+224 0 85 282412 51 674298
+224 1 27 749116 79 844378
+224 2 21 266611 99 4294967284
+224 3 51 441683 96 191142
+224 4 72 794705 84 590013
+224 5 59 756347 42 936567
+224 6 78 655710 57 349062
+225 0 9 319452 27 881350
+225 1 84 26255 74 583690
+226 0 97 443808 85 412800
+226 1 65 259391 14 3809
+226 2 71 240459 96 677035
+226 3 26 671410 29 644374
+226 4 38 280919 56 191889
+227 0 36 107162 68 792877
+227 1 17 963720 36 166759
+227 2 69 349098 87 595122
+227 3 70 390277 50 439459
+227 4 80 914967 13 439437
+227 5 94 936832 65 721461
+228 0 50 100823 5 488048
+228 1 63 128844 87 812855
+228 2 99 4294967285 32 183639
+228 3 67 732119 13 464810
+228 4 61 152290 56 602464
+228 5 67 758575 78 637676
+228 6 55 619053 41 720478
+228 7 23 496304 39 794127
+229 0 55 833016 76 660863
+229 1 1 237244 83 619858
+229 2 20 433476 54 390608
+229 3 58 568130 92 381178
+229 4 26 348522 4 983713
+230 0 17 501757 42 683824
+230 1 93 660504 36 144761
+230 2 48 495368 78 222519
+231 0 35 265746 50 351802
+231 1 37 231740 89 610728
+231 2 56 828165 47 852250
+231 3 73 136071 45 509309
+231 4 7 403616 15 498151
+231 5 5 938040 35 311012
+231 6 26 317103 94 361004
+232 0 39 81363 41 785490
+232 1 88 354754 23 95728
+232 2 22 575935 83 538977
+232 3 67 663689 48 978137
+232 4 3 12286 52 967879
+233 0 5 140774 36 204424
+233 1 57 366348 95 988471
+233 2 17 113519 70 635470
+233 3 51 777588 18 687327
+233 4 90 543118 32 252860
+234 0 53 730125 94 914166
+234 1 60 972208 18 543978
+234 2 1 107749 55 919227
+234 3 99 4294967280 52 531185
+234 4 11 920461 52 122271
+234 5 88 94266 12 577434
+234 6 60 960423 13 239394
+234 7 6 878450 91 889595
+235 0 48 175385 34 711149
+235 1 46 750459 93 446797
+235 2 93 859643 22 690023
+235 3 18 574559 24 972030
+235 4 81 821085 61 844796
+235 5 96 410560 92 615988
+235 6 30 526901 55 458909
+236 0 25 601496 58 988393
+236 1 46 129524 5 615989
+236 2 36 230381 52 706437
+236 3 29 769606 14 851716
+236 4 73 881512 1 545875
+236 5 1 502029 7 613567
+237 0 18 798265 15 787236
+237 1 34 41340 62 393568
+237 2 2 829933 47 983419
+237 3 13 944910 92 938128
+238 0 75 480524 52 592913
+238 1 38 307883 22 209903
+238 2 67 984789 95 361035
+238 3 33 125818 53 659161
+238 4 62 259942 19 294665
+238 5 43 910358 70 157902
+239 0 92 61908 48 20879
+239 1 85 409527 68 496226
+239 2 88 796134 2 758228
+239 3 59 749610 40 339254
+239 4 77 438202 81 548216
+240 0 18 875352 43 144619
+240 1 32 684442 47 950875
+240 2 15 565282 80 598877
+240 3 36 583193 44 964952
+240 4 1 509096 73 915550
+240 5 19 419499 45 322069
+240 6 36 970576 95 101543
+240 7 71 998419 74 460609
+241 0 16 439123 22 271218
+241 1 42 981465 12 15427
+241 2 86 742604 97 357995
+241 3 32 923369 72 235293
+241 4 78 983565 2 401884
+241 5 3 69696 6 298878
+241 6 63 165011 74 919723
+241 7 78 475844 90 459760
+242 0 71 228820 22 798369
+242 1 29 948023 18 190143
+242 2 23 349287 46 872933
+243 0 74 373117 94 315000
+243 1 76 226279 2 625273
+244 0 84 914726 49 358113
+244 1 91 336227 99 4294967292
+244 2 60 618817 26 349619
+244 3 37 9820 69 860114
+244 4 29 494109 48 136521
+245 0 62 66944 10 518321
+246 0 37 997726 27 246568
+246 1 63 450793 11 96840
+246 2 43 731262 84 667101
+247 0 38 84892 41 667175
+247 1 73 159904 40 507505
+247 2 39 532150 36 743554
+248 0 62 396010 97 594173
+248 1 89 551894 13 140835
+248 2 64 95804 97 40878
+248 3 47 731317 28 5493
+248 4 50 543001 84 921638
+248 5 48 656898 98 153979822
+248 6 98 4206203130 41 515138
+248 7 34 619573 76 750790
+249 0 3 926904 40 363196
+249 1 52 403108 70 205471
+249 2 86 200814 93 889337
+249 3 5 229621 24 745284
+249 4 54 535165 91 196381
+249 5 80 937085 71 744467
+250 0 54 520975 89 548076
+250 1 16 170555 41 366585
+250 2 93 421697 59 214349
+250 3 31 575732 65 897644
+250 4 83 552958 33 287521
+250 5 49 655187 1 830885
+250 6 45 860425 90 421350
+251 0 80 955398 6 677150
+251 1 79 69449 47 823871
+251 2 86 143131 66 678346
+251 3 46 975469 47 557226
+252 0 77 382761 28 857859
+252 1 42 244393 31 809407
+252 2 13 238125 32 551548
+252 3 46 462285 51 38666
+252 4 60 660766 82 539067
+253 0 62 411273 79 43551
+253 1 68 165569 9 455535
+254 0 9 224087 39 199584
+254 1 71 761758 85 845065
+254 2 48 4860 8 450232
+254 3 42 375970 11 47671
+254 4 4 460538 76 890043
+255 0 37 522518 14 260238
+255 1 47 460877 53 146403
+255 2 10 19637 4 750143
+255 3 82 915422 75 967512
+255 4 2 123832 59 25789
+255 5 83 580553 61 111112
+255 6 49 121179 23 863272
+255 7 63 51852 0 421291
+256 0 66 546102 66 131812
+256 1 41 376852 55 26189
+256 2 12 775913 21 688442
+256 3 23 6767 38 88797
+256 4 58 700806 0 94938
+256 5 87 591482 46 129473
+256 6 73 299322 28 748023
+257 0 36 231924 10 595039
+257 1 77 243563 94 156387
+257 2 65 281826 0 657547
+258 0 42 147991 53 936662
+258 1 20 914013 61 611471
+258 2 42 554725 23 230790
+258 3 52 776127 65 363615
+258 4 61 831972 26 283874
+258 5 22 401789 18 956589
+258 6 93 320749 31 529474
+258 7 59 869430 88 933209
+259 0 46 957953 44 46638
+259 1 99 4294967283 40 657806
+259 2 78 883643 25 952790
+259 3 53 640402 54 814695
+260 0 33 121472 2 884645
+260 1 37 876258 46 16372
+260 2 83 505385 67 726739
+260 3 65 246660 6 218260
+260 4 52 986516 52 12989
+260 5 69 287835 88 949145
+261 0 59 146752 60 661093
+261 1 69 167654 26 179841
+261 2 64 980310 99 4294967285
+261 3 53 418660 7 295302
+261 4 51 423426 2 508375
+261 5 29 971709 30 679584
+262 0 82 133002 38 324921
+262 1 9 321463 52 93041
+262 2 89 396341 13 433982
+262 3 28 755385 73 990356
+262 4 46 680398 51 398119
+262 5 19 428644 11 931971
+262 6 50 412194 42 111779
+262 7 32 432950 84 502176
+263 0 87 223614 20 411290
+263 1 57 325524 8 132460
+264 0 6 80028 50 721895
+264 1 95 254788 14 78453
+264 2 41 571531 31 108707
+264 3 49 35210 40 723752
+264 4 21 97306 25 562587
+264 5 15 582575 58 417992
+264 6 62 967736 4 641077
+265 0 17 628301 52 861513
+265 1 98 314610413 31 680887
+265 2 91 330575 31 971358
+265 3 0 367841 32 659155
+265 4 34 553940 48 397806
+265 5 21 349532 29 344466
+265 6 9 287039 28 891004
+266 0 89 349769 91 480279
+266 1 38 797180 47 767398
+266 2 95 408000 71 215368
+266 3 71 100592 21 45792
+266 4 18 290297 69 650963
+267 0 4 444449 31 259082
+267 1 56 570958 31 533170
+267 2 95 769461 59 731540
+267 3 16 749803 43 312753
+267 4 95 405497 13 994584
+267 5 39 121035 8 314508
+267 6 70 746523 24 4449
+267 7 78 386826 32 525913
+268 0 90 45328 8 494645
+268 1 66 409435 76 324173
+268 2 62 377118 31 905711
+268 3 38 506911 87 485929
+268 4 84 904838 65 336768
+268 5 41 801860 49 523144
+268 6 31 49458 46 47030
+268 7 94 497626 38 539938
+269 0 79 856290 62 306310
+269 1 13 59942 19 919400
+269 2 83 4045 29 271843
+269 3 35 864948 39 375389
+270 0 0 311574 92 665128
+270 1 97 998454 50 869358
+271 0 74 659870 48 165191
+271 1 70 60893 76 651500
+271 2 64 775291 48 430558
+271 3 14 153917 75 210859
+271 4 93 103566 58 217886
+272 0 42 647974 67 120298
+272 1 44 409005 15 202850
+272 2 97 140628 80 689026
+272 3 81 764783 27 97482
+272 4 83 211250 97 155821
+272 5 42 246247 78 405317
+272 6 91 90526 63 672473
+273 0 50 780483 9 183108
+274 0 94 718550 77 104619
+274 1 7 69319 40 938607
+274 2 74 383591 9 767745
+274 3 23 951228 37 565481
+274 4 73 168306 46 509200
+274 5 96 603084 68 501279
+274 6 75 983543 50 115483
+274 7 30 603940 1 782942
+275 0 84 607493 42 24735
+276 0 97 979892 83 747527
+276 1 53 463647 78 691290
+277 0 44 60238 86 52743
+277 1 38 93756 61 653135
+277 2 11 270746 52 279454
+278 0 27 333315 72 260144
+278 1 17 153259 84 989462
+278 2 51 729288 19 379226
+278 3 10 4907 26 525192
+278 4 51 163459 20 786032
+278 5 9 799989 67 99753
+278 6 94 516627 30 826790
+279 0 18 648770 70 207684
+279 1 39 123417 53 334781
+280 0 64 603000 90 84369
+280 1 54 991119 11 505840
+280 2 65 468492 60 837632
+281 0 27 791347 97 48718
+281 1 20 221890 28 975147
+281 2 10 104679 97 377867
+281 3 31 910816 44 40567
+281 4 92 222402 22 988956
+281 5 12 494631 73 29224
+281 6 45 509319 85 423346
+282 0 34 423841 9 76265
+282 1 22 992099 8 103731
+282 2 57 951113 5 9279
+282 3 61 825496 18 159547
+282 4 68 589158 95 717884
+282 5 76 821459 59 981364
+282 6 91 256020 4 540006
+282 7 31 166417 99 4294967280
+283 0 8 423416 8 627376
+283 1 76 492864 93 650142
+283 2 10 181740 6 867866
+283 3 27 371783 20 481584
+283 4 89 152964 33 339447
+283 5 29 382737 77 17916
+283 6 62 960614 77 668582
+284 0 66 941902 39 930920
+284 1 5 610719 43 667859
+284 2 22 459969 54 754802
+284 3 65 446077 63 497009
+284 4 4 645480 3 821293
+284 5 92 16678 42 951254
+285 0 20 720136 17 144076
+285 1 24 109993 92 307206
+285 2 56 159836 23 958103
+285 3 79 307501 42 159568
+285 4 56 875278 39 128635
+286 0 63 161570 40 684303
+286 1 70 717017 87 836302
+286 2 26 437636 86 969368
+287 0 30 484283 31 366432
+287 1 13 790558 74 582969
+287 2 18 629897 87 81943
+287 3 25 426791 89 528887
+287 4 42 459592 3 606662
+288 0 49 824924 55 954052
+289 0 24 321083 71 975703
+290 0 97 361370 2 125849
+290 1 5 28837 93 594417
+290 2 7 456400 79 310696
+290 3 44 582806 40 54968
+290 4 36 605655 84 938857
+291 0 60 808428 20 572382
+291 1 70 662036 41 690951
+291 2 7 745455 86 331277
+291 3 8 237585 83 355691
+291 4 10 938254 59 608695
+292 0 73 617800 77 250652
+292 1 11 339148 43 834072
+292 2 50 746569 50 162790
+293 0 28 777669 47 243583
+293 1 27 655457 38 218390
+293 2 21 80032 95 462260
+293 3 20 461427 42 300428
+293 4 79 702091 60 264079
+293 5 27 428006 53 620362
+293 6 26 367429 37 686762
+294 0 3 244749 11 38032
+295 0 0 8340 86 111934
+295 1 71 916121 56 347627
+295 2 34 122945 9 510268
+295 3 62 513499 43 541210
+295 4 18 330355 44 434622
+295 5 87 676729 24 787147
+296 0 42 704835 32 393116
+296 1 88 74812 41 162992
+296 2 2 336439 89 45003
+296 3 13 396757 99 4294967289
+296 4 27 74100 63 735373
+296 5 47 115216 49 952148
+296 6 86 195829 70 967951
+296 7 48 241989 43 705297
+297 0 69 866982 41 50187
+297 1 68 551997 47 889458
+297 2 87 197711 60 163688
+297 3 22 612657 94 517609
+297 4 32 759971 87 615382
+297 5 43 607332 97 971365
+297 6 17 122788 32 427319
+298 0 92 485125 99 4294967284
+298 1 90 836734 46 668227
+298 2 12 171578 47 891087
+298 3 60 38002 83 956761
+298 4 12 997321 80 632102
+298 5 11 46863 95 623504
+298 6 85 853216 40 230164
+299 0 44 163608 67 872783
+299 1 77 992928 47 16060
+299 2 87 847154 66 489341
+299 3 80 249143 51 728568
+300 0 34 132090 48 519544
+300 1 77 241072 34 750768
+301 0 28 637397 6 334597
+301 1 56 617375 71 408172
+301 2 69 29453 67 911484
+301 3 60 434606 37 988011
+301 4 20 256158 43 919253
+301 5 33 522040 68 56030
+302 0 56 187917 37 305780
+302 1 92 939691 92 978399
+302 2 5 914438 54 252408
+302 3 54 546949 5 557719
+302 4 12 609973 36 327798
+303 0 86 601068 41 496165
+303 1 29 609980 28 300679
+303 2 71 272945 43 865219
+303 3 59 293734 60 457833
+303 4 70 290816 97 937174
+303 5 61 957203 46 496271
+303 6 95 440206 30 72289
+304 0 52 675228 80 539132
+304 1 97 664208 65 26141
+304 2 40 566132 40 757170
+305 0 56 695090 97 261839
+305 1 66 456720 10 35838
+305 2 26 169570 49 270518
+305 3 19 12030 84 344011
+305 4 89 326599 42 599746
+305 5 21 21247 98 893200292
+305 6 79 169722 98 2408010413
+306 0 70 449218 98 4087300717
+306 1 94 979350 16 883104
+307 0 52 438096 79 510698
+307 1 19 869982 17 280177
+307 2 95 306731 24 313615
+307 3 18 767579 71 266205
+307 4 46 143599 1 816156
+307 5 16 647735 15 227424
+307 6 45 728413 64 518458
+308 0 83 261103 46 161872
+308 1 72 690074 29 530667
+309 0 62 593532 7 513167
+309 1 15 868807 7 566470
+309 2 64 391919 0 500189
+309 3 8 389524 96 554687
+310 0 17 647697 53 766640
+311 0 57 743155 89 267610
+311 1 7 932475 42 398903
+311 2 88 3400 11 447335
+311 3 52 355437 23 70722
+311 4 31 425578 0 904155
+312 0 35 340990 93 603460
+312 1 55 493860 14 729205
+312 2 67 707339 16 19658
+312 3 24 410261 37 416456
+313 0 70 792722 32 834954
+313 1 18 542629 2 739270
+313 2 97 182841 18 265762
+313 3 61 67575 16 152696
+314 0 30 509765 2 110441
+314 1 12 382333 6 390142
+314 2 17 702499 24 85645
+314 3 43 97256 43 759700
+314 4 64 240551 64 192837
+315 0 36 196093 6 395944
+315 1 36 818238 7 281887
+315 2 33 825869 26 512934
+315 3 65 569560 47 333279
+315 4 46 863117 93 669909
+315 5 41 752384 34 520858
+316 0 37 500022 87 310582
+316 1 41 968990 88 751196
+316 2 32 986956 43 831616
+316 3 78 697034 46 488380
+316 4 58 989908 62 658610
+316 5 63 347056 72 673827
+317 0 93 473263 6 415900
+317 1 48 383207 3 263111
+317 2 6 990698 76 287916
+317 3 38 676338 19 809693
+317 4 10 126290 85 90217
+317 5 29 26501 81 796712
+318 0 44 421311 15 995209
+318 1 63 553055 29 716471
+318 2 72 876433 79 950494
+318 3 24 612853 43 197047
+318 4 19 219239 21 644764
+318 5 73 220424 34 218474
+318 6 98 434111739 82 132092
+319 0 19 702998 39 578645
+319 1 22 286730 67 14005
+319 2 70 58730 99 4294967293
+319 3 31 612611 13 131515
+319 4 86 466936 47 242475
+320 0 67 465956 58 253870
+321 0 19 913091 8 830347
+321 1 91 658538 71 367701
+321 2 50 92902 96 49394
+321 3 89 311222 94 431361
+321 4 97 282452 30 231293
+321 5 57 222630 89 768896
+322 0 47 441777 45 719330
+323 0 5 190477 0 925125
+323 1 95 227997 83 320461
+323 2 70 232578 20 799658
+324 0 47 181952 52 551519
+324 1 84 658303 25 335089
+324 2 1 77582 48 562824
+324 3 84 95932 91 616552
+324 4 40 987186 32 541983
+324 5 68 198716 64 609785
+325 0 46 945730 36 919833
+325 1 69 999221 19 531091
+325 2 67 574842 18 249579
+325 3 20 59758 29 979091
+325 4 83 352397 26 696521
+325 5 59 313016 36 190401
+325 6 33 478014 97 47543
+325 7 30 120841 72 436775
+326 0 62 562619 31 212219
+326 1 62 408250 72 301306
+326 2 32 106086 2 692430
+326 3 42 246978 66 44732
+326 4 56 265944 90 421991
+326 5 17 460121 22 798449
+327 0 49 323799 58 913604
+327 1 36 894360 67 106748
+327 2 28 275666 28 230528
+327 3 4 890033 3 400391
+327 4 7 267077 54 537426
+327 5 95 933863 10 160114
+327 6 36 298288 31 178711
+327 7 47 424576 7 575423
+328 0 27 247070 98 3808478965
+328 1 83 480549 25 212970
+328 2 68 832450 65 810912
+328 3 9 522778 82 805761
+328 4 87 815039 35 799392
+328 5 91 266449 21 793983
+328 6 42 724651 48 740232
+328 7 81 365542 85 702938
+329 0 80 180126 4 266247
+329 1 23 549457 99 4294967284
+330 0 27 25588 2 279140
+330 1 35 808255 17 820967
+331 0 68 231475 59 893565
+332 0 71 534050 28 229948
+332 1 90 887055 77 369098
+333 0 42 747457 70 428621
+333 1 19 570238 8 224874
+333 2 27 845144 51 696178
+334 0 18 263541 59 597294
+334 1 29 9833 22 827225
+334 2 73 521546 63 634084
+335 0 20 486621 62 539220
+335 1 94 265805 35 883170
+335 2 28 927836 6 101121
+336 0 18 606302 61 877907
+336 1 67 809467 1 499755
+336 2 73 365088 71 845137
+336 3 6 272378 85 669805
+336 4 94 391690 70 916410
+336 5 40 964434 36 560253
+336 6 25 610010 90 450733
+336 7 48 275662 77 532851
+337 0 47 320094 30 396769
+337 1 83 510660 74 356497
+337 2 59 790657 47 821365
+337 3 47 710701 91 361303
+338 0 76 156400 36 690546
+338 1 97 361539 95 749445
+338 2 48 747085 74 341055
+338 3 57 106015 80 645522
+339 0 0 646531 22 46204
+339 1 85 953978 7 122189
+339 2 92 207065 1 558106
+339 3 71 670640 40 686513
+339 4 69 47564 37 686774
+339 5 79 740029 90 23406
+339 6 49 670466 48 718038
+339 7 50 47670 73 397478
+340 0 49 99477 53 9024
+340 1 13 542657 46 221395
+340 2 81 385122 75 68437
+340 3 81 418142 69 139302
+341 0 48 951869 60 51408
+341 1 70 182715 13 940473
+342 0 93 503325 56 956323
+342 1 36 887533 12 983737
+342 2 16 35138 15 944913
+343 0 95 667105 75 646885
+343 1 71 887376 22 703272
+344 0 78 958842 70 555593
+344 1 50 472213 69 346990
+344 2 10 636822 3 945504
+344 3 30 807220 55 753857
+344 4 26 336380 74 752776
+345 0 25 478206 51 914178
+346 0 59 889176 92 739626
+346 1 54 233053 10 843934
+346 2 94 565432 6 15186
+346 3 89 569163 63 191425
+346 4 42 529221 52 146393
+346 5 18 719651 52 97744
+347 0 69 495295 98 4231231120
+347 1 76 337060 56 17084
+347 2 63 120339 40 7752
+348 0 26 318904 94 803036
+348 1 13 886765 85 331996
+348 2 60 966572 64 231707
+349 0 7 383706 4 600617
+349 1 73 926879 46 18026
+349 2 79 476679 47 460819
+349 3 94 249905 83 4819
+349 4 18 102030 85 846354
+349 5 23 692459 34 916115
+350 0 35 512 94 547007
+350 1 31 780449 98 2641350431
+350 2 18 116030 90 285171
+350 3 7 728972 27 611776
+351 0 95 502628 88 449020
+352 0 66 582556 43 978053
+352 1 60 102882 24 561763
+352 2 17 573416 73 28466
+352 3 85 946056 51 357823
+353 0 88 767893 40 693535
+354 0 66 900933 96 155287
+354 1 28 482570 26 12464
+354 2 1 483300 46 300266
+354 3 30 213752 64 293879
+354 4 15 230438 27 81782
+354 5 50 511041 90 729298
+354 6 11 67012 86 551691
+354 7 99 4294967295 38 414959
+355 0 17 6594 88 355741
+355 1 64 562075 56 669515
+355 2 56 137249 60 492670
+355 3 68 45253 26 106258
+355 4 95 589172 61 985471
+355 5 38 270264 69 909658
+356 0 27 674436 34 85243
+356 1 23 768095 12 527469
+356 2 58 862693 0 827941
+356 3 59 749496 85 525418
+357 0 86 514033 48 160501
+357 1 82 256707 25 45859
+357 2 71 537973 30 907396
+358 0 0 652451 14 655042
+359 0 7 406061 2 134230
+359 1 86 947756 86 320875
+360 0 3 925886 42 545802
+360 1 2 93524 0 514359
+360 2 58 751031 37 741580
+360 3 96 627780 24 135308
+360 4 16 462561 0 794883
+361 0 46 726386 74 598624
+361 1 62 936016 40 626993
+361 2 29 316461 38 479897
+361 3 67 370134 9 608063
+362 0 78 827034 26 362379
+362 1 46 299202 81 836017
+363 0 63 484435 66 202279
+363 1 47 338742 32 283868
+363 2 22 316496 35 986878
+363 3 84 712386 59 777945
+363 4 66 169825 16 205736
+363 5 58 572531 31 499760
+364 0 93 382558 40 239572
+364 1 1 848545 26 261551
+364 2 30 826362 43 369815
+364 3 11 66051 25 708687
+364 4 10 496509 73 189684
+364 5 99 4294967285 31 603423
+364 6 53 545617 32 586740
+364 7 57 789488 53 659579
+365 0 85 888311 68 623364
+365 1 48 400787 90 124972
+365 2 21 764422 86 686430
+366 0 52 722302 4 235165
+366 1 11 5741 79 612453
+367 0 68 454548 79 866091
+367 1 69 608550 85 16267
+367 2 88 381815 89 110295
+368 0 35 433595 51 906129
+368 1 30 955585 33 601239
+368 2 66 361871 51 103508
+368 3 49 68993 44 530106
+368 4 54 976731 3 358350
+369 0 7 971143 97 589356
+370 0 29 280485 21 9800
+370 1 41 363316 20 491474
+370 2 24 71534 73 849666
+370 3 98 3133229512 7 981743
+371 0 77 380175 20 866531
+371 1 17 701996 89 713568
+372 0 64 3211 82 813390
+373 0 79 756148 87 872033
+373 1 56 288946 61 464574
+374 0 13 242584 80 255648
+374 1 68 692027 44 612243
+374 2 47 187937 12 766805
+375 0 23 674396 34 546431
+375 1 9 246740 21 115426
+375 2 27 806899 64 562161
+375 3 12 612521 96 176254
+375 4 17 149428 58 967907
+375 5 88 507007 16 844784
+375 6 57 984514 48 495538
+375 7 36 897317 93 37785
+376 0 50 878176 23 520212
+376 1 34 881558 24 993240
+376 2 75 394432 43 631653
+376 3 78 186220 65 242741
+377 0 74 608929 71 89639
+377 1 95 920168 46 472062
+377 2 37 518988 43 358798
+378 0 97 840292 65 413161
+378 1 72 931930 96 863208
+378 2 74 127430 10 177136
+379 0 86 536140 13 437831
+379 1 55 923588 3 426660
+379 2 18 445136 41 982696
+380 0 64 492552 6 218948
+380 1 72 430736 49 861034
+380 2 77 287722 90 498581
+380 3 83 266983 89 77823
+380 4 96 905649 50 4945
+380 5 57 444578 5 333491
+380 6 86 723738 33 173402
+380 7 50 909626 57 69661
+381 0 33 232589 60 340089
+381 1 5 81223 6 232314
+382 0 27 364097 90 303166
+382 1 72 721470 78 333666
+382 2 24 379832 35 99811
+383 0 87 757236 2 486965
+383 1 10 485236 91 347002
+383 2 67 713196 26 257471
+384 0 4 639369 19 441071
+384 1 61 47294 81 910566
+385 0 57 787139 15 598377
+385 1 17 464424 89 747017
+385 2 73 807344 77 602081
+385 3 83 714830 5 605959
+385 4 42 819585 41 352185
+385 5 68 446871 66 459581
+386 0 38 808647 68 319553
+386 1 37 597833 80 917645
+387 0 85 556087 47 265734
+387 1 46 233205 60 237036
+387 2 87 236581 94 203121
+388 0 15 615551 41 358940
+388 1 10 276700 92 909653
+389 0 62 939320 94 398267
+389 1 99 4294967293 52 434883
+389 2 19 878813 1 185270
+389 3 89 39448 1 596350
+389 4 26 748221 10 345344
+389 5 56 326000 88 124869
+389 6 83 309609 80 55946
+389 7 73 458525 36 934477
+390 0 32 181510 21 999824
+390 1 52 264702 1 331961
+390 2 20 873783 91 253796
+390 3 55 712284 38 731076
+391 0 72 57078 30 979439
+391 1 16 719417 92 682656
+391 2 95 478402 23 772607
+391 3 60 365702 24 213331
+391 4 79 958377 79 971497
+391 5 45 376811 73 507050
+391 6 86 324169 91 166415
+391 7 89 104853 34 269482
+392 0 15 499908 53 392686
+392 1 44 673976 23 818703
+393 0 58 34025 60 341409
+393 1 86 222665 22 394375
+394 0 84 663979 28 81164
+394 1 72 901201 39 840168
+394 2 0 754497 76 292944
+394 3 97 890158 28 342747
+394 4 89 276420 21 830761
+395 0 56 906395 11 535797
+396 0 26 373527 49 591139
+396 1 80 731835 72 709349
+396 2 93 326514 62 484164
+396 3 88 431163 82 117879
+396 4 62 48166 84 978103
+397 0 47 741586 78 187133
+397 1 34 740850 5 252946
+397 2 11 3728 10 709427
+398 0 22 514917 3 962261
+398 1 53 876174 75 483710
+398 2 0 542539 34 216618
+398 3 70 56170 94 219690
+398 4 56 35750 11 75674
+398 5 60 255906 23 368189
+398 6 68 577275 30 736136
+399 0 36 539217 61 576561
+399 1 37 595236 7 38792
+399 2 51 475443 81 191690
+399 3 17 346661 19 741025
+399 4 18 314537 10 213909
+399 5 88 859368 83 578157
+399 6 48 577633 68 177597
+</script>
+<script type="text/plain" id="tsv-pairs-uniform" data-src="data/01/pairs-uniform.tsv">
+0 0 100 3280000263 100 3969547260
+0 1 100 1002331674 100 2940886762
+0 2 100 1475382682 100 1521812078
+1 0 100 2520768653 100 1470821664
+1 1 100 97343190 100 2249748388
+1 2 100 3877643077 100 150213895
+1 3 100 56881697 100 221465552
+2 0 100 2655056584 100 2276234445
+2 1 100 3709930098 100 1889142007
+2 2 100 3422958616 100 638010534
+2 3 100 230546967 100 932348193
+2 4 100 3856717898 100 3042643030
+2 5 100 989710046 100 3088487749
+3 0 100 1848666404 100 1759765919
+3 1 100 3576016695 100 2526489158
+3 2 100 303020139 100 2184217657
+3 3 100 3514607767 100 1450619939
+3 4 100 120462863 100 2452323266
+3 5 100 159424678 100 1246777069
+4 0 100 2550742836 100 2329112832
+4 1 100 93882244 100 650295940
+4 2 100 2031158360 100 1386046164
+4 3 100 4107408353 100 779227580
+4 4 100 605510822 100 424969065
+5 0 100 4137797094 100 1973875775
+5 1 100 3490057630 100 2184126463
+5 2 100 3290021290 100 792525949
+5 3 100 597581258 100 3163278458
+5 4 100 2610084151 100 736913793
+5 5 100 2649569841 100 1375068003
+5 6 100 2075013948 100 123451881
+5 7 100 2133578592 100 1775073792
+6 0 100 1181304431 100 1290434856
+6 1 100 1861469065 100 3521284429
+6 2 100 504779626 100 245108460
+6 3 100 2559866934 100 1191186233
+6 4 100 754805842 100 3969791205
+6 5 100 2769517677 100 957507594
+6 6 100 3461215542 100 2160301832
+6 7 100 3992387647 100 2557478856
+7 0 100 4199456276 100 2966706290
+7 1 100 1662517564 100 4118348662
+8 0 100 285748983 100 1226487587
+8 1 100 2252580408 100 2612826597
+8 2 100 3663272208 100 1597514571
+8 3 100 2794289953 100 2198302087
+8 4 100 989543899 100 1838372846
+8 5 100 2387833979 100 2948263860
+8 6 100 1449673228 100 2959968354
+8 7 100 135828503 100 1181661658
+9 0 100 3953836080 100 296954103
+9 1 100 1881904331 100 691878177
+10 0 100 1813859050 100 2000968296
+10 1 100 4150846234 100 4215201216
+10 2 100 3847187517 100 3224718436
+10 3 100 3846186565 100 99278441
+10 4 100 2200101864 100 2353418124
+10 5 100 2675164465 100 745394323
+10 6 100 1725576854 100 2705077771
+10 7 100 1858442314 100 2439439609
+11 0 100 3102125205 100 4107836729
+11 1 100 2234368013 100 2344340242
+11 2 100 1827326624 100 1087043932
+11 3 100 753023733 100 1542783482
+12 0 100 3082726124 100 398222228
+13 0 100 360364277 100 2507307036
+13 1 100 1686208618 100 3424246539
+13 2 100 2702529959 100 4034183940
+13 3 100 2357434387 100 3865255491
+13 4 100 3473923183 100 3945557764
+13 5 100 261707371 100 4089870545
+14 0 100 3786682065 100 2289221159
+14 1 100 1445928169 100 3921194774
+14 2 100 1930581009 100 1520709798
+14 3 100 1620592527 100 1370955306
+14 4 100 304847976 100 4199165676
+15 0 100 296289810 100 2307877400
+15 1 100 4028187038 100 371394096
+15 2 100 2813718382 100 2240950892
+16 0 100 3171764985 100 2149003752
+16 1 100 2440778112 100 800869634
+17 0 100 243416251 100 2564523982
+17 1 100 3074985956 100 794366411
+17 2 100 2007089839 100 2236462272
+17 3 100 3068612076 100 1493205770
+17 4 100 279832916 100 3804384610
+17 5 100 2178983873 100 140612289
+17 6 100 762050037 100 537403718
+17 7 100 327270630 100 508795743
+18 0 100 698148609 100 4095513736
+18 1 100 2710713060 100 2712358118
+18 2 100 3242196975 100 2338858803
+18 3 100 4171550476 100 2407994848
+18 4 100 433555411 100 4170307314
+18 5 100 1809370070 100 3314874452
+18 6 100 1666159869 100 3426807060
+18 7 100 2786960302 100 853600965
+19 0 100 836333329 100 2835842316
+19 1 100 2772882105 100 775309599
+19 2 100 2207880154 100 148159937
+19 3 100 1856406794 100 3267048657
+19 4 100 1190222226 100 757855292
+19 5 100 819165056 100 1993081684
+20 0 100 2164496460 100 3477895298
+20 1 100 3861440654 100 3411227220
+20 2 100 562100013 100 56714279
+21 0 100 1521263126 100 3627117285
+21 1 100 1231029245 100 95766828
+21 2 100 2952697323 100 2683746289
+21 3 100 2149667847 100 34685318
+22 0 100 350174047 100 912530790
+22 1 100 1492537310 100 800913503
+22 2 100 505008102 100 649117655
+22 3 100 399247746 100 2958940679
+22 4 100 1662125408 100 797938234
+22 5 100 3886708581 100 1703938906
+22 6 100 1687531903 100 1476315404
+22 7 100 3178697487 100 3201524341
+23 0 100 3493243400 100 3859583140
+24 0 100 2796853234 100 542830184
+25 0 100 2413402783 100 360015762
+25 1 100 567171582 100 2230658790
+25 2 100 2100428813 100 3152178467
+25 3 100 53080961 100 3071169227
+26 0 100 3997173529 100 592122275
+26 1 100 1322447496 100 3390670974
+26 2 100 2623908935 100 2635181088
+27 0 100 2384602844 100 3135388769
+28 0 100 1212515666 100 581910932
+28 1 100 2508215325 100 1789173160
+28 2 100 119380720 100 3860588793
+29 0 100 769113727 100 2395470404
+30 0 100 2396774112 100 1666671361
+30 1 100 28385004 100 2081534754
+30 2 100 2511509343 100 3535479153
+30 3 100 3710149182 100 923293252
+30 4 100 287455757 100 743518562
+30 5 100 1800437459 100 494660269
+31 0 100 2502438833 100 2882975483
+31 1 100 2710598921 100 2876182352
+31 2 100 2182733265 100 2272117054
+31 3 100 3233684891 100 663706508
+31 4 100 1780003228 100 518033113
+31 5 100 3584033223 100 1785582696
+32 0 100 329599957 100 2913448113
+32 1 100 1277859474 100 3251129672
+32 2 100 4177335970 100 1959549972
+32 3 100 2248517723 100 3839548539
+32 4 100 4206422134 100 546442215
+32 5 100 3121078662 100 430735069
+32 6 100 4025622486 100 2543982655
+32 7 100 1255970157 100 2248366189
+33 0 100 843888562 100 1725309886
+33 1 100 2398355468 100 197902059
+33 2 100 2548069050 100 1962960749
+34 0 100 443579672 100 3328209916
+34 1 100 1598581631 100 2187687102
+34 2 100 2787907974 100 2631673873
+34 3 100 2737470202 100 4229817221
+34 4 100 1119481114 100 2629188032
+34 5 100 4049942868 100 4199248898
+34 6 100 1463741800 100 1021366210
+35 0 100 1401402184 100 2366063382
+35 1 100 3246866391 100 3716596534
+35 2 100 885199417 100 541118236
+35 3 100 2721518148 100 4111200811
+35 4 100 2744667457 100 550233463
+36 0 100 1352381470 100 173611607
+36 1 100 745809901 100 2205790963
+36 2 100 3437769305 100 2394485713
+36 3 100 2450067623 100 1708683340
+36 4 100 2133321174 100 3670271682
+36 5 100 1170687133 100 339450484
+37 0 100 378224372 100 3642192481
+37 1 100 4019304847 100 3281123597
+37 2 100 3267421025 100 2299400653
+37 3 100 3942746884 100 714367252
+37 4 100 1934230712 100 1341822620
+37 5 100 4225318080 100 1465337761
+38 0 100 852034438 100 3503994295
+38 1 100 2820980079 100 2730659293
+39 0 100 3053289494 100 178700167
+39 1 100 1135000971 100 1318373648
+39 2 100 1031377628 100 1163140528
+39 3 100 2106625905 100 54737664
+39 4 100 3022533764 100 1169608858
+39 5 100 2730874749 100 218209042
+40 0 100 428044019 100 1231194944
+40 1 100 652814123 100 876855573
+41 0 100 763270884 100 3327126066
+41 1 100 336475194 100 3662908484
+41 2 100 1064884999 100 3837643730
+41 3 100 2194441969 100 1740852025
+41 4 100 802975753 100 2063095107
+42 0 100 1466906513 100 203746700
+42 1 100 215496120 100 1954835059
+42 2 100 1313922685 100 572142934
+43 0 100 3332759365 100 2175307988
+43 1 100 4160904719 100 2862305340
+43 2 100 3705678769 100 4246692133
+43 3 100 361000528 100 1087735843
+44 0 100 2180781788 100 88936884
+45 0 100 3861862063 100 3452904812
+45 1 100 3814385205 100 917485085
+45 2 100 3991019280 100 3117654044
+45 3 100 692441659 100 1695139261
+45 4 100 941826797 100 3464960270
+46 0 100 1091111341 100 3010430983
+46 1 100 3724033374 100 1550240312
+46 2 100 2438030395 100 1632908776
+46 3 100 3293432680 100 1976984431
+46 4 100 3973332078 100 3307103103
+47 0 100 2319698282 100 4042066217
+48 0 100 1509081794 100 3190309407
+48 1 100 473436642 100 3265631253
+48 2 100 491616994 100 226519787
+49 0 100 3662278451 100 984428563
+49 1 100 927803487 100 3990337579
+49 2 100 352535703 100 2072467290
+49 3 100 777183760 100 1051961195
+49 4 100 313486068 100 419702869
+49 5 100 1847579997 100 2481163244
+49 6 100 3130572604 100 813257162
+49 7 100 1505922959 100 2325984630
+50 0 100 797939280 100 829127318
+51 0 100 1371381527 100 4127145737
+52 0 100 3411364059 100 547825598
+52 1 100 684981884 100 1198380243
+52 2 100 2491688774 100 2244535048
+52 3 100 3285990609 100 2285376905
+52 4 100 2153302521 100 2120162087
+53 0 100 2517356812 100 1079514332
+53 1 100 296732437 100 339786898
+53 2 100 2665518600 100 3883483149
+53 3 100 1497723547 100 3955894208
+53 4 100 98427392 100 3398272538
+53 5 100 4045756214 100 2840319714
+54 0 100 3588928341 100 2764235139
+54 1 100 2197817467 100 3986565348
+54 2 100 3810331953 100 486201701
+54 3 100 1219278541 100 577676242
+54 4 100 4117683600 100 2914685683
+55 0 100 3295674615 100 2414811710
+55 1 100 10670717 100 3966691561
+55 2 100 1482289258 100 3234209409
+55 3 100 1587133815 100 2676586545
+55 4 100 3361517940 100 3454753144
+56 0 100 803080203 100 638189931
+56 1 100 1838108456 100 4018369389
+56 2 100 1331247311 100 1177263794
+57 0 100 1311083942 100 2659398581
+57 1 100 862501200 100 3953641500
+57 2 100 655932171 100 1244577248
+58 0 100 2927546213 100 1239033473
+58 1 100 2351439217 100 864499820
+58 2 100 2236842298 100 2506746811
+58 3 100 1184090675 100 937445170
+58 4 100 2523843621 100 2067098427
+58 5 100 768189438 100 960103190
+59 0 100 2875205056 100 1731971729
+59 1 100 2789433584 100 2712633845
+59 2 100 2903206272 100 3263962626
+59 3 100 967357609 100 2651192594
+59 4 100 3364042911 100 3390534815
+59 5 100 718159389 100 2356009155
+59 6 100 87545361 100 1796891937
+59 7 100 2965802952 100 511363880
+60 0 100 3246747104 100 4200538994
+60 1 100 1701510044 100 2871814834
+60 2 100 3275296653 100 794870578
+60 3 100 2407281142 100 3044501346
+60 4 100 3868285865 100 3708714366
+61 0 100 1318610644 100 1392161167
+61 1 100 2336348934 100 3066143513
+61 2 100 1240626937 100 208101947
+62 0 100 378403035 100 1661619651
+63 0 100 2877285636 100 3782268510
+63 1 100 1166723445 100 3236543932
+63 2 100 1651207931 100 1929134714
+63 3 100 2309186888 100 3179425071
+63 4 100 223150788 100 1970654432
+64 0 100 2629720383 100 2871002468
+65 0 100 4155438121 100 3672323414
+65 1 100 4293233504 100 3882323769
+65 2 100 2956075381 100 2394489504
+65 3 100 2101400883 100 4082019821
+65 4 100 3948155714 100 1020293553
+66 0 100 1614323470 100 3566377408
+66 1 100 983526719 100 3323317496
+66 2 100 1965540678 100 4098086813
+66 3 100 3073976095 100 849781025
+67 0 100 1884059132 100 4158376947
+67 1 100 3901079087 100 184215824
+68 0 100 1784347314 100 4069934295
+69 0 100 2633705734 100 3324516321
+69 1 100 1618183814 100 2067870364
+69 2 100 3810330234 100 3671575908
+69 3 100 1260443765 100 2225233600
+69 4 100 3171101051 100 2805685779
+69 5 100 883874739 100 3383514992
+69 6 100 3425390677 100 3361382481
+70 0 100 3390588898 100 1996781359
+70 1 100 190627086 100 2820389267
+70 2 100 3281244766 100 1808424656
+70 3 100 491776381 100 714079354
+70 4 100 1269890922 100 2831459577
+70 5 100 1996472235 100 323062226
+70 6 100 3611161550 100 4180809066
+70 7 100 2521217095 100 2521771094
+71 0 100 1981003726 100 102984749
+71 1 100 3352521588 100 2558909526
+71 2 100 3136309662 100 1165027185
+72 0 100 3650704272 100 3232756309
+72 1 100 1166515628 100 479297560
+72 2 100 3670192720 100 3535236821
+72 3 100 126199365 100 4107587443
+72 4 100 2214845728 100 2938717575
+72 5 100 783621519 100 3213044233
+73 0 100 1392416736 100 3895502285
+73 1 100 3396001972 100 2294490588
+73 2 100 873209107 100 2177763404
+73 3 100 2480861878 100 922710779
+74 0 100 474286450 100 554598484
+74 1 100 4010853615 100 4107291707
+75 0 100 3737359789 100 331701581
+75 1 100 3521045688 100 818140838
+75 2 100 4202394986 100 1368551633
+75 3 100 4064125241 100 3400279208
+76 0 100 2729250551 100 4218908998
+76 1 100 25977230 100 305786663
+76 2 100 2393781549 100 2625442292
+76 3 100 3703857841 100 263551832
+76 4 100 1450459786 100 987988355
+76 5 100 1939634800 100 683557365
+76 6 100 3886988274 100 4244783122
+77 0 100 535935570 100 4243675213
+77 1 100 2951746640 100 52399455
+77 2 100 2171199130 100 2489739692
+77 3 100 2569078995 100 3786990281
+77 4 100 2821403504 100 725216994
+78 0 100 411245858 100 2728163336
+78 1 100 4206033676 100 2589460791
+78 2 100 628617266 100 3590382702
+78 3 100 3610681822 100 3519950726
+79 0 100 1024636250 100 1376557416
+79 1 100 4244600276 100 1097517741
+79 2 100 336743146 100 4129850728
+80 0 100 3626340439 100 3338085842
+80 1 100 2685756999 100 2108850576
+80 2 100 87785439 100 3475696006
+80 3 100 3954244137 100 3363473714
+80 4 100 1824531273 100 4242899157
+81 0 100 1667535656 100 3213034352
+81 1 100 3966488507 100 4189066795
+81 2 100 1651859650 100 513900508
+82 0 100 3233211601 100 3891133120
+82 1 100 3895880870 100 411743085
+82 2 100 3883546974 100 1933083875
+82 3 100 189001478 100 4230067156
+82 4 100 2211828516 100 1615476923
+82 5 100 3058424056 100 2627911434
+82 6 100 1265382764 100 226198045
+82 7 100 1454421485 100 3884947822
+83 0 100 76523458 100 3927109011
+83 1 100 2269150776 100 1828020603
+83 2 100 1888278207 100 185994417
+83 3 100 310335864 100 300727802
+83 4 100 1345068178 100 1325741411
+83 5 100 2705529512 100 3834877092
+84 0 100 2165043243 100 599064108
+84 1 100 3212795732 100 2408274801
+84 2 100 4135600185 100 955462107
+84 3 100 3274468868 100 465398860
+84 4 100 41657358 100 2306930430
+85 0 100 3377377201 100 1363714390
+85 1 100 4221335712 100 4055334892
+85 2 100 734079455 100 301390041
+86 0 100 4020775532 100 319740419
+86 1 100 1659641343 100 2844254173
+87 0 100 1358156214 100 934926398
+87 1 100 3952501545 100 3514050555
+88 0 100 4146877072 100 2666884285
+88 1 100 2385966935 100 2061740660
+88 2 100 3612756516 100 1359822795
+88 3 100 3167989097 100 2370343753
+89 0 100 2376739450 100 3551920211
+89 1 100 3398018390 100 1864197920
+89 2 100 1624873844 100 459623274
+89 3 100 313679169 100 1564797360
+89 4 100 2154380416 100 1557724483
+89 5 100 2553220102 100 253270016
+90 0 100 23838425 100 2359382542
+90 1 100 4151242339 100 3080710144
+91 0 100 3641106941 100 576184363
+91 1 100 2133145598 100 3773457681
+91 2 100 2969427876 100 686791398
+91 3 100 3454905018 100 2322687112
+91 4 100 1096524494 100 3417616249
+92 0 100 2902248774 100 444683822
+92 1 100 151442976 100 3080354043
+92 2 100 2245806394 100 1215809807
+92 3 100 1958430563 100 3971396541
+93 0 100 2241114019 100 4075824284
+93 1 100 3460309131 100 1137484495
+93 2 100 2122812869 100 1877724200
+94 0 100 2159942778 100 2941695447
+94 1 100 3272436816 100 3329099864
+94 2 100 2514687475 100 3903795444
+94 3 100 769434843 100 263965750
+94 4 100 2964930383 100 4214567549
+94 5 100 1967554995 100 561464372
+94 6 100 2458018127 100 3587857843
+94 7 100 1856400970 100 1981836110
+95 0 100 3768387987 100 3267571159
+96 0 100 2273084978 100 3623919756
+97 0 100 240060559 100 3071659232
+97 1 100 2726291782 100 1217609705
+97 2 100 1382330841 100 128809586
+98 0 100 829419235 100 3704316621
+98 1 100 3477616983 100 1211588227
+98 2 100 3612119960 100 3399237880
+98 3 100 949324374 100 1744960815
+98 4 100 1461560710 100 3511039336
+98 5 100 3866935330 100 2448931981
+98 6 100 1300304624 100 484199754
+99 0 100 2861167110 100 634357444
+99 1 100 2123643653 100 4029338588
+99 2 100 2184751814 100 1830539618
+99 3 100 1224430658 100 1624624626
+99 4 100 3004213337 100 3827206323
+99 5 100 3748655591 100 3946646692
+100 0 100 2860673870 100 3341431757
+100 1 100 380326267 100 1245823833
+100 2 100 1342868497 100 3666831473
+100 3 100 943744154 100 3756160197
+100 4 100 409494842 100 2723905447
+100 5 100 2725929277 100 360383673
+100 6 100 2786434741 100 1851518811
+101 0 100 2602550895 100 4233250067
+101 1 100 942602065 100 853851555
+101 2 100 2608821809 100 2336791623
+102 0 100 4130797957 100 4070727407
+102 1 100 2501960908 100 2651315806
+102 2 100 2340615142 100 2025559996
+102 3 100 2931817406 100 1220386323
+102 4 100 3415300528 100 668550394
+102 5 100 378003273 100 1794805932
+103 0 100 2825921539 100 2290416470
+104 0 100 2723228612 100 3202774828
+105 0 100 102685547 100 121432862
+105 1 100 3951020052 100 697091081
+105 2 100 4160824699 100 1846540900
+105 3 100 3308798763 100 696156600
+105 4 100 3048946341 100 445322371
+105 5 100 829503420 100 2894437639
+106 0 100 1110054080 100 4049077778
+107 0 100 316296327 100 714063883
+107 1 100 3945748764 100 372006860
+107 2 100 3193418946 100 3456249619
+107 3 100 644248392 100 1087165111
+108 0 100 2630990311 100 3202652334
+108 1 100 3162178558 100 2693615694
+108 2 100 842633507 100 1540584385
+108 3 100 221553796 100 3177605953
+108 4 100 3696821653 100 910795317
+108 5 100 1657569615 100 2753991085
+108 6 100 2006919057 100 628816903
+108 7 100 1867983617 100 3789704259
+109 0 100 3845175915 100 540906281
+109 1 100 1290926944 100 3115879803
+109 2 100 312412330 100 76495710
+109 3 100 926434053 100 914822998
+109 4 100 1363020222 100 3161940760
+109 5 100 2113883944 100 3662611822
+109 6 100 865686697 100 2672685630
+109 7 100 364700769 100 3017577151
+110 0 100 263157004 100 1719631407
+110 1 100 1940165239 100 1936240585
+110 2 100 2352909425 100 768530470
+110 3 100 534012899 100 3011000322
+110 4 100 2936923605 100 557017305
+110 5 100 2975505611 100 2648703140
+111 0 100 2429606802 100 571653543
+111 1 100 131552173 100 2962238035
+111 2 100 39375821 100 913394962
+111 3 100 2738715932 100 2014986027
+111 4 100 2257333453 100 2345527577
+112 0 100 2114639921 100 4191145991
+112 1 100 488602584 100 2840702723
+112 2 100 1661815234 100 3664373469
+112 3 100 2893031269 100 1844233148
+112 4 100 944421157 100 911244007
+112 5 100 3675459224 100 546358169
+112 6 100 928163249 100 2648461360
+112 7 100 3568907221 100 2908416073
+113 0 100 1036001405 100 2399380006
+113 1 100 2677059990 100 3026148315
+113 2 100 4254869423 100 794747479
+113 3 100 3081880583 100 1280808978
+114 0 100 1222348974 100 905492937
+115 0 100 2266809917 100 3653197063
+115 1 100 2691504991 100 168317245
+115 2 100 2806617394 100 550236149
+115 3 100 3362431958 100 2671545344
+116 0 100 3665434821 100 425130233
+116 1 100 132121849 100 1865243187
+116 2 100 495989771 100 2841690637
+116 3 100 3075267176 100 2379400153
+116 4 100 169307978 100 4160661529
+117 0 100 676161075 100 3514971494
+118 0 100 1462756613 100 2735632149
+118 1 100 1805135408 100 3344670206
+118 2 100 3752667170 100 989738427
+118 3 100 2804475130 100 2402188710
+119 0 100 968313894 100 2242571831
+119 1 100 2232355275 100 3356154059
+119 2 100 3917232482 100 3608491861
+119 3 100 2041930330 100 1212316114
+120 0 100 616671843 100 2649424104
+120 1 100 4081908602 100 3133234243
+120 2 100 2150100368 100 2855252702
+120 3 100 487855047 100 3265991535
+120 4 100 2362280301 100 3773285981
+121 0 100 1597001282 100 74190611
+121 1 100 648260806 100 1472609894
+121 2 100 2853307720 100 4203944355
+121 3 100 2422100430 100 1431297771
+121 4 100 2872062969 100 893536321
+121 5 100 2499724917 100 952194622
+121 6 100 2328790862 100 2017176600
+122 0 100 450210763 100 3367198205
+122 1 100 3200672808 100 1650266340
+122 2 100 1111615431 100 3955533215
+123 0 100 3851249198 100 3070855295
+123 1 100 1435331579 100 2250111552
+123 2 100 10110505 100 4199210360
+123 3 100 3809802458 100 3873609034
+123 4 100 3732878523 100 2525738102
+123 5 100 290983233 100 3038262638
+123 6 100 2124036868 100 434188766
+123 7 100 267644541 100 187566222
+124 0 100 3762213688 100 3471999066
+125 0 100 1070759762 100 1565500939
+125 1 100 168783454 100 1223863021
+125 2 100 2314340910 100 277631125
+126 0 100 4127088991 100 149355866
+126 1 100 415944131 100 868956869
+126 2 100 1759912417 100 759236778
+127 0 100 859915984 100 2407818369
+127 1 100 3693144536 100 3536652060
+127 2 100 704985399 100 2393218933
+127 3 100 1220591270 100 4185140452
+127 4 100 394464096 100 258982588
+128 0 100 340005988 100 3361020311
+128 1 100 2658457688 100 2563366816
+128 2 100 3106811571 100 3367280218
+129 0 100 1820152198 100 16763082
+129 1 100 4134166734 100 1857679571
+129 2 100 4081414225 100 1806942050
+129 3 100 409423006 100 181412630
+129 4 100 3718114893 100 2803452114
+129 5 100 963314481 100 1620923919
+130 0 100 1545024320 100 3177887902
+130 1 100 2187050123 100 813183840
+130 2 100 2678881448 100 2207506251
+130 3 100 1543015813 100 4086975104
+131 0 100 1640248530 100 1533088974
+132 0 100 1761013190 100 838463442
+132 1 100 4156088117 100 1562447103
+132 2 100 3060050873 100 2975940646
+132 3 100 1063258118 100 2544185191
+132 4 100 4036030423 100 2770632542
+132 5 100 31414318 100 2927326092
+133 0 100 3128653507 100 2791997586
+133 1 100 3405712036 100 1874295759
+133 2 100 3266326366 100 1567272067
+133 3 100 483539886 100 3606144704
+134 0 100 1991707425 100 4158911110
+134 1 100 1414165521 100 2610092840
+134 2 100 1940725206 100 4026073138
+134 3 100 1637063118 100 121401302
+134 4 100 4210352536 100 1388681176
+134 5 100 3738580699 100 4175360568
+134 6 100 1775601567 100 4124578231
+135 0 100 2294548865 100 2429755011
+135 1 100 3365385755 100 3741385992
+135 2 100 991225117 100 1809542362
+135 3 100 2155457291 100 443060842
+136 0 100 2354381466 100 1934636043
+136 1 100 1486013707 100 2966501197
+136 2 100 3066061492 100 105031873
+136 3 100 530873194 100 2693470622
+136 4 100 1773017009 100 1051518971
+137 0 100 1392726528 100 2045236487
+137 1 100 360338804 100 3357037850
+137 2 100 1573976008 100 902353743
+137 3 100 3701620372 100 3924116207
+138 0 100 161619959 100 940011262
+138 1 100 1025730240 100 2771874112
+138 2 100 4146487590 100 633775859
+138 3 100 1916695188 100 2519869638
+138 4 100 2404076146 100 2226412650
+138 5 100 3502066383 100 1238586693
+138 6 100 1456205634 100 1946583316
+139 0 100 2740781798 100 1097324822
+139 1 100 1461252817 100 2662138192
+139 2 100 1444129811 100 3609016562
+139 3 100 4037952461 100 3460533414
+140 0 100 3297050643 100 526367800
+140 1 100 63900367 100 1976275172
+140 2 100 3899084011 100 1595400167
+140 3 100 3452702695 100 1108159867
+140 4 100 1212479967 100 2834235264
+140 5 100 1965087557 100 3197867442
+140 6 100 2887309555 100 1773387473
+140 7 100 1180567448 100 4071724620
+141 0 100 2298807628 100 3930389446
+141 1 100 2793241562 100 4110888299
+141 2 100 762379471 100 62981438
+142 0 100 338826400 100 2067510619
+142 1 100 2046034343 100 3968275255
+142 2 100 3755264372 100 74652499
+142 3 100 445562287 100 2113243653
+142 4 100 3989964574 100 1360963668
+143 0 100 2325072185 100 599730391
+143 1 100 1444783630 100 761853652
+143 2 100 3276604745 100 417957168
+143 3 100 3593488689 100 3351561908
+143 4 100 3261348340 100 1635372553
+144 0 100 391806310 100 2051304124
+144 1 100 611930678 100 3799346164
+144 2 100 2896283804 100 2750615782
+145 0 100 4095609971 100 4284505062
+145 1 100 3830034729 100 2961208780
+145 2 100 1802785555 100 2735598128
+145 3 100 3350200248 100 2242297700
+145 4 100 2435611802 100 631462178
+145 5 100 2270807689 100 2545045733
+145 6 100 213496052 100 159433523
+146 0 100 1631646579 100 308613915
+146 1 100 1634690551 100 1015977516
+146 2 100 1264116946 100 3317145538
+146 3 100 552980950 100 4178257363
+146 4 100 3465885545 100 3294066480
+146 5 100 2464445879 100 3711428162
+147 0 100 3563990198 100 592269641
+147 1 100 175561610 100 3827659238
+148 0 100 3846046651 100 3950765248
+148 1 100 3903717304 100 597804510
+148 2 100 4051304161 100 3504573614
+148 3 100 36539514 100 4223354600
+148 4 100 240084380 100 1259745697
+148 5 100 2663169707 100 1554851977
+149 0 100 3654824321 100 366869414
+149 1 100 1263654973 100 420439148
+149 2 100 1634757497 100 4189846720
+150 0 100 4183739420 100 2871365078
+150 1 100 737308938 100 3706682922
+151 0 100 3506916167 100 1800433083
+151 1 100 919608830 100 1649063800
+151 2 100 1513480324 100 362924875
+151 3 100 2439202373 100 3392971194
+151 4 100 1637780591 100 4219629695
+151 5 100 3949894085 100 3602480057
+151 6 100 986161529 100 3318626005
+151 7 100 14291923 100 3394614738
+152 0 100 3414547160 100 393455409
+152 1 100 821626077 100 3075854698
+152 2 100 2309383696 100 1510427092
+152 3 100 2502241235 100 850148543
+152 4 100 3738264287 100 545436643
+153 0 100 3531551518 100 3428656491
+153 1 100 2383496721 100 537520422
+153 2 100 2611017703 100 387844839
+153 3 100 2790751936 100 4201752098
+153 4 100 2212393450 100 1484470947
+153 5 100 1569972413 100 436121168
+153 6 100 3086000692 100 517090729
+154 0 100 3164777446 100 2257822036
+154 1 100 3460967616 100 1515004522
+154 2 100 3148197626 100 697415722
+155 0 100 1766931801 100 3645146228
+155 1 100 4143271058 100 277107960
+156 0 100 3476325373 100 1530730900
+157 0 100 2535369646 100 2124462259
+158 0 100 3566176257 100 1756877137
+158 1 100 3167668990 100 4005041931
+158 2 100 1538628918 100 4112576972
+158 3 100 513939915 100 3396272680
+158 4 100 2004163663 100 110903489
+158 5 100 4020515019 100 3759745292
+159 0 100 2290200602 100 3407729030
+159 1 100 3776925891 100 3026352450
+159 2 100 448533887 100 777680770
+159 3 100 1893464192 100 1327395779
+159 4 100 419878161 100 490590683
+159 5 100 1603448251 100 1187045402
+159 6 100 4210151382 100 2834767323
+160 0 100 1397194010 100 3973257709
+160 1 100 60788013 100 3431418241
+160 2 100 984731360 100 3960252899
+160 3 100 1866990171 100 3882692343
+160 4 100 2204857967 100 872680244
+161 0 100 4033619811 100 621966904
+161 1 100 2715237434 100 3759152026
+161 2 100 2218858573 100 463169994
+161 3 100 3818364087 100 3094714193
+161 4 100 1441064938 100 1392473772
+161 5 100 838138201 100 3322401825
+161 6 100 484279991 100 578397872
+162 0 100 685180337 100 1468081019
+162 1 100 4189004854 100 1206007160
+163 0 100 1474219897 100 2153447245
+163 1 100 734342036 100 216482433
+164 0 100 2824077722 100 897239359
+164 1 100 1486824917 100 3219676160
+164 2 100 1429958582 100 2727914451
+164 3 100 3100525505 100 1783061755
+164 4 100 3610931957 100 2527733205
+165 0 100 2638697430 100 2834339023
+165 1 100 2871532692 100 2723770532
+165 2 100 1900731427 100 3689967988
+165 3 100 2762539605 100 1363299179
+165 4 100 3151817901 100 2716843527
+165 5 100 539591006 100 3558398409
+165 6 100 3855480864 100 2553943214
+165 7 100 3411727220 100 1257387945
+166 0 100 1048498924 100 3158338704
+167 0 100 2863689049 100 3732794727
+167 1 100 2466570564 100 3013847378
+167 2 100 2074552210 100 3713477870
+167 3 100 4070130222 100 3906586541
+167 4 100 3919896544 100 916866207
+168 0 100 4170322786 100 4071714249
+168 1 100 367745258 100 4000087017
+168 2 100 592571108 100 562939434
+168 3 100 3658691564 100 2835899107
+168 4 100 2986451954 100 489457505
+169 0 100 2808195950 100 1753148034
+170 0 100 3250960741 100 2826064163
+170 1 100 1961556204 100 32933028
+170 2 100 561288300 100 3970499319
+170 3 100 1814630547 100 1254016097
+170 4 100 338951999 100 900639879
+170 5 100 630424412 100 531546258
+170 6 100 3698253375 100 1074509506
+170 7 100 1829288799 100 545044378
+171 0 100 2540102898 100 1743614469
+171 1 100 1448274569 100 1783800275
+171 2 100 1162302278 100 880463267
+171 3 100 3958294268 100 3041719095
+171 4 100 4138169238 100 3359223643
+171 5 100 686060573 100 3407973484
+171 6 100 1312678547 100 2485374842
+171 7 100 1688294226 100 2533765242
+172 0 100 430164291 100 1371807226
+172 1 100 4093502167 100 990740698
+172 2 100 2330461345 100 1375983874
+172 3 100 1825208472 100 3642685707
+172 4 100 2595020576 100 2919771747
+172 5 100 2392665455 100 3616332531
+172 6 100 114714788 100 2370335825
+173 0 100 174744556 100 962823517
+173 1 100 2309478541 100 678581868
+174 0 100 1722321124 100 2636247944
+175 0 100 3990461813 100 3997155660
+175 1 100 244685382 100 3491776302
+175 2 100 3627616219 100 694404690
+176 0 100 3031692195 100 3000545518
+176 1 100 483835888 100 477531023
+176 2 100 147272808 100 2462532052
+176 3 100 2757719494 100 865664177
+176 4 100 3038143022 100 3778723774
+176 5 100 3045410485 100 1395477726
+176 6 100 2060685045 100 1719836659
+176 7 100 924445233 100 3655112279
+177 0 100 2883008351 100 974062835
+177 1 100 2214341649 100 1476644511
+177 2 100 631014623 100 84763515
+178 0 100 916280847 100 3750733914
+178 1 100 21650431 100 2270971787
+178 2 100 3949361414 100 7184368
+178 3 100 358054804 100 11699360
+178 4 100 1235667186 100 1778011328
+178 5 100 2923641038 100 3701747159
+178 6 100 2673172662 100 1483091323
+179 0 100 1288052859 100 960045749
+179 1 100 3896944218 100 1673252390
+180 0 100 4197886167 100 2453930038
+180 1 100 457777688 100 921631470
+181 0 100 1537111444 100 2557081456
+181 1 100 3576398663 100 1384382577
+181 2 100 681014478 100 4271537155
+181 3 100 3967737835 100 983244299
+182 0 100 1577029794 100 1860805392
+182 1 100 3336668030 100 1691362609
+182 2 100 2616930445 100 2015842225
+182 3 100 1388966483 100 56724356
+183 0 100 1155655232 100 3124820363
+183 1 100 1566055866 100 4010723417
+183 2 100 3965005062 100 4191938485
+183 3 100 3319809182 100 1257213720
+183 4 100 1326443292 100 1325247865
+183 5 100 2988758598 100 3178692490
+184 0 100 1028557004 100 3164220399
+184 1 100 3997302925 100 4021144265
+184 2 100 1832951261 100 1002625430
+185 0 100 807569379 100 1379692301
+186 0 100 3920392692 100 2942609440
+186 1 100 244405275 100 1151873813
+186 2 100 1542613835 100 3771403175
+186 3 100 1193416642 100 850738064
+186 4 100 568969723 100 3786391794
+186 5 100 3102335784 100 361153633
+187 0 100 1825631737 100 1517492684
+187 1 100 380175951 100 1686799086
+188 0 100 4135746457 100 2848940323
+188 1 100 2985405270 100 2960319139
+188 2 100 252873072 100 1438908676
+189 0 100 2702291952 100 1525384796
+190 0 100 88220702 100 2273583118
+190 1 100 1222907884 100 1313708241
+190 2 100 469911815 100 2755730473
+190 3 100 452417382 100 843687038
+191 0 100 3776669143 100 1584780307
+191 1 100 11848842 100 2734316381
+191 2 100 942807431 100 3629975104
+191 3 100 281107473 100 2640019857
+191 4 100 1285586425 100 2128954527
+192 0 100 3747498758 100 543513945
+192 1 100 502342149 100 3583352610
+192 2 100 908242173 100 1903015297
+192 3 100 1720043744 100 2887109156
+192 4 100 491064087 100 2305148958
+193 0 100 1116865041 100 666253615
+193 1 100 3533845660 100 3916450686
+193 2 100 2383809545 100 2855234227
+194 0 100 3010023066 100 420899860
+194 1 100 121888771 100 4054671843
+194 2 100 307643387 100 1382733352
+194 3 100 205455046 100 3152061115
+195 0 100 2442690221 100 661902735
+195 1 100 992115876 100 1529799519
+195 2 100 3682491852 100 801306345
+196 0 100 936716673 100 3969641427
+196 1 100 3840605642 100 3416792183
+196 2 100 2311990325 100 4139182871
+196 3 100 1739573001 100 551858632
+196 4 100 3891397473 100 1194024511
+196 5 100 1455333218 100 4105180320
+196 6 100 2575044438 100 3706331986
+197 0 100 2031209427 100 960401892
+197 1 100 441449185 100 1373821547
+197 2 100 3277568093 100 3903289332
+197 3 100 2054957901 100 773446560
+197 4 100 1463012074 100 813020559
+198 0 100 3474187154 100 2827201170
+198 1 100 1043918444 100 4071015745
+198 2 100 4160499024 100 1858349729
+198 3 100 3544817758 100 1354848162
+198 4 100 2369057011 100 3296468845
+198 5 100 3176707622 100 3104641233
+199 0 100 3400156765 100 3010916893
+199 1 100 1865188210 100 3675778596
+199 2 100 1382079799 100 249469607
+199 3 100 3290290531 100 2667919522
+199 4 100 493847326 100 1875704083
+199 5 100 3868132545 100 4179384285
+199 6 100 2126160920 100 1815733711
+200 0 100 3294520776 100 1095833006
+200 1 100 1726614902 100 673155589
+200 2 100 2200034911 100 1128752995
+201 0 100 849459264 100 1401665651
+202 0 100 1907734316 100 1967408881
+203 0 100 578156705 100 827056679
+203 1 100 659374556 100 1942060213
+203 2 100 1297265826 100 2361137157
+204 0 100 2139834370 100 1438403773
+204 1 100 3829998032 100 1281442209
+205 0 100 3972439404 100 1504599116
+206 0 100 552366212 100 3991483876
+206 1 100 2895844539 100 1217861028
+206 2 100 3900539208 100 2464832746
+206 3 100 245657917 100 2640296814
+206 4 100 3626078410 100 438679632
+207 0 100 2812713800 100 3196206925
+207 1 100 1082484370 100 2998473462
+207 2 100 52645292 100 1996358426
+208 0 100 543467392 100 2616712307
+208 1 100 3679012679 100 3775097856
+208 2 100 1761735470 100 2851492603
+208 3 100 3313971642 100 1319393894
+208 4 100 3581543544 100 3516298494
+208 5 100 132304735 100 2088743991
+208 6 100 407476829 100 3174404397
+209 0 100 3829195895 100 1700899177
+209 1 100 3709457281 100 1718297520
+209 2 100 763421801 100 2096029129
+209 3 100 193204318 100 4088007423
+210 0 100 1970019947 100 3138935843
+210 1 100 201470982 100 3367917504
+211 0 100 3999776696 100 3871723462
+211 1 100 3692608302 100 773899103
+211 2 100 2195188872 100 4244180024
+211 3 100 3082717072 100 1826394000
+211 4 100 3432985925 100 701038916
+211 5 100 2226331447 100 3457147357
+212 0 100 1760995914 100 2165245972
+213 0 100 2976907471 100 5672342
+213 1 100 800460983 100 3445536663
+213 2 100 552254564 100 2413716666
+213 3 100 3871635364 100 1020996170
+213 4 100 2091639064 100 1726700700
+213 5 100 1739492730 100 4164335975
+213 6 100 2997825094 100 3620082268
+214 0 100 1785591093 100 2544215022
+214 1 100 2312822971 100 337592505
+214 2 100 2024293951 100 1967603256
+214 3 100 4133893496 100 560101737
+214 4 100 2841973948 100 2614385503
+214 5 100 2907830364 100 2451999470
+214 6 100 3378149840 100 4008242944
+215 0 100 2103093031 100 1804135702
+216 0 100 2342205517 100 1113437471
+216 1 100 3956201435 100 1909059001
+216 2 100 2166042936 100 2274406838
+216 3 100 3004520927 100 3849593281
+216 4 100 1908102140 100 1175982545
+216 5 100 4023774012 100 3068768042
+217 0 100 2353724964 100 2635137147
+217 1 100 3816183883 100 273144228
+217 2 100 4016388024 100 3351163029
+217 3 100 1532244544 100 313600737
+217 4 100 1029632016 100 1617932025
+217 5 100 2414385404 100 2630528879
+217 6 100 1450227986 100 3483912754
+218 0 100 3056397638 100 96863094
+218 1 100 3999902865 100 3840089114
+218 2 100 3055767671 100 2191799821
+218 3 100 2316216378 100 2784847648
+219 0 100 3837940851 100 1100042866
+219 1 100 1784906101 100 3203724186
+219 2 100 191309684 100 1565856119
+219 3 100 3345769863 100 107456451
+219 4 100 962810081 100 3788569271
+219 5 100 3177359049 100 1570463576
+219 6 100 1710666010 100 4073872776
+219 7 100 101062238 100 3387073489
+220 0 100 26445224 100 1738555965
+221 0 100 3955629984 100 385130407
+221 1 100 591445576 100 3740419422
+221 2 100 465673236 100 972964803
+221 3 100 2525197167 100 2306236986
+221 4 100 3859685940 100 1798793974
+221 5 100 2339243415 100 3208179963
+222 0 100 783056353 100 4255147074
+222 1 100 2073617015 100 2945094382
+222 2 100 3795667195 100 2724240510
+222 3 100 1716027690 100 2026514196
+222 4 100 4095339987 100 2716824761
+222 5 100 1339008404 100 338623384
+222 6 100 3047685463 100 717284577
+222 7 100 1619056318 100 3587083159
+223 0 100 327562361 100 2855134012
+223 1 100 2575351443 100 277958237
+223 2 100 1644865408 100 1112303711
+223 3 100 1929476235 100 1685651393
+224 0 100 1409959132 100 1212952357
+224 1 100 3412064388 100 2896087202
+224 2 100 4182976839 100 3217427170
+224 3 100 3333970281 100 604001483
+224 4 100 3626574558 100 3144427063
+224 5 100 1145084891 100 2334239487
+224 6 100 2915956894 100 2982931844
+225 0 100 839817344 100 1043995416
+225 1 100 1372035708 100 2310604615
+226 0 100 2649031161 100 1906141788
+226 1 100 1735833052 100 1772962433
+226 2 100 597101479 100 1114077802
+226 3 100 3399964713 100 2148731430
+226 4 100 16361664 100 1886499256
+227 0 100 3049325918 100 460259723
+227 1 100 1335714224 100 3405378269
+227 2 100 690769965 100 4139144010
+227 3 100 3627669342 100 716225768
+227 4 100 2568869299 100 1499363820
+227 5 100 396909025 100 2556028499
+228 0 100 443654513 100 1914942605
+228 1 100 1716551810 100 433034961
+228 2 100 2284049449 100 889270799
+228 3 100 2096151665 100 1102713763
+228 4 100 553381598 100 780817632
+228 5 100 3491184855 100 4062184190
+228 6 100 2661264909 100 4045448531
+228 7 100 788723662 100 2437961389
+229 0 100 2413916046 100 3577776381
+229 1 100 3368021188 100 2838384471
+229 2 100 1059966380 100 1047439365
+229 3 100 1018957985 100 1655705815
+229 4 100 2662267248 100 4213746741
+230 0 100 884004196 100 2009829933
+230 1 100 2155031035 100 2489687149
+230 2 100 2936999773 100 436735215
+231 0 100 3890881116 100 1141369394
+231 1 100 33164161 100 1510978454
+231 2 100 2926879585 100 995317449
+231 3 100 4141904101 100 2623057476
+231 4 100 667261073 100 3556939110
+231 5 100 2794855290 100 3660385464
+231 6 100 279259837 100 584421986
+232 0 100 3879905381 100 349453663
+232 1 100 327918954 100 3373653878
+232 2 100 664161250 100 1523657351
+232 3 100 2865797949 100 411152076
+232 4 100 4188894016 100 3318665398
+233 0 100 2210739470 100 604622509
+233 1 100 957958494 100 877995173
+233 2 100 166440083 100 1573453824
+233 3 100 2566346179 100 2424248722
+233 4 100 666812242 100 1605490677
+234 0 100 2304559497 100 3135863789
+234 1 100 2751420147 100 3926310640
+234 2 100 3071178651 100 4175598857
+234 3 100 3322071856 100 2336368177
+234 4 100 2248968709 100 462779164
+234 5 100 3503820175 100 3948047133
+234 6 100 749753855 100 3985952746
+234 7 100 1678531974 100 2281422186
+235 0 100 1940407677 100 753273987
+235 1 100 84759896 100 3054362859
+235 2 100 149420664 100 3223194376
+235 3 100 2408191984 100 1918979937
+235 4 100 4086963952 100 3692135565
+235 5 100 4284847673 100 2963623761
+235 6 100 3902594863 100 2467710859
+236 0 100 16141890 100 2583406535
+236 1 100 4130935190 100 4245111868
+236 2 100 2928563320 100 556301094
+236 3 100 4032061199 100 2645652985
+236 4 100 2623294046 100 989481269
+236 5 100 3598366598 100 3034123407
+237 0 100 409806383 100 3428522505
+237 1 100 3900735936 100 595660370
+237 2 100 3956104141 100 1852241192
+237 3 100 3381151662 100 4184211800
+238 0 100 2727528425 100 693735874
+238 1 100 2063833927 100 3584078470
+238 2 100 2546540240 100 2252623203
+238 3 100 1322346448 100 476745786
+238 4 100 901529721 100 441304238
+238 5 100 4229633018 100 1077543412
+239 0 100 4236284397 100 265892719
+239 1 100 3028161503 100 1627153789
+239 2 100 89675026 100 3895668196
+239 3 100 4060095665 100 1381033692
+239 4 100 1758906126 100 1155989423
+240 0 100 3064520751 100 3759604659
+240 1 100 2099680368 100 621135942
+240 2 100 1754662483 100 2939654548
+240 3 100 2134687098 100 4083975844
+240 4 100 1534764840 100 2427866561
+240 5 100 1324836303 100 2572156158
+240 6 100 553185885 100 2504792686
+240 7 100 2326265714 100 4144434966
+241 0 100 697496107 100 1886018013
+241 1 100 2315536186 100 1164871444
+241 2 100 2909352046 100 4215359949
+241 3 100 2427418145 100 66260596
+241 4 100 2701650909 100 3189456712
+241 5 100 2141415417 100 1537576817
+241 6 100 3226745940 100 3965836935
+241 7 100 1158265530 100 1010576261
+242 0 100 1077403948 100 1903655322
+242 1 100 3454095544 100 982776901
+242 2 100 2045600057 100 3428967608
+243 0 100 151270335 100 1602524958
+243 1 100 3690874610 100 1352914034
+244 0 100 56008152 100 3928715966
+244 1 100 2365327230 100 1538082426
+244 2 100 2886463466 100 1444085546
+244 3 100 2964026366 100 872273450
+244 4 100 201154204 100 2657798883
+245 0 100 232550816 100 287525827
+246 0 100 857553249 100 4285200003
+246 1 100 1047307591 100 1059002882
+246 2 100 2775771299 100 1936142853
+247 0 100 686647138 100 364610089
+247 1 100 1976786538 100 2865492603
+247 2 100 1493625532 100 686785747
+248 0 100 1911526560 100 1700851111
+248 1 100 1792151033 100 2551954186
+248 2 100 941399270 100 2370365772
+248 3 100 856807971 100 604883430
+248 4 100 2030350758 100 411476134
+248 5 100 4173659897 100 175571268
+248 6 100 1448228986 100 3140979746
+248 7 100 3201390665 100 23596101
+249 0 100 2463162394 100 3535039754
+249 1 100 3981019015 100 3711628288
+249 2 100 2295578555 100 3149763176
+249 3 100 1559915298 100 1668870278
+249 4 100 1731335203 100 783490996
+249 5 100 882490420 100 4175476693
+250 0 100 2708196748 100 2237569653
+250 1 100 503404262 100 2353966455
+250 2 100 2814210347 100 732531049
+250 3 100 2804282033 100 3222745195
+250 4 100 1574473050 100 1325849584
+250 5 100 1811175453 100 2074534808
+250 6 100 920624569 100 1045232976
+251 0 100 1614173902 100 4103401799
+251 1 100 347568400 100 2908334718
+251 2 100 3188557516 100 298284132
+251 3 100 2010657146 100 3538496360
+252 0 100 2513115591 100 1643945196
+252 1 100 2944219209 100 3684474680
+252 2 100 1140812936 100 2054290816
+252 3 100 1107467118 100 1049662545
+252 4 100 2818499003 100 786375752
+253 0 100 3927791009 100 1766406309
+253 1 100 2360677836 100 187051233
+254 0 100 2272505526 100 4214401560
+254 1 100 962446524 100 2632506214
+254 2 100 857207097 100 784823432
+254 3 100 3971254967 100 3271724277
+254 4 100 1999115483 100 3629524684
+255 0 100 2857512369 100 3273442348
+255 1 100 1841396501 100 1830119777
+255 2 100 2244197856 100 3514885635
+255 3 100 1176538406 100 1117712638
+255 4 100 710718385 100 208084089
+255 5 100 1979450647 100 579887497
+255 6 100 628796005 100 871969307
+255 7 100 84343267 100 2700922379
+256 0 100 841435661 100 1909281195
+256 1 100 2345490028 100 1777165483
+256 2 100 566128371 100 3824301162
+256 3 100 1618567477 100 346010766
+256 4 100 112483131 100 1262069100
+256 5 100 3408186145 100 3332520142
+256 6 100 1146036721 100 2579924023
+257 0 100 1638305630 100 996108223
+257 1 100 2210427675 100 2555673530
+257 2 100 4096933574 100 1046095912
+258 0 100 2349907861 100 2590414190
+258 1 100 635616700 100 74051978
+258 2 100 4022932443 100 995634741
+258 3 100 3925656089 100 1493629086
+258 4 100 2626246631 100 3797175149
+258 5 100 2382527148 100 87121212
+258 6 100 991235008 100 538193543
+258 7 100 3333438595 100 835805087
+259 0 100 3906887032 100 4114374774
+259 1 100 2138775154 100 200309083
+259 2 100 2343297790 100 3126762248
+259 3 100 2343363943 100 2825256580
+260 0 100 1020120662 100 521719277
+260 1 100 1968059556 100 3134716935
+260 2 100 3799518637 100 2315966048
+260 3 100 3763496028 100 3617441911
+260 4 100 70320865 100 3317086252
+260 5 100 1345970391 100 2170613737
+261 0 100 2367492761 100 630297498
+261 1 100 705694339 100 2111359899
+261 2 100 2839370532 100 4067801010
+261 3 100 720070319 100 1463614533
+261 4 100 772413656 100 466687910
+261 5 100 4210398892 100 4239228927
+262 0 100 1215307476 100 571241026
+262 1 100 3885953379 100 1395524741
+262 2 100 1232732185 100 1380672455
+262 3 100 3443662982 100 399608663
+262 4 100 460159391 100 2646963942
+262 5 100 1702272798 100 6272546
+262 6 100 1863937641 100 2246207050
+262 7 100 3244352688 100 2829213064
+263 0 100 232768481 100 960417078
+263 1 100 2649310517 100 1766476344
+264 0 100 3828113937 100 343719934
+264 1 100 1711549058 100 3100512708
+264 2 100 3190493172 100 1094305352
+264 3 100 2387725093 100 336955870
+264 4 100 2887770987 100 2454704591
+264 5 100 1227918416 100 466895072
+264 6 100 3846108798 100 151226944
+265 0 100 1017296620 100 2099501289
+265 1 100 3275566125 100 2698531497
+265 2 100 3385802375 100 3700166856
+265 3 100 1923600892 100 314610413
+265 4 100 2415444560 100 2924385946
+265 5 100 3845148139 100 1419809738
+265 6 100 4287929424 100 4171950329
+266 0 100 1756672741 100 1502245337
+266 1 100 3651110378 100 2062780656
+266 2 100 3586339477 100 709356898
+266 3 100 3423862606 100 2510917242
+266 4 100 3295947904 100 828071925
+267 0 100 2640277516 100 1908893288
+267 1 100 3244991824 100 1112749852
+267 2 100 863865744 100 2452246267
+267 3 100 2956703825 100 2289945842
+267 4 100 3163127541 100 3304806667
+267 5 100 1895746456 100 3141940519
+267 6 100 580691242 100 3220377136
+267 7 100 916361071 100 1343264937
+268 0 100 689607912 100 194683048
+268 1 100 2632225558 100 2124485581
+268 2 100 3814282666 100 1758509536
+268 3 100 633322437 100 1392312149
+268 4 100 917187745 100 1619709421
+268 5 100 334768465 100 3889995588
+268 6 100 702858595 100 2177166212
+268 7 100 1131147369 100 2180438753
+269 0 100 467065188 100 2063130315
+269 1 100 3677737906 100 1766794145
+269 2 100 1315591636 100 2679124515
+269 3 100 257449869 100 3257523251
+270 0 100 1342552131 100 3551335682
+270 1 100 1338202934 100 4240804524
+271 0 100 1992900798 100 2834119494
+271 1 100 794719613 100 709491170
+271 2 100 3864295092 100 261536576
+271 3 100 2022325188 100 2798168909
+271 4 100 247432357 100 3329846465
+272 0 100 774941806 100 2783025502
+272 1 100 160517294 100 516677761
+272 2 100 1311756659 100 1756661923
+272 3 100 1870699560 100 871237277
+272 4 100 535820281 100 603993752
+272 5 100 704028110 100 2959342076
+272 6 100 3603818193 100 3284718581
+273 0 100 2727968129 100 3352147146
+274 0 100 2641767665 100 2089200626
+274 1 100 3086148258 100 2706181548
+274 2 100 1028890055 100 449336737
+274 3 100 3490760753 100 693411348
+274 4 100 297725511 100 1300993083
+274 5 100 2407310439 100 4031283784
+274 6 100 1407761342 100 1647512225
+274 7 100 557861400 100 3297439424
+275 0 100 3851389400 100 2609160537
+276 0 100 3016820703 100 2813009146
+276 1 100 4208600286 100 318278216
+277 0 100 3262045348 100 1288905842
+277 1 100 258722169 100 775660254
+277 2 100 226531943 100 1169579346
+278 0 100 4185057350 100 1431579486
+278 1 100 2679565888 100 1036795577
+278 2 100 1117312892 100 2771295277
+278 3 100 658245591 100 237702360
+278 4 100 4249703212 100 4256158677
+278 5 100 3805188740 100 3132265796
+278 6 100 3120903381 100 3274828594
+279 0 100 4162306317 100 2673675567
+279 1 100 2786445868 100 1603994293
+280 0 100 3577990309 100 2589864682
+280 1 100 2569434088 100 362364994
+280 2 100 1298990475 100 4256823442
+281 0 100 1068453190 100 3398806727
+281 1 100 3145346554 100 209245613
+281 2 100 2244017716 100 953012283
+281 3 100 1183128906 100 4188223706
+281 4 100 1110255899 100 449594697
+281 5 100 937892173 100 2691864825
+281 6 100 1622925274 100 2805398353
+282 0 100 173315928 100 1820384466
+282 1 100 401829657 100 327559119
+282 2 100 2212543290 100 4261031174
+282 3 100 2210680342 100 445522221
+282 4 100 290736276 100 4084997432
+282 5 100 2276597007 100 39856452
+282 6 100 831053192 100 3423846046
+282 7 100 3545477327 100 2735977519
+283 0 100 3484985622 100 1818558371
+283 1 100 3810356502 100 2694560806
+283 2 100 3217760453 100 2116832714
+283 3 100 3124511984 100 2792338499
+283 4 100 1019519816 100 1600368156
+283 5 100 780566675 100 3199337745
+283 6 100 3727453489 100 2704495570
+284 0 100 1089709738 100 4045435362
+284 1 100 1874113472 100 3392372325
+284 2 100 3998268868 100 4017287360
+284 3 100 4063860494 100 2623017358
+284 4 100 642260591 100 2868433538
+284 5 100 3606657521 100 3425472313
+285 0 100 3223273780 100 3092960241
+285 1 100 3114888008 100 435508270
+285 2 100 618801208 100 270140223
+285 3 100 472419409 100 3083928045
+285 4 100 1319439814 100 2131132304
+286 0 100 4254577165 100 1454366371
+286 1 100 693940846 100 2894793832
+286 2 100 2939058534 100 437076661
+287 0 100 538586880 100 3756912975
+287 1 100 2079978820 100 1074707793
+287 2 100 1573813782 100 2055444515
+287 3 100 3395421234 100 2087415230
+287 4 100 2503830344 100 3990933296
+288 0 100 3308723838 100 3543022163
+289 0 100 2239774271 100 1379042699
+290 0 100 2531616607 100 4008820730
+290 1 100 1552073470 100 57074951
+290 2 100 540519529 100 2802000398
+290 3 100 123856675 100 2155280623
+290 4 100 2553002937 100 2990387219
+291 0 100 1813442842 100 2891927707
+291 1 100 3472169159 100 2548732469
+291 2 100 2458362029 100 1682881461
+291 3 100 2843424105 100 580640874
+291 4 100 2967611229 100 3200625939
+292 0 100 525212348 100 2653430450
+292 1 100 2671274694 100 1076541099
+292 2 100 3863662365 100 1456632368
+293 0 100 3353877577 100 3340060516
+293 1 100 1847539577 100 1046181320
+293 2 100 3349879366 100 2815167271
+293 3 100 1846420067 100 937980473
+293 4 100 1288941367 100 343738374
+293 5 100 1844466165 100 1985392203
+293 6 100 1667746869 100 1981815894
+294 0 100 1032892681 100 1051188132
+295 0 100 2045453826 100 35823432
+295 1 100 1345836510 100 480756620
+295 2 100 1439428024 100 3934708644
+295 3 100 3807948176 100 1493048672
+295 4 100 125323231 100 3857318745
+295 5 100 528047923 100 2379917593
+296 0 100 3636498285 100 3027242664
+296 1 100 2016573524 100 1688419647
+296 2 100 3821586402 100 321315158
+296 3 100 306414699 100 700046195
+296 4 100 1315920390 100 1444994328
+296 5 100 981448166 100 193288253
+296 6 100 2347477794 100 1704056965
+296 7 100 536612032 100 498589695
+297 0 100 1970247555 100 4092134579
+297 1 100 3723658276 100 4049363563
+297 2 100 215555240 100 467571632
+297 3 100 2370808593 100 4164794745
+297 4 100 3820190065 100 3391735520
+297 5 100 849163001 100 1124376476
+297 6 100 703037734 100 569520186
+298 0 100 3248226542 100 2083596084
+298 1 100 3857987070 100 2916409917
+298 2 100 2128492314 100 3432221416
+298 3 100 3593745440 100 1908981111
+298 4 100 2870011493 100 3983975712
+298 5 100 736923314 100 653638546
+298 6 100 4017614713 100 3827189467
+299 0 100 2997292658 100 702691882
+299 1 100 1605563566 100 3748573772
+299 2 100 3864745926 100 4264592761
+299 3 100 2346797178 100 68979881
+300 0 100 4144952409 100 567322346
+300 1 100 2270205053 100 2231425952
+301 0 100 3282570314 100 2737597470
+301 1 100 402055185 100 1437084036
+301 2 100 3417880049 100 2159219856
+301 3 100 2651605729 100 550475448
+301 4 100 1753084422 100 2688596146
+301 5 100 126503283 100 3127002798
+302 0 100 1632299664 100 807099092
+302 1 100 1167521120 100 1313315341
+302 2 100 2858040045 100 4035939173
+302 3 100 3322528494 100 4202188274
+302 4 100 304089359 100 3927481146
+303 0 100 337861341 100 2581565437
+303 1 100 392077162 100 2131010756
+303 2 100 1463510859 100 2619844538
+303 3 100 3494269257 100 1291409324
+303 4 100 4128384439 100 1172290065
+303 5 100 3180261804 100 2795846255
+303 6 100 3716086045 100 1192079769
+304 0 100 2986160263 100 2900080814
+304 1 100 1105982564 100 2084546468
+304 2 100 1945540302 100 2315555739
+305 0 100 2975945616 100 2985387676
+305 1 100 1384459513 100 1124591009
+305 2 100 2867451819 100 1961597412
+305 3 100 834588956 100 153925211
+305 4 100 1739529540 100 728297002
+305 5 100 2041993357 100 528105598
+305 6 100 1161865354 100 1214896179
+306 0 100 1343096500 100 1929375160
+306 1 100 3066839360 100 1974526205
+307 0 100 1511191431 100 1881607701
+307 1 100 681255372 100 2193430934
+307 2 100 1962149938 100 3736541778
+307 3 100 1800296233 100 398293549
+307 4 100 1203353221 100 463022069
+307 5 100 1317399357 100 2228622654
+307 6 100 1346966148 100 4204774192
+308 0 100 298978263 100 1121430934
+308 1 100 327186683 100 3581793655
+309 0 100 1835544736 100 2549198111
+309 1 100 2157351444 100 2204033595
+309 2 100 520710695 100 3731498021
+309 3 100 3757204756 100 2432970671
+310 0 100 497555757 100 2781836257
+311 0 100 3589456275 100 3191823415
+311 1 100 107240677 100 1149376992
+311 2 100 3063620627 100 4004947265
+311 3 100 3796052846 100 1713276744
+311 4 100 3235913955 100 14602959
+312 0 100 1112199516 100 1464539974
+312 1 100 1238610928 100 2591840031
+312 2 100 3435879055 100 2121114438
+312 3 100 3560424758 100 2946468133
+313 0 100 1438488858 100 2911561140
+313 1 100 3404713708 100 2115376351
+313 2 100 2531833631 100 990996480
+313 3 100 305827668 100 3586098259
+314 0 100 1659350094 100 2189425201
+314 1 100 604325126 100 474340991
+314 2 100 1950209568 100 1642108486
+314 3 100 2626170640 100 1675649279
+314 4 100 2631565358 100 3017210445
+315 0 100 1030541917 100 842215420
+315 1 100 2677211921 100 1700566263
+315 2 100 1438138974 100 3514305632
+315 3 100 3648906003 100 1210698120
+315 4 100 4107108439 100 3547077685
+315 5 100 950365508 100 2203035889
+316 0 100 472297824 100 2147578336
+316 1 100 1783679457 100 1333941583
+316 2 100 1366868586 100 4161778485
+316 3 100 2700309865 100 1654875075
+316 4 100 1629228475 100 2585548002
+316 5 100 3226362354 100 3541542227
+317 0 100 2969218614 100 325766127
+317 1 100 2032647623 100 1837985553
+317 2 100 1786276377 100 79562365
+317 3 100 1645862448 100 431681034
+317 4 100 1130054162 100 4045850399
+317 5 100 1169031185 100 4255013942
+318 0 100 3331679091 100 1809518206
+318 1 100 4266266151 100 4274387171
+318 2 100 2241363254 100 2017306275
+318 3 100 2375354542 100 2611312971
+318 4 100 3077218628 100 4020449721
+318 5 100 3764250116 100 1620027084
+318 6 100 4082336880 100 765067327
+319 0 100 1023043378 100 3019351980
+319 1 100 391015665 100 2495881318
+319 2 100 2485261569 100 1102703158
+319 3 100 1158287673 100 1231495543
+319 4 100 1035517228 100 3324616621
+320 0 100 3472571566 100 2001264280
+321 0 100 1143038770 100 3921692511
+321 1 100 1663745558 100 3566310054
+321 2 100 2276332522 100 2828400503
+321 3 100 3469415096 100 1579264631
+321 4 100 2717175681 100 399012076
+321 5 100 1138674168 100 212146479
+322 0 100 4020136826 100 1897416777
+323 0 100 649214042 100 3887993102
+323 1 100 818094896 100 2460428290
+323 2 100 3973379306 100 1402653941
+324 0 100 2680839360 100 3514060666
+324 1 100 781480334 100 500519558
+324 2 100 2368757646 100 2214162136
+324 3 100 2827388709 100 1900461530
+324 4 100 3789507451 100 627829314
+324 5 100 1439198498 100 54388484
+325 0 100 3394426743 100 4061878921
+325 1 100 3203691358 100 3950651470
+325 2 100 1184650514 100 1133498803
+325 3 100 4291620101 100 1331897650
+325 4 100 2281016674 100 1221734318
+325 5 100 2468926563 100 359584560
+325 6 100 1071934423 100 1306823250
+325 7 100 2654367028 100 256660764
+326 0 100 4029801633 100 2416430772
+326 1 100 4107546192 100 911475961
+326 2 100 3785751200 100 1753421890
+326 3 100 3749770169 100 1294101891
+326 4 100 1619580500 100 455637280
+326 5 100 886721543 100 2973962214
+327 0 100 2384126079 100 1390705801
+327 1 100 816610967 100 3923897727
+327 2 100 3334855774 100 3841246445
+327 3 100 434988461 100 458481058
+327 4 100 3919788106 100 1183976336
+327 5 100 410282825 100 990110703
+327 6 100 3178318091 100 3822660848
+327 7 100 1333995017 100 1719666110
+328 0 100 1302535977 100 967393206
+328 1 100 1947752006 100 1061159811
+328 2 100 1616427516 100 3808478965
+328 3 100 2998280662 100 2063941551
+328 4 100 800291650 100 914698925
+328 5 100 743904175 100 3575343515
+328 6 100 1518317224 100 3482837697
+328 7 100 1821174040 100 2245315269
+329 0 100 2884512975 100 773637812
+329 1 100 67941215 100 1629353740
+330 0 100 1984212807 100 109901074
+330 1 100 3324215302 100 1198896040
+331 0 100 2983259218 100 3971646384
+332 0 100 1869035704 100 2293728453
+332 1 100 3253561418 100 987619800
+333 0 100 3691617621 100 4227800686
+333 1 100 3210302629 100 2302926516
+333 2 100 1840912720 100 4009082418
+334 0 100 4090993968 100 1131900206
+334 1 100 2012341145 100 2565357262
+334 2 100 2482310605 100 25701965
+335 0 100 1179307829 100 2090021232
+335 1 100 1217317793 100 2315931137
+335 2 100 160117235 100 1141626492
+336 0 100 4011755312 100 2604048952
+336 1 100 309783453 100 3770580771
+336 2 100 2401955758 100 3476631177
+336 3 100 1081658998 100 379456771
+336 4 100 2031007493 100 2146433274
+336 5 100 3416901308 100 1568042060
+336 6 100 3461287352 100 3629835855
+336 7 100 2055693504 100 1866287619
+337 0 100 1737578361 100 1374795391
+337 1 100 2899246670 100 1704112132
+337 2 100 936840919 100 2193269155
+337 3 100 704334015 100 1531141965
+338 0 100 924204332 100 3317816004
+338 1 100 671733898 100 104569437
+338 2 100 2965869971 100 1061579258
+338 3 100 1552798365 100 2303856884
+339 0 100 3465670467 100 2503200002
+339 1 100 2776830506 100 3421187130
+339 2 100 198445564 100 191336667
+339 3 100 4097302342 100 20292115
+339 4 100 524800725 100 1152558573
+339 5 100 889340644 100 3029179653
+339 6 100 2397044936 100 175766455
+339 7 100 2880377479 100 1722610535
+340 0 100 2342301823 100 427251337
+340 1 100 2350177929 100 38760391
+340 2 100 2372962850 100 2330694634
+340 3 100 3717161591 100 950884408
+341 0 100 2004206779 100 2967200124
+341 1 100 4088243254 100 2160659356
+342 0 100 1537606127 100 2161763353
+342 1 100 1081542677 100 3382614344
+342 2 100 2956908176 100 4107373771
+343 0 100 651720437 100 2865191994
+343 1 100 1712514242 100 2778347646
+344 0 100 3781357257 100 4118192933
+344 1 100 1182869173 100 2386253183
+344 2 100 2276083073 100 2028140705
+344 3 100 1103186867 100 1490311373
+344 4 100 3147887808 100 3671407644
+345 0 100 2245611073 100 2053880257
+346 0 100 653817753 100 3818980938
+346 1 100 4008253934 100 3176669583
+346 2 100 1910838156 100 1000954353
+346 3 100 167430940 100 3624668458
+346 4 100 3038530422 100 725454578
+346 5 100 2428510832 100 2088457745
+347 0 100 811074227 100 2127276658
+347 1 100 1639420925 100 4231231120
+347 2 100 3229004652 100 2565855940
+348 0 100 3233880900 100 1369681255
+348 1 100 3171921979 100 414487875
+348 2 100 2901208818 100 3449013895
+349 0 100 435890963 100 1648006172
+349 1 100 1930694923 100 2579631966
+349 2 100 3550716306 100 2036483004
+349 3 100 3980912234 100 34385271
+349 4 100 77423958 100 315544780
+349 5 100 2047321550 100 4290572173
+350 0 100 467295734 100 836861896
+350 1 100 2990967388 100 2199654
+350 2 100 3935841011 100 2349378569
+350 3 100 778730832 100 3352002137
+351 0 100 3133822452 100 2158772629
+352 0 100 4207518838 100 3911523755
+352 1 100 2502059092 100 186935408
+352 2 100 4200703441 100 2590020764
+352 3 100 441875855 100 627524414
+353 0 100 1528044003 100 3298075268
+354 0 100 209311147 100 3869476596
+354 1 100 29513463 100 666952847
+354 2 100 1600646986 100 2072621928
+354 3 100 1552735812 100 53534821
+354 4 100 537004037 100 2075758165
+354 5 100 3560984695 100 1289634382
+354 6 100 187247182 100 918059678
+354 7 100 1748606117 100 1262199630
+355 0 100 3646471470 100 28322955
+355 1 100 3070128099 100 1527898662
+355 2 100 3319049126 100 2414094643
+355 3 100 1869219473 100 2875545072
+355 4 100 3070659728 100 589479737
+355 5 100 2583462555 100 2115999521
+356 0 100 1469784646 100 2896680205
+356 1 100 748079704 100 366116929
+356 2 100 2399149372 100 3298943882
+356 3 100 1527171616 100 2265462943
+357 0 100 1631290334 100 2207754635
+357 1 100 1525956732 100 689346285
+357 2 100 4096219347 100 1102550762
+358 0 100 3189216769 100 2802257021
+359 0 100 30987028 100 1744020487
+359 1 100 218791729 100 2845079473
+360 0 100 2087030282 100 3976649250
+360 1 100 2341311854 100 2344200665
+360 2 100 237863942 100 401684441
+360 3 100 2264688129 100 2209156024
+360 4 100 4104741768 100 2816346518
+361 0 100 3319863415 100 3119801078
+361 1 100 3352929215 100 2571071779
+361 2 100 3304774817 100 4020154369
+361 3 100 1234374759 100 2692914405
+362 0 100 3374112969 100 3552084027
+362 1 100 511638111 100 154449988
+363 0 100 1628303007 100 2186816418
+363 1 100 2080630486 100 1481207723
+363 2 100 868783022 100 2369425096
+363 3 100 1273791097 100 1454884385
+363 4 100 2146325076 100 1219206286
+363 5 100 2598361146 100 1359342351
+364 0 100 1811732208 100 1643075081
+364 1 100 3790527080 100 1028953200
+364 2 100 1067093252 100 3644469918
+364 3 100 2744323141 100 1123355897
+364 4 100 1493900110 100 3549196405
+364 5 100 1306071664 100 1588342499
+364 6 100 699373598 100 283690760
+364 7 100 1769097537 100 3043785199
+365 0 100 4043936149 100 2411788251
+365 1 100 3815264680 100 332292016
+365 2 100 2677327519 100 3136646012
+366 0 100 3149459335 100 3102260665
+366 1 100 4027634956 100 1010026097
+367 0 100 3419573936 100 1952269364
+367 1 100 2637868401 100 2464396235
+367 2 100 3719829822 100 1661214131
+368 0 100 2900452187 100 1862276906
+368 1 100 566211204 100 3891794562
+368 2 100 3837093710 100 4104204529
+368 3 100 3356391460 100 3924216918
+368 4 100 2582301080 100 1934087083
+369 0 100 3599476499 100 4171027270
+370 0 100 2917224011 100 1204673131
+370 1 100 2952285239 100 42092950
+370 2 100 941062763 100 1560431542
+370 3 100 2733521585 100 4232670260
+371 0 100 3175984583 100 1632839470
+371 1 100 273127477 100 3721718963
+372 0 100 3185872804 100 4107513253
+373 0 100 383514197 100 1606794444
+373 1 100 3247630991 100 3798843360
+374 0 100 881233443 100 1041890235
+374 1 100 1532298427 100 4050363343
+374 2 100 1098001280 100 3783620528
+375 0 100 4081613476 100 2018715709
+375 1 100 2896509420 100 114343769
+375 2 100 2346903970 100 1851933720
+375 3 100 1059743203 100 851976503
+375 4 100 495753722 100 1353847878
+375 5 100 3465602887 100 3914248614
+375 6 100 2414464720 100 3438034464
+375 7 100 2630755747 100 1739764727
+376 0 100 763931930 100 1640707969
+376 1 100 3771734419 100 244993597
+376 2 100 2234292379 100 1614609496
+376 3 100 3786261259 100 2174216510
+377 0 100 186668990 100 2615328665
+377 1 100 3169023160 100 384999794
+377 2 100 858567925 100 3952089851
+378 0 100 4090660090 100 3609026337
+378 1 100 4053839015 100 1774514886
+378 2 100 1444087993 100 4002606361
+379 0 100 308460510 100 2302702185
+379 1 100 507901731 100 1880471729
+379 2 100 604459407 100 3966777871
+380 0 100 119521445 100 2115496484
+380 1 100 2482094344 100 4129492241
+380 2 100 940375186 100 2255283881
+380 3 100 3442478266 100 1849996797
+380 4 100 3818052478 100 3698111322
+380 5 100 4181819884 100 1991568070
+380 6 100 1235757627 100 153313768
+380 7 100 2141390899 100 1555273687
+381 0 100 3708763991 100 998962770
+381 1 100 627523995 100 1460670880
+382 0 100 2369814087 100 1563784432
+382 1 100 1502619367 100 1302090894
+382 2 100 1539978816 100 1650920378
+383 0 100 2006715361 100 3252302957
+383 1 100 2452805894 100 2091496813
+383 2 100 624358428 100 2084073003
+384 0 100 2799983116 100 2746068652
+384 1 100 4132304690 100 1894386614
+385 0 100 1568517779 100 3380735758
+385 1 100 470144932 100 1110482984
+385 2 100 2570007796 100 2753112338
+385 3 100 3085598052 100 820489517
+385 4 100 1994687642 100 1411376620
+385 5 100 4099348453 100 3208411079
+386 0 100 3234695011 100 3473112531
+386 1 100 1856234671 100 1372471771
+387 0 100 1452785627 100 2388374979
+387 1 100 1696148858 100 1141319979
+387 2 100 348947575 100 1001610701
+388 0 100 1876235231 100 2012798504
+388 1 100 2643769862 100 2714181453
+389 0 100 1161975712 100 4034348734
+389 1 100 2436172786 100 1710544995
+389 2 100 3775599102 100 698022116
+389 3 100 937919367 100 1867810392
+389 4 100 1237671730 100 3774472258
+389 5 100 3686255877 100 795731602
+389 6 100 3283904998 100 169431904
+389 7 100 613444268 100 2639348741
+390 0 100 3999808083 100 779579533
+390 1 100 3800603191 100 4294207471
+390 2 100 1865519495 100 1136887024
+390 3 100 1289653509 100 1425762805
+391 0 100 518160570 100 245151935
+391 1 100 2525945167 100 4206654624
+391 2 100 2030017856 100 2481698347
+391 3 100 3089871392 100 1435346926
+391 4 100 2931985459 100 2702695412
+391 5 100 2054722711 100 1231998012
+391 6 100 3318320859 100 3361958300
+391 7 100 1570677488 100 2991493694
+392 0 100 2994011943 100 2147090541
+392 1 100 1275187849 100 1686576085
+393 0 100 2244021655 100 146138307
+393 1 100 3027330179 100 3290798747
+394 0 100 1577972283 100 3520782297
+394 1 100 2851767684 100 2517755210
+394 2 100 348600104 100 665505465
+394 3 100 3870628807 100 1809602149
+394 4 100 3608492390 100 886614979
+395 0 100 2325285777 100 3892935407
+396 0 100 3365462853 100 1604285208
+396 1 100 4249131903 100 2538923213
+396 2 100 4172093548 100 1740632783
+396 3 100 3143206468 100 825546688
+396 4 100 1712164538 100 3046628877
+397 0 100 3853449337 100 3185084531
+397 1 100 4012910282 100 803730601
+397 2 100 3267446104 100 3181924032
+398 0 100 1455479865 100 2211551968
+398 1 100 3073207049 100 4132876681
+398 2 100 1874808969 100 3763137594
+398 3 100 3236593602 100 2077519792
+398 4 100 1797492209 100 3810805845
+398 5 100 2924892162 100 2330185060
+398 6 100 293523545 100 930369771
+399 0 100 4063256926 100 2315920194
+399 1 100 4031296669 100 2476308389
+399 2 100 2733434465 100 2556519506
+399 3 100 1916157204 100 166611275
+399 4 100 2761110661 100 2042013916
+399 5 100 1479616465 100 823305050
+399 6 100 1872634926 100 1488900454
+</script>
+<script type="text/plain" id="tsv-rolls" data-src="data/01/rolls.tsv">
+0 1846
+1 1799
+2 1815
+3 1857
+4 1788
+5 1869
+6 1753
+7 1810
+8 1736
+9 1895
+10 1821
+11 1848
+12 1776
+13 1877
+14 1773
+15 1842
+16 1760
+17 1812
+18 1742
+19 1823
+20 1715
+21 1864
+22 1796
+23 1799
+24 1738
+25 1834
+26 1780
+27 1785
+28 1771
+29 1818
+30 1839
+31 1832
+32 1824
+33 1836
+34 1759
+35 1811
+36 1868
+37 1867
+38 1807
+39 1720
+40 1798
+41 1760
+42 1809
+43 1834
+44 1813
+45 1825
+46 1826
+47 1827
+48 1888
+49 1845
+50 1807
+51 1740
+52 1747
+53 1788
+54 1814
+55 1815
+56 1695
+57 1835
+58 1802
+59 1845
+60 1776
+61 1722
+62 1790
+63 1798
+64 1792
+65 1792
+66 1796
+67 1800
+68 1812
+69 1797
+70 1840
+71 1813
+72 1778
+73 1840
+74 1749
+75 1813
+76 1770
+77 1787
+78 1799
+79 1823
+80 1774
+81 1826
+82 1778
+83 1798
+84 1804
+85 1753
+86 1902
+87 1804
+88 1802
+89 1819
+90 1811
+91 1858
+92 1766
+93 1843
+94 1787
+95 1783
+96 1784
+97 1817
+98 1881
+99 1861
+</script>
+<script type="text/plain" id="tsv-per-seed" data-src="data/01/per-seed.tsv">
+0 FAIL 2 FAIL 1
+1 PASS 4 PASS 4
+2 PASS 6 FAIL 1
+3 PASS 6 FAIL 2
+4 PASS 5 FAIL 1
+5 PASS 8 FAIL 1
+6 PASS 8 FAIL 2
+7 PASS 2 FAIL 1
+8 PASS 8 FAIL 2
+9 PASS 2 PASS 2
+10 PASS 8 FAIL 2
+11 PASS 4 FAIL 1
+12 PASS 1 PASS 1
+13 PASS 6 FAIL 2
+14 PASS 5 FAIL 1
+15 PASS 3 FAIL 2
+16 PASS 2 FAIL 1
+17 PASS 8 FAIL 4
+18 PASS 8 FAIL 1
+19 PASS 6 FAIL 4
+20 PASS 3 FAIL 1
+21 PASS 4 FAIL 1
+22 PASS 8 FAIL 6
+23 PASS 1 FAIL 1
+24 PASS 1 PASS 1
+25 FAIL 1 FAIL 3
+26 PASS 3 FAIL 1
+27 PASS 1 FAIL 1
+28 PASS 3 FAIL 2
+29 PASS 1 PASS 1
+30 PASS 6 FAIL 3
+31 PASS 6 FAIL 1
+32 FAIL 6 FAIL 2
+33 PASS 3 FAIL 3
+34 PASS 7 FAIL 3
+35 PASS 5 FAIL 2
+36 PASS 6 FAIL 3
+37 PASS 6 FAIL 2
+38 PASS 2 FAIL 1
+39 PASS 6 PASS 6
+40 PASS 2 PASS 2
+41 PASS 5 FAIL 3
+42 PASS 3 PASS 3
+43 PASS 4 FAIL 1
+44 PASS 1 PASS 1
+45 PASS 5 FAIL 1
+46 PASS 5 FAIL 2
+47 PASS 1 FAIL 1
+48 PASS 3 FAIL 1
+49 PASS 8 FAIL 1
+50 PASS 1 PASS 1
+51 PASS 1 FAIL 1
+52 PASS 5 FAIL 3
+53 PASS 6 FAIL 3
+54 PASS 5 FAIL 1
+55 FAIL 4 FAIL 1
+56 PASS 3 FAIL 2
+57 PASS 3 FAIL 2
+58 FAIL 3 FAIL 3
+59 PASS 8 FAIL 1
+60 PASS 5 FAIL 1
+61 PASS 3 FAIL 2
+62 PASS 1 PASS 1
+63 PASS 5 FAIL 1
+64 PASS 1 FAIL 1
+65 PASS 5 FAIL 1
+66 PASS 4 FAIL 1
+67 PASS 2 FAIL 1
+68 PASS 1 FAIL 1
+69 PASS 7 FAIL 1
+70 PASS 8 FAIL 1
+71 PASS 3 FAIL 2
+72 PASS 6 FAIL 1
+73 PASS 4 FAIL 1
+74 PASS 2 FAIL 2
+75 PASS 4 FAIL 2
+76 PASS 7 FAIL 1
+77 PASS 5 FAIL 1
+78 PASS 4 FAIL 2
+79 PASS 3 FAIL 2
+80 PASS 5 FAIL 1
+81 PASS 3 FAIL 1
+82 PASS 8 FAIL 1
+83 PASS 6 FAIL 6
+84 PASS 5 FAIL 2
+85 PASS 3 FAIL 1
+86 FAIL 1 FAIL 1
+87 PASS 2 FAIL 2
+88 PASS 4 FAIL 1
+89 PASS 6 FAIL 1
+90 PASS 2 FAIL 2
+91 FAIL 1 FAIL 2
+92 PASS 4 FAIL 4
+93 PASS 3 FAIL 1
+94 PASS 8 FAIL 1
+95 PASS 1 FAIL 1
+96 PASS 1 FAIL 1
+97 PASS 3 PASS 3
+98 PASS 7 FAIL 1
+99 PASS 6 FAIL 2
+100 PASS 7 FAIL 1
+101 PASS 3 FAIL 1
+102 PASS 6 FAIL 1
+103 PASS 1 FAIL 1
+104 PASS 1 FAIL 1
+105 PASS 6 FAIL 2
+106 PASS 1 FAIL 1
+107 PASS 4 FAIL 2
+108 FAIL 1 FAIL 1
+109 PASS 8 FAIL 1
+110 PASS 6 FAIL 6
+111 PASS 5 FAIL 4
+112 PASS 8 FAIL 1
+113 PASS 4 FAIL 2
+114 PASS 1 PASS 1
+115 PASS 4 FAIL 1
+116 PASS 5 FAIL 4
+117 PASS 1 PASS 1
+118 PASS 4 FAIL 2
+119 FAIL 3 FAIL 2
+120 PASS 5 FAIL 2
+121 PASS 7 FAIL 3
+122 PASS 3 FAIL 2
+123 FAIL 5 FAIL 1
+124 PASS 1 FAIL 1
+125 PASS 3 PASS 3
+126 PASS 3 PASS 3
+127 PASS 5 FAIL 2
+128 PASS 3 FAIL 2
+129 PASS 6 FAIL 2
+130 PASS 4 FAIL 1
+131 PASS 1 PASS 1
+132 PASS 6 FAIL 2
+133 PASS 4 FAIL 1
+134 FAIL 7 FAIL 1
+135 PASS 4 FAIL 1
+136 PASS 5 FAIL 2
+137 PASS 4 FAIL 4
+138 PASS 7 FAIL 3
+139 PASS 4 FAIL 3
+140 PASS 8 FAIL 3
+141 PASS 3 FAIL 1
+142 PASS 5 FAIL 2
+143 PASS 5 FAIL 4
+144 PASS 3 FAIL 2
+145 PASS 7 FAIL 1
+146 PASS 6 FAIL 3
+147 FAIL 2 PASS 2
+148 PASS 6 FAIL 1
+149 PASS 3 FAIL 3
+150 PASS 2 FAIL 1
+151 FAIL 1 FAIL 1
+152 PASS 5 PASS 5
+153 PASS 7 FAIL 1
+154 PASS 3 FAIL 1
+155 PASS 2 FAIL 1
+156 PASS 1 FAIL 1
+157 PASS 1 FAIL 1
+158 FAIL 1 FAIL 1
+159 PASS 7 FAIL 1
+160 PASS 5 FAIL 1
+161 FAIL 4 FAIL 1
+162 PASS 2 FAIL 2
+163 PASS 2 PASS 2
+164 PASS 5 FAIL 2
+165 PASS 8 FAIL 1
+166 PASS 1 PASS 1
+167 PASS 5 FAIL 1
+168 PASS 5 FAIL 1
+169 PASS 1 FAIL 1
+170 PASS 8 FAIL 1
+171 PASS 8 FAIL 4
+172 PASS 7 FAIL 2
+173 PASS 2 PASS 2
+174 PASS 1 FAIL 1
+175 PASS 3 FAIL 1
+176 PASS 8 FAIL 1
+177 PASS 3 PASS 3
+178 FAIL 1 FAIL 1
+179 PASS 2 FAIL 2
+180 PASS 2 FAIL 1
+181 PASS 4 FAIL 2
+182 PASS 4 FAIL 2
+183 PASS 6 FAIL 2
+184 PASS 3 FAIL 2
+185 PASS 1 PASS 1
+186 PASS 6 FAIL 1
+187 PASS 2 PASS 2
+188 PASS 3 FAIL 1
+189 PASS 1 PASS 1
+190 PASS 4 PASS 4
+191 PASS 5 FAIL 1
+192 FAIL 5 FAIL 4
+193 PASS 3 FAIL 2
+194 PASS 4 PASS 4
+195 PASS 3 FAIL 3
+196 PASS 7 FAIL 1
+197 PASS 5 FAIL 3
+198 PASS 6 FAIL 1
+199 PASS 7 FAIL 1
+200 PASS 3 FAIL 1
+201 PASS 1 PASS 1
+202 PASS 1 PASS 1
+203 PASS 3 PASS 3
+204 PASS 2 FAIL 2
+205 PASS 1 FAIL 1
+206 PASS 5 FAIL 1
+207 PASS 3 FAIL 1
+208 PASS 7 FAIL 2
+209 FAIL 2 FAIL 1
+210 PASS 2 FAIL 1
+211 PASS 6 FAIL 1
+212 PASS 1 PASS 1
+213 PASS 7 FAIL 4
+214 PASS 7 FAIL 1
+215 PASS 1 PASS 1
+216 PASS 6 FAIL 2
+217 PASS 7 FAIL 1
+218 PASS 4 FAIL 2
+219 PASS 8 FAIL 1
+220 PASS 1 PASS 1
+221 PASS 6 FAIL 1
+222 PASS 8 FAIL 1
+223 PASS 4 PASS 4
+224 FAIL 3 FAIL 2
+225 PASS 2 PASS 2
+226 PASS 5 FAIL 1
+227 PASS 6 FAIL 2
+228 FAIL 3 FAIL 6
+229 PASS 5 FAIL 1
+230 PASS 3 FAIL 2
+231 PASS 7 FAIL 1
+232 PASS 5 FAIL 5
+233 PASS 5 FAIL 4
+234 FAIL 4 FAIL 1
+235 PASS 7 FAIL 4
+236 PASS 6 FAIL 2
+237 PASS 4 FAIL 2
+238 PASS 6 FAIL 2
+239 PASS 5 FAIL 1
+240 PASS 8 FAIL 1
+241 PASS 8 FAIL 3
+242 PASS 3 FAIL 2
+243 PASS 2 FAIL 2
+244 FAIL 2 FAIL 3
+245 PASS 1 PASS 1
+246 PASS 3 FAIL 1
+247 PASS 3 FAIL 2
+248 PASS 8 FAIL 2
+249 PASS 6 FAIL 1
+250 PASS 7 FAIL 1
+251 PASS 4 FAIL 1
+252 PASS 5 FAIL 2
+253 PASS 2 FAIL 1
+254 PASS 5 FAIL 1
+255 PASS 8 FAIL 1
+256 PASS 7 FAIL 3
+257 PASS 3 FAIL 2
+258 PASS 8 FAIL 1
+259 FAIL 2 FAIL 1
+260 PASS 6 FAIL 2
+261 FAIL 3 FAIL 3
+262 PASS 8 FAIL 2
+263 PASS 2 FAIL 2
+264 PASS 7 FAIL 2
+265 PASS 7 FAIL 2
+266 PASS 5 FAIL 2
+267 PASS 8 FAIL 1
+268 PASS 8 FAIL 2
+269 PASS 4 FAIL 2
+270 PASS 2 FAIL 1
+271 PASS 5 FAIL 1
+272 PASS 7 FAIL 7
+273 PASS 1 FAIL 1
+274 PASS 8 FAIL 1
+275 PASS 1 FAIL 1
+276 PASS 2 FAIL 1
+277 PASS 3 FAIL 1
+278 PASS 7 FAIL 1
+279 PASS 2 FAIL 1
+280 PASS 3 FAIL 1
+281 PASS 7 FAIL 1
+282 FAIL 8 FAIL 3
+283 PASS 7 FAIL 1
+284 PASS 6 FAIL 1
+285 PASS 5 FAIL 1
+286 PASS 3 FAIL 1
+287 PASS 5 FAIL 1
+288 PASS 1 FAIL 1
+289 PASS 1 PASS 1
+290 PASS 5 FAIL 1
+291 PASS 5 FAIL 1
+292 PASS 3 FAIL 3
+293 PASS 7 FAIL 1
+294 PASS 1 PASS 1
+295 PASS 6 FAIL 3
+296 FAIL 4 FAIL 1
+297 PASS 7 FAIL 1
+298 FAIL 1 FAIL 1
+299 PASS 4 FAIL 2
+300 PASS 2 FAIL 1
+301 PASS 6 FAIL 1
+302 PASS 5 FAIL 3
+303 PASS 7 FAIL 4
+304 PASS 3 FAIL 1
+305 PASS 7 FAIL 1
+306 PASS 2 FAIL 2
+307 PASS 7 FAIL 3
+308 PASS 2 PASS 2
+309 PASS 4 FAIL 1
+310 PASS 1 PASS 1
+311 PASS 5 FAIL 1
+312 PASS 4 FAIL 3
+313 PASS 4 FAIL 1
+314 PASS 5 FAIL 4
+315 PASS 6 FAIL 2
+316 PASS 6 FAIL 3
+317 PASS 6 FAIL 5
+318 PASS 7 FAIL 1
+319 FAIL 3 FAIL 5
+320 PASS 1 FAIL 1
+321 PASS 6 FAIL 1
+322 PASS 1 FAIL 1
+323 PASS 3 FAIL 1
+324 PASS 6 FAIL 1
+325 PASS 8 FAIL 1
+326 PASS 6 FAIL 1
+327 PASS 8 FAIL 2
+328 PASS 8 FAIL 3
+329 FAIL 2 PASS 2
+330 PASS 2 FAIL 2
+331 PASS 1 FAIL 1
+332 PASS 2 PASS 2
+333 PASS 3 FAIL 1
+334 PASS 3 FAIL 1
+335 PASS 3 PASS 3
+336 PASS 8 FAIL 1
+337 PASS 4 FAIL 2
+338 PASS 4 PASS 4
+339 PASS 8 FAIL 1
+340 PASS 4 FAIL 3
+341 PASS 2 FAIL 1
+342 PASS 3 FAIL 2
+343 PASS 2 FAIL 2
+344 PASS 5 FAIL 1
+345 PASS 1 FAIL 1
+346 PASS 6 FAIL 1
+347 PASS 3 FAIL 2
+348 PASS 3 FAIL 1
+349 PASS 6 FAIL 2
+350 PASS 4 FAIL 3
+351 PASS 1 FAIL 1
+352 PASS 4 FAIL 1
+353 PASS 1 FAIL 1
+354 FAIL 8 FAIL 6
+355 PASS 6 FAIL 2
+356 PASS 4 FAIL 1
+357 PASS 3 FAIL 3
+358 PASS 1 FAIL 1
+359 PASS 2 PASS 2
+360 PASS 5 FAIL 1
+361 PASS 4 FAIL 1
+362 PASS 2 FAIL 1
+363 PASS 6 PASS 6
+364 FAIL 6 FAIL 2
+365 PASS 3 FAIL 1
+366 PASS 2 FAIL 1
+367 PASS 3 FAIL 1
+368 PASS 5 FAIL 1
+369 PASS 1 FAIL 1
+370 PASS 4 FAIL 4
+371 PASS 2 FAIL 1
+372 PASS 1 FAIL 1
+373 PASS 2 FAIL 2
+374 PASS 3 FAIL 2
+375 PASS 8 FAIL 1
+376 PASS 4 FAIL 4
+377 PASS 3 FAIL 3
+378 PASS 3 FAIL 1
+379 PASS 3 FAIL 3
+380 PASS 8 FAIL 2
+381 PASS 2 FAIL 1
+382 PASS 3 PASS 3
+383 PASS 3 FAIL 1
+384 PASS 2 FAIL 1
+385 PASS 6 FAIL 1
+386 PASS 2 FAIL 1
+387 PASS 3 PASS 3
+388 PASS 2 FAIL 2
+389 FAIL 2 FAIL 1
+390 PASS 4 FAIL 1
+391 PASS 8 FAIL 2
+392 PASS 2 FAIL 1
+393 PASS 2 FAIL 2
+394 PASS 5 FAIL 1
+395 PASS 1 FAIL 1
+396 PASS 5 FAIL 1
+397 PASS 3 FAIL 1
+398 PASS 7 FAIL 2
+399 PASS 7 FAIL 1
+400 PASS 1 PASS 1
+401 PASS 4 PASS 4
+402 PASS 3 PASS 3
+403 PASS 4 FAIL 3
+404 PASS 7 FAIL 2
+405 PASS 5 FAIL 3
+406 PASS 2 FAIL 1
+407 PASS 3 FAIL 2
+408 PASS 8 FAIL 3
+409 PASS 6 FAIL 3
+410 PASS 5 FAIL 4
+411 PASS 6 FAIL 3
+412 PASS 5 FAIL 1
+413 PASS 1 PASS 1
+414 PASS 7 FAIL 1
+415 PASS 7 FAIL 2
+416 PASS 6 FAIL 2
+417 FAIL 3 FAIL 3
+418 PASS 3 FAIL 3
+419 PASS 1 PASS 1
+420 PASS 4 FAIL 1
+421 PASS 4 FAIL 2
+422 FAIL 1 FAIL 2
+423 FAIL 4 FAIL 1
+424 PASS 8 FAIL 1
+425 PASS 8 FAIL 3
+426 PASS 2 FAIL 1
+427 PASS 2 FAIL 1
+428 PASS 1 PASS 1
+429 PASS 8 FAIL 2
+430 PASS 3 FAIL 1
+431 PASS 6 FAIL 3
+432 PASS 6 FAIL 3
+433 FAIL 5 FAIL 2
+434 PASS 7 FAIL 2
+435 PASS 1 FAIL 1
+436 PASS 6 FAIL 1
+437 PASS 5 FAIL 3
+438 PASS 3 FAIL 2
+439 PASS 2 PASS 2
+440 PASS 3 FAIL 2
+441 PASS 4 FAIL 2
+442 PASS 7 FAIL 1
+443 PASS 8 FAIL 1
+444 PASS 4 FAIL 4
+445 PASS 5 FAIL 4
+446 PASS 1 FAIL 1
+447 PASS 6 FAIL 1
+448 PASS 7 FAIL 4
+449 PASS 7 FAIL 2
+450 PASS 1 PASS 1
+451 PASS 1 FAIL 1
+452 PASS 5 FAIL 4
+453 FAIL 7 FAIL 1
+454 FAIL 4 FAIL 2
+455 PASS 2 FAIL 2
+456 FAIL 3 FAIL 2
+457 FAIL 3 FAIL 1
+458 PASS 5 FAIL 1
+459 PASS 1 PASS 1
+460 FAIL 2 PASS 4
+461 FAIL 3 FAIL 2
+462 PASS 8 FAIL 1
+463 PASS 5 FAIL 1
+464 FAIL 5 FAIL 1
+465 PASS 2 FAIL 1
+466 PASS 5 FAIL 1
+467 PASS 8 FAIL 1
+468 PASS 7 FAIL 1
+469 PASS 7 FAIL 1
+470 PASS 6 FAIL 2
+471 PASS 6 FAIL 1
+472 PASS 6 FAIL 1
+473 PASS 4 FAIL 1
+474 PASS 3 FAIL 3
+475 PASS 3 PASS 3
+476 PASS 3 FAIL 1
+477 PASS 6 FAIL 1
+478 PASS 5 FAIL 1
+479 PASS 4 FAIL 1
+480 PASS 5 FAIL 3
+481 PASS 7 FAIL 1
+482 PASS 2 FAIL 1
+483 FAIL 3 FAIL 2
+484 PASS 1 PASS 1
+485 PASS 2 FAIL 2
+486 PASS 7 FAIL 1
+487 PASS 2 FAIL 2
+488 PASS 7 FAIL 2
+489 PASS 4 FAIL 3
+490 PASS 7 FAIL 1
+491 PASS 5 FAIL 2
+492 PASS 2 PASS 2
+493 PASS 6 FAIL 4
+494 PASS 1 PASS 1
+495 PASS 6 FAIL 1
+496 PASS 1 PASS 1
+497 PASS 1 PASS 1
+498 PASS 5 FAIL 1
+499 PASS 2 FAIL 2
+500 PASS 2 FAIL 2
+501 PASS 4 FAIL 1
+502 PASS 1 PASS 1
+503 PASS 7 FAIL 1
+504 PASS 2 FAIL 1
+505 PASS 1 FAIL 1
+506 PASS 7 FAIL 2
+507 PASS 8 FAIL 6
+508 PASS 8 FAIL 1
+509 PASS 1 FAIL 1
+510 PASS 5 FAIL 1
+511 PASS 8 FAIL 2
+512 PASS 8 FAIL 1
+513 PASS 8 FAIL 1
+514 PASS 5 FAIL 1
+515 PASS 4 FAIL 4
+516 PASS 4 FAIL 1
+517 PASS 1 FAIL 1
+518 PASS 4 FAIL 3
+519 FAIL 7 FAIL 2
+520 PASS 7 FAIL 1
+521 PASS 5 FAIL 1
+522 PASS 6 FAIL 1
+523 PASS 5 FAIL 1
+524 PASS 5 FAIL 1
+525 PASS 4 FAIL 1
+526 FAIL 5 FAIL 3
+527 PASS 3 FAIL 1
+528 PASS 4 FAIL 1
+529 FAIL 6 FAIL 1
+530 PASS 6 FAIL 1
+531 PASS 3 FAIL 1
+532 FAIL 2 FAIL 1
+533 PASS 4 PASS 4
+534 PASS 7 PASS 7
+535 FAIL 7 FAIL 1
+536 FAIL 2 FAIL 2
+537 PASS 3 FAIL 1
+538 PASS 1 FAIL 1
+539 PASS 7 FAIL 1
+540 PASS 3 PASS 3
+541 PASS 6 FAIL 1
+542 PASS 5 FAIL 3
+543 PASS 5 FAIL 1
+544 PASS 4 FAIL 4
+545 PASS 3 FAIL 2
+546 PASS 3 FAIL 2
+547 PASS 4 FAIL 2
+548 PASS 8 FAIL 2
+549 PASS 4 FAIL 3
+550 PASS 6 FAIL 2
+551 PASS 1 PASS 1
+552 PASS 1 FAIL 1
+553 PASS 3 FAIL 2
+554 PASS 7 FAIL 1
+555 PASS 1 FAIL 1
+556 PASS 6 FAIL 1
+557 PASS 7 FAIL 3
+558 PASS 1 PASS 1
+559 PASS 3 FAIL 2
+560 PASS 6 FAIL 1
+561 PASS 7 FAIL 1
+562 PASS 8 FAIL 3
+563 PASS 8 FAIL 1
+564 PASS 5 FAIL 1
+565 PASS 8 FAIL 1
+566 PASS 4 FAIL 1
+567 PASS 4 FAIL 1
+568 FAIL 2 FAIL 1
+569 PASS 8 FAIL 3
+570 PASS 4 FAIL 3
+571 PASS 8 FAIL 1
+572 PASS 2 PASS 2
+573 PASS 1 FAIL 1
+574 PASS 6 FAIL 3
+575 FAIL 3 FAIL 4
+576 PASS 1 PASS 1
+577 FAIL 5 FAIL 6
+578 PASS 1 PASS 1
+579 PASS 2 FAIL 1
+580 PASS 3 PASS 3
+581 FAIL 3 FAIL 2
+582 PASS 6 FAIL 2
+583 PASS 1 FAIL 1
+584 PASS 4 FAIL 1
+585 PASS 6 FAIL 1
+586 FAIL 1 FAIL 1
+587 PASS 3 FAIL 1
+588 PASS 1 PASS 1
+589 PASS 1 PASS 1
+590 PASS 5 FAIL 1
+591 PASS 4 FAIL 1
+592 PASS 4 FAIL 2
+593 PASS 6 FAIL 1
+594 FAIL 6 FAIL 1
+595 PASS 3 FAIL 1
+596 PASS 7 FAIL 2
+597 PASS 2 PASS 2
+598 PASS 5 FAIL 1
+599 PASS 1 FAIL 1
+600 PASS 7 FAIL 1
+601 PASS 8 FAIL 3
+602 PASS 6 FAIL 2
+603 PASS 4 FAIL 1
+604 PASS 4 FAIL 4
+605 PASS 5 FAIL 2
+606 PASS 5 FAIL 2
+607 PASS 1 PASS 1
+608 FAIL 5 FAIL 1
+609 PASS 1 PASS 1
+610 PASS 4 FAIL 2
+611 PASS 7 FAIL 2
+612 PASS 2 FAIL 1
+613 PASS 3 FAIL 1
+614 PASS 5 FAIL 4
+615 PASS 5 FAIL 1
+616 PASS 3 FAIL 1
+617 FAIL 4 FAIL 1
+618 PASS 6 FAIL 1
+619 PASS 1 FAIL 1
+620 PASS 5 FAIL 4
+621 PASS 2 FAIL 1
+622 PASS 8 FAIL 1
+623 PASS 2 FAIL 1
+624 PASS 5 FAIL 2
+625 PASS 4 FAIL 2
+626 PASS 5 FAIL 1
+627 PASS 6 FAIL 1
+628 PASS 4 FAIL 2
+629 PASS 8 FAIL 1
+630 PASS 3 FAIL 1
+631 PASS 7 FAIL 1
+632 PASS 4 FAIL 4
+633 PASS 5 FAIL 5
+634 PASS 2 FAIL 1
+635 PASS 1 FAIL 1
+636 PASS 3 FAIL 2
+637 PASS 6 FAIL 1
+638 FAIL 1 FAIL 4
+639 PASS 2 FAIL 1
+640 PASS 2 FAIL 1
+641 PASS 7 FAIL 4
+642 PASS 7 FAIL 1
+643 PASS 8 FAIL 2
+644 PASS 7 FAIL 1
+645 PASS 1 FAIL 1
+646 PASS 7 FAIL 1
+647 PASS 6 FAIL 2
+648 FAIL 2 FAIL 2
+649 PASS 1 FAIL 1
+650 PASS 8 FAIL 1
+651 PASS 5 PASS 5
+652 PASS 4 FAIL 3
+653 PASS 5 FAIL 2
+654 PASS 2 FAIL 2
+655 PASS 5 FAIL 2
+656 PASS 5 FAIL 3
+657 FAIL 3 FAIL 1
+658 FAIL 5 FAIL 4
+659 PASS 3 FAIL 3
+660 PASS 4 FAIL 4
+661 PASS 2 FAIL 1
+662 PASS 6 FAIL 2
+663 PASS 4 FAIL 1
+664 PASS 7 FAIL 2
+665 PASS 6 FAIL 3
+666 PASS 4 FAIL 1
+667 PASS 1 PASS 1
+668 PASS 8 FAIL 1
+669 PASS 8 FAIL 3
+670 PASS 3 FAIL 1
+671 PASS 5 FAIL 3
+672 PASS 6 FAIL 1
+673 PASS 6 FAIL 2
+674 PASS 4 FAIL 1
+675 FAIL 4 FAIL 2
+676 PASS 4 FAIL 2
+677 PASS 4 FAIL 3
+678 PASS 4 FAIL 1
+679 PASS 4 FAIL 1
+680 PASS 6 FAIL 1
+681 PASS 5 FAIL 2
+682 PASS 6 FAIL 3
+683 PASS 4 FAIL 2
+684 PASS 4 FAIL 2
+685 PASS 3 FAIL 1
+686 PASS 8 FAIL 1
+687 PASS 2 FAIL 2
+688 PASS 1 FAIL 1
+689 PASS 2 FAIL 1
+690 PASS 7 FAIL 1
+691 PASS 5 FAIL 1
+692 FAIL 2 FAIL 1
+693 PASS 6 FAIL 3
+694 PASS 1 PASS 1
+695 PASS 5 FAIL 2
+696 PASS 7 FAIL 3
+697 PASS 4 FAIL 1
+698 PASS 7 FAIL 1
+699 PASS 1 PASS 1
+700 PASS 1 PASS 1
+701 PASS 1 FAIL 1
+702 PASS 5 FAIL 1
+703 PASS 7 FAIL 3
+704 PASS 3 FAIL 1
+705 PASS 8 FAIL 1
+706 PASS 6 FAIL 1
+707 PASS 4 FAIL 1
+708 PASS 2 PASS 2
+709 PASS 7 FAIL 4
+710 PASS 2 FAIL 2
+711 PASS 6 FAIL 2
+712 PASS 3 FAIL 1
+713 PASS 3 FAIL 3
+714 PASS 1 PASS 1
+715 PASS 8 FAIL 3
+716 PASS 7 FAIL 1
+717 FAIL 1 FAIL 1
+718 FAIL 2 FAIL 1
+719 PASS 8 FAIL 2
+720 FAIL 5 FAIL 3
+721 PASS 7 FAIL 1
+722 PASS 1 PASS 1
+723 PASS 5 FAIL 1
+724 PASS 3 FAIL 3
+725 PASS 8 FAIL 6
+726 PASS 1 PASS 1
+727 PASS 3 FAIL 1
+728 PASS 1 FAIL 1
+729 PASS 4 FAIL 1
+730 PASS 3 FAIL 1
+731 FAIL 3 FAIL 2
+732 PASS 1 FAIL 1
+733 PASS 8 FAIL 2
+734 FAIL 2 FAIL 1
+735 PASS 4 FAIL 2
+736 PASS 6 FAIL 6
+737 PASS 4 FAIL 1
+738 PASS 1 PASS 1
+739 PASS 3 FAIL 2
+740 PASS 4 FAIL 3
+741 PASS 5 FAIL 1
+742 PASS 3 FAIL 1
+743 PASS 5 FAIL 4
+744 FAIL 4 FAIL 1
+745 FAIL 6 FAIL 1
+746 PASS 8 FAIL 1
+747 PASS 8 FAIL 2
+748 PASS 8 FAIL 1
+749 PASS 3 FAIL 2
+750 PASS 1 PASS 1
+751 PASS 6 FAIL 3
+752 FAIL 1 FAIL 3
+753 PASS 7 FAIL 2
+754 PASS 4 FAIL 4
+755 FAIL 2 FAIL 1
+756 PASS 6 FAIL 1
+757 PASS 3 FAIL 1
+758 PASS 4 FAIL 2
+759 PASS 1 FAIL 1
+760 PASS 3 PASS 3
+761 PASS 6 PASS 6
+762 PASS 1 PASS 1
+763 PASS 7 FAIL 5
+764 PASS 6 FAIL 2
+765 PASS 7 FAIL 2
+766 PASS 7 FAIL 1
+767 PASS 4 FAIL 1
+768 PASS 1 FAIL 1
+769 PASS 7 FAIL 2
+770 PASS 7 FAIL 2
+771 PASS 1 FAIL 1
+772 PASS 7 FAIL 1
+773 FAIL 1 FAIL 1
+774 PASS 5 FAIL 4
+775 PASS 5 FAIL 2
+776 FAIL 7 FAIL 5
+777 PASS 6 FAIL 1
+778 PASS 7 FAIL 1
+779 PASS 3 PASS 3
+780 PASS 1 FAIL 1
+781 PASS 1 PASS 1
+782 PASS 3 FAIL 3
+783 PASS 2 FAIL 2
+784 PASS 8 FAIL 3
+785 PASS 3 FAIL 1
+786 PASS 3 FAIL 1
+787 PASS 2 FAIL 1
+788 PASS 8 FAIL 3
+789 PASS 6 FAIL 3
+790 PASS 1 PASS 1
+791 PASS 7 FAIL 1
+792 PASS 4 FAIL 1
+793 PASS 5 FAIL 1
+794 PASS 4 FAIL 3
+795 PASS 5 FAIL 5
+796 PASS 2 FAIL 1
+797 PASS 3 FAIL 2
+798 PASS 1 PASS 1
+799 PASS 7 FAIL 5
+800 PASS 7 FAIL 1
+801 PASS 1 FAIL 1
+802 PASS 2 FAIL 2
+803 PASS 1 PASS 1
+804 PASS 4 FAIL 3
+805 FAIL 5 FAIL 1
+806 PASS 5 FAIL 2
+807 PASS 3 FAIL 1
+808 PASS 6 FAIL 1
+809 PASS 6 FAIL 3
+810 PASS 2 FAIL 2
+811 PASS 8 FAIL 2
+812 PASS 5 FAIL 2
+813 PASS 4 FAIL 1
+814 PASS 1 PASS 1
+815 PASS 8 FAIL 1
+816 PASS 8 FAIL 1
+817 PASS 2 FAIL 1
+818 PASS 4 FAIL 2
+819 PASS 1 PASS 1
+820 PASS 6 FAIL 1
+821 PASS 6 FAIL 1
+822 PASS 4 FAIL 2
+823 PASS 4 FAIL 1
+824 PASS 4 FAIL 1
+825 PASS 4 FAIL 1
+826 PASS 7 FAIL 1
+827 FAIL 3 FAIL 3
+828 PASS 8 FAIL 1
+829 PASS 8 FAIL 1
+830 PASS 4 FAIL 1
+831 PASS 6 FAIL 2
+832 PASS 1 FAIL 1
+833 PASS 8 FAIL 4
+834 FAIL 7 FAIL 2
+835 PASS 6 FAIL 1
+836 PASS 6 FAIL 2
+837 PASS 8 FAIL 1
+838 PASS 8 FAIL 2
+839 PASS 1 FAIL 1
+840 PASS 1 PASS 1
+841 PASS 7 FAIL 1
+842 PASS 3 FAIL 1
+843 PASS 5 FAIL 1
+844 PASS 3 FAIL 1
+845 PASS 3 FAIL 3
+846 PASS 6 FAIL 2
+847 PASS 4 FAIL 2
+848 PASS 6 FAIL 1
+849 PASS 8 FAIL 1
+850 PASS 8 FAIL 1
+851 PASS 4 FAIL 3
+852 PASS 3 FAIL 3
+853 PASS 1 PASS 1
+854 PASS 3 FAIL 2
+855 PASS 2 PASS 2
+856 PASS 6 FAIL 1
+857 PASS 5 FAIL 1
+858 PASS 8 FAIL 2
+859 PASS 7 FAIL 2
+860 PASS 6 FAIL 4
+861 PASS 3 FAIL 3
+862 PASS 3 PASS 3
+863 PASS 4 FAIL 1
+864 PASS 2 FAIL 1
+865 PASS 4 FAIL 2
+866 PASS 5 FAIL 3
+867 PASS 1 PASS 1
+868 PASS 3 PASS 3
+869 PASS 7 FAIL 1
+870 PASS 5 FAIL 3
+871 PASS 3 FAIL 1
+872 PASS 5 FAIL 1
+873 PASS 5 PASS 5
+874 PASS 8 FAIL 4
+875 PASS 6 FAIL 1
+876 PASS 4 FAIL 1
+877 PASS 3 FAIL 1
+878 PASS 3 FAIL 1
+879 FAIL 7 FAIL 2
+880 PASS 6 FAIL 4
+881 PASS 4 FAIL 1
+882 PASS 5 FAIL 1
+883 PASS 3 FAIL 2
+884 PASS 1 FAIL 1
+885 FAIL 2 FAIL 2
+886 PASS 4 FAIL 1
+887 PASS 5 FAIL 1
+888 PASS 7 FAIL 1
+889 PASS 8 FAIL 1
+890 PASS 4 PASS 4
+891 PASS 2 FAIL 2
+892 PASS 7 FAIL 1
+893 PASS 6 FAIL 4
+894 PASS 2 FAIL 1
+895 FAIL 8 FAIL 1
+896 PASS 1 FAIL 1
+897 PASS 5 FAIL 2
+898 PASS 4 FAIL 1
+899 PASS 1 PASS 1
+900 PASS 2 FAIL 1
+901 PASS 2 FAIL 2
+902 PASS 1 FAIL 1
+903 PASS 7 FAIL 1
+904 PASS 4 FAIL 2
+905 PASS 7 FAIL 1
+906 PASS 6 FAIL 2
+907 PASS 3 FAIL 1
+908 PASS 7 FAIL 1
+909 PASS 4 FAIL 1
+910 PASS 4 FAIL 1
+911 PASS 2 FAIL 2
+912 PASS 4 FAIL 1
+913 FAIL 5 FAIL 4
+914 PASS 6 FAIL 3
+915 PASS 4 FAIL 1
+916 PASS 5 FAIL 1
+917 PASS 6 FAIL 1
+918 PASS 1 FAIL 1
+919 PASS 8 FAIL 2
+920 PASS 1 FAIL 1
+921 PASS 8 FAIL 3
+922 PASS 6 FAIL 1
+923 PASS 6 FAIL 1
+924 PASS 2 FAIL 1
+925 PASS 8 FAIL 4
+926 PASS 6 FAIL 1
+927 PASS 1 FAIL 1
+928 PASS 4 FAIL 2
+929 PASS 6 FAIL 1
+930 PASS 5 FAIL 1
+931 PASS 1 PASS 1
+932 PASS 2 FAIL 2
+933 PASS 5 PASS 5
+934 PASS 2 FAIL 1
+935 PASS 6 FAIL 3
+936 PASS 1 PASS 1
+937 PASS 6 FAIL 1
+938 PASS 8 FAIL 1
+939 PASS 1 FAIL 1
+940 PASS 7 FAIL 1
+941 PASS 4 FAIL 1
+942 PASS 3 FAIL 1
+943 PASS 3 FAIL 1
+944 PASS 3 FAIL 1
+945 PASS 5 FAIL 1
+946 PASS 8 FAIL 1
+947 PASS 4 FAIL 1
+948 PASS 1 FAIL 1
+949 PASS 6 FAIL 1
+950 PASS 5 FAIL 1
+951 PASS 3 FAIL 2
+952 PASS 7 FAIL 2
+953 PASS 4 FAIL 1
+954 PASS 8 FAIL 1
+955 PASS 2 FAIL 2
+956 PASS 8 FAIL 1
+957 PASS 8 FAIL 2
+958 PASS 6 FAIL 1
+959 PASS 4 FAIL 3
+960 FAIL 5 FAIL 1
+961 PASS 5 FAIL 2
+962 PASS 4 FAIL 3
+963 PASS 8 FAIL 1
+964 PASS 4 FAIL 1
+965 PASS 4 FAIL 1
+966 PASS 6 FAIL 1
+967 PASS 6 FAIL 3
+968 PASS 2 FAIL 1
+969 PASS 6 FAIL 1
+970 PASS 4 FAIL 1
+971 PASS 5 FAIL 1
+972 PASS 1 PASS 1
+973 PASS 4 FAIL 3
+974 PASS 7 FAIL 1
+975 PASS 3 FAIL 1
+976 PASS 3 FAIL 1
+977 PASS 3 FAIL 2
+978 PASS 3 FAIL 2
+979 PASS 3 FAIL 3
+980 PASS 3 PASS 3
+981 PASS 1 FAIL 1
+982 PASS 7 FAIL 2
+983 PASS 2 FAIL 1
+984 PASS 5 FAIL 2
+985 PASS 2 FAIL 2
+986 PASS 8 FAIL 2
+987 PASS 5 FAIL 2
+988 PASS 3 FAIL 1
+989 PASS 5 FAIL 1
+990 PASS 3 FAIL 3
+991 PASS 3 FAIL 1
+992 PASS 2 FAIL 1
+993 PASS 6 FAIL 1
+994 PASS 2 PASS 2
+995 PASS 3 FAIL 1
+996 FAIL 7 FAIL 1
+997 PASS 5 FAIL 2
+998 PASS 8 FAIL 2
+999 PASS 6 FAIL 1
+</script>
+<script src="assets/dst.js"></script>
+<script>
+DST.page({ id: "ex01" });
+(function () {
+  const { el, s: S, C, $ } = DST;
+  const fmt = (n) => Number(n).toLocaleString("en-US");
+  const rows = (id) => DST.text(id).trim().split("\n").filter(Boolean).map((l) => l.trim().split(/\s+/));
+  const U32 = 4294967295, TWO32 = 4294967296;
+  const bucketOf = (roll) => (roll === 100 ? "uniform" : roll <= 97 ? "typical" : roll === 98 ? "anywhere" : "edge");
+  const BCOL = { typical: C.accent, anywhere: C.violet, edge: C.warn, uniform: C.accent2 };
+
+  // ---------- parse captured output ----------
+  const parseRun = (id) => {
+    const t = DST.text(id), m = t.match(/seed=(\d+) steps=(\d+) trace=([0-9a-f]+) (PASS|FAIL)/);
+    const f = t.match(/step (\d+): average\((\d+), (\d+)\) = (\d+), want (\d+)/);
+    return { text: t, seed: +m[1], steps: +m[2], trace: m[3], ok: m[4] === "PASS",
+      fail: f && { step: +f[1], a: BigInt(f[2]), b: BigInt(f[3]), got: BigInt(f[4]), want: BigInt(f[5]) } };
+  };
+  const parseDump = (id) => [...DST.text(id).matchAll(/dump seed=(\d+) step=(\d+) roll_a=(\d+) a=(\d+) roll_b=(\d+) b=(\d+) got=(\d+) want=(\d+)/g)]
+    .map((m) => ({ step: +m[2], ra: +m[3], a: +m[4], rb: +m[5], b: +m[6], got: +m[7], want: +m[8] }));
+  const runA = parseRun("log-run0-bug-a"), runB = parseRun("log-run0-bug-b"), runOk = parseRun("log-run0");
+  const dumpBug = parseDump("log-run0-bug-dump"), dumpOk = parseDump("log-run0-dump");
+  const perSeed = rows("tsv-per-seed").map((r) => ({ seed: +r[0], bf: r[1] === "FAIL", bs: +r[2], uf: r[3] === "FAIL", us: +r[4] }));
+  const pairsB = rows("tsv-pairs-biased").map((r) => ({ seed: +r[0], step: +r[1], ra: +r[2], a: +r[3], rb: +r[4], b: +r[5] }));
+  const pairsU = rows("tsv-pairs-uniform").map((r) => ({ seed: +r[0], step: +r[1], ra: +r[2], a: +r[3], rb: +r[4], b: +r[5] }));
+  const rolls = rows("tsv-rolls").map((r) => [+r[0], +r[1]]);
+  const sweepPass = DST.text("log-sweep").match(/PASS: (\d+) seeds/);
+  const sweepBug = DST.text("log-sweep-bug").match(/FAIL at seed=(\d+)/);
+  const failB = perSeed.filter((p) => p.bf).length, failU = perSeed.filter((p) => p.uf).length;
+
+  // ---------- hero stats ----------
+  const stat = (num, lbl, small) => el("div", { class: "stat" }, el("div", { class: "num", style: small ? { fontSize: "1.25rem", paddingTop: "8px", wordBreak: "break-all" } : null }, num), el("div", { class: "lbl" }, lbl));
+  $("#stats").append(
+    stat(fmt(sweepPass[1]), "seeds pass with the correct average (sweep)"),
+    stat(`seed ${sweepBug[1]}`, "first failing seed with --bug"),
+    stat(`${failB} / ${perSeed.length}`, "seeds 0–999 that fail with the biased generator"),
+    stat(runA.trace, `trace hash of run ${runA.seed} --bug, identical on every replay`, true));
+
+  // ---------- 01: flow diagram + PRNG tape player ----------
+  const W = 1000, H = 250;
+  const svg = S("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.append(S("defs", {}, S("marker", { id: "ar", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, S("path", { d: "M0,0 L10,5 L0,10 z", fill: C.dim }))));
+  const nodes = {};
+  const node = (id, x, y, w, h, title, sub, col) => {
+    const g = S("g", { class: "node" });
+    g.append(S("rect", { x, y, width: w, height: h, rx: 10, fill: "#101a2c", stroke: col, "stroke-width": 1.4 }));
+    g.append(S("text", { x: x + w / 2, y: y + 20, "text-anchor": "middle", fill: col, "font-size": 12.5, "font-family": "monospace", "font-weight": 700 }, title));
+    g.append(S("text", { x: x + w / 2, y: y + 37, "text-anchor": "middle", fill: C.dim, "font-size": 11, "font-family": "monospace" }, sub));
+    const val = S("text", { x: x + w / 2, y: y + h - 10, "text-anchor": "middle", fill: C.text, "font-size": 13, "font-family": "monospace", "font-weight": 700 }, "");
+    g.append(val); svg.append(g); nodes[id] = { g, val, x, y, w, h };
+  };
+  const edge = (x1, y1, x2, y2, col) => svg.append(S("path", { d: `M${x1},${y1} L${x2},${y2}`, stroke: col || C.dim, "stroke-width": 1.6, fill: "none", class: "flow", "marker-end": "url(#ar)" }));
+  node("seed", 10, 95, 110, 70, "seed: u64", "printed first", C.accent2);
+  node("prng", 160, 95, 160, 70, "DefaultPrng", "Xoshiro256++", C.accent2);
+  node("steps", 370, 10, 180, 70, "steps", "1 + uintLessThan(8)", C.accent2);
+  node("gen", 370, 95, 180, 70, "gen_value() × 2", "roll → bucket → value", C.accent2);
+  node("avg", 600, 95, 170, 70, "average(a, b)", "real code under test", C.warn);
+  node("oracle", 600, 175, 170, 70, "oracle", "u64: (a + b) / 2", C.violet);
+  node("trace", 815, 95, 175, 70, "Wyhash trace", "update([a, b, got])", C.violet);
+  node("verdict", 815, 175, 175, 70, "verdict", "got == want ?", C.violet);
+  edge(120, 130, 158, 130); edge(320, 120, 368, 48); edge(320, 130, 368, 130);
+  edge(550, 130, 598, 130); edge(550, 145, 598, 205); edge(770, 130, 813, 130); edge(770, 210, 813, 210); edge(685, 165, 685, 175);
+  $("#flow").append(svg);
+
+  function buildEvents(dump, run, stepsDrawn) {
+    const ev = [{ node: "steps", cell: { k: "steps", v: stepsDrawn, cls: "" }, text: `steps = 1 + random.uintLessThan(u32, 8) = ${stepsDrawn}  (the first PRNG draw)` }];
+    for (const d of dump) {
+      const ba = bucketOf(d.ra), bb = bucketOf(d.rb), ok = d.got === d.want;
+      ev.push({ node: "gen", cell: { k: `roll a`, v: d.ra, cls: ba }, text: `step ${d.step}: roll = uintLessThan(u8, 100) = ${d.ra} → bucket "${ba}"` });
+      ev.push({ node: "gen", cell: { k: `a`, v: d.a, cls: ba }, text: `step ${d.step}: a = ${fmt(d.a)}  (${ba})`, a: d.a });
+      ev.push({ node: "gen", cell: { k: `roll b`, v: d.rb, cls: bb }, text: `step ${d.step}: roll = ${d.rb} → bucket "${bb}"`, a: d.a });
+      ev.push({ node: "gen", cell: { k: `b`, v: d.b, cls: bb }, text: `step ${d.step}: b = ${fmt(d.b)}  (${bb})${d.a + d.b > U32 ? "   ← a + b > 2³² − 1 !" : ""}`, a: d.a, b: d.b });
+      ev.push({ node: "avg", text: `step ${d.step}: average(${fmt(d.a)}, ${fmt(d.b)}) = ${fmt(d.got)}`, a: d.a, b: d.b, got: d.got });
+      ev.push({ node: ok ? "trace" : "verdict", cell: { k: `step ${d.step}`, v: ok ? "ok" : "FAIL", cls: ok ? "ok" : "fail" }, a: d.a, b: d.b, got: d.got, want: d.want, ok,
+        text: ok ? `step ${d.step}: oracle says ${fmt(d.want)} ✓ — trace.update([a, b, got])` : `step ${d.step}: oracle says ${fmt(d.want)}, got ${fmt(d.got)} ✗ — run stops` });
+    }
+    ev.push({ node: "verdict", text: run.text.trimEnd().split("\n").pop(), final: run });
+    return ev;
+  }
+  const modes = {
+    bug: { label: "run 0 --bug", ev: buildEvents(dumpBug, runA, runOk.steps) },
+    ok: { label: "run 0 (correct average)", ev: buildEvents(dumpOk, runOk, runOk.steps) },
+  };
+  let mode = "bug", player;
+  function showStep(i) {
+    const ev = modes[mode].ev, e = ev[i];
+    Object.values(nodes).forEach((n) => n.g.classList.toggle("on", false));
+    nodes[e.node].g.classList.add("on");
+    if (e.node === "steps" || e.node === "gen") nodes.prng.g.classList.add("on");
+    // latest known values up to i
+    let last = {}; for (let j = 0; j <= i; j++) Object.assign(last, ev[j]);
+    nodes.seed.val.textContent = String(modes[mode].ev.at(-1).final.seed);
+    nodes.prng.val.textContent = `${ev.slice(0, i + 1).filter((x) => x.cell && x.node !== "verdict" && x.node !== "trace").length} draws`;
+    nodes.steps.val.textContent = String(ev[0].cell.v);
+    nodes.gen.val.textContent = e.b != null ? `b=${e.b}` : e.a != null ? `a=${e.a}` : "";
+    nodes.avg.val.textContent = e.got != null ? fmt(e.got) : "";
+    nodes.oracle.val.textContent = e.want != null ? fmt(e.want) : "";
+    nodes.trace.val.textContent = e.final ? e.final.trace : "";
+    nodes.verdict.val.textContent = e.final ? (e.final.ok ? "PASS" : "FAIL") : e.ok === false ? "✗ mismatch" : e.ok ? "✓" : "";
+    nodes.verdict.val.setAttribute("fill", (e.final && !e.final.ok) || e.ok === false ? C.bug : C.ok);
+    $("#explain").textContent = e.text;
+    const tape = $("#tape"); tape.innerHTML = "";
+    ev.forEach((x, j) => { if (!x.cell) return;
+      tape.append(el("div", { class: `cell ${x.cell.cls} ${j <= i ? "seen" : ""} ${j === i ? "cur" : ""}` }, el("span", {}, x.cell.k), el("b", {}, typeof x.cell.v === "number" ? fmt(x.cell.v) : x.cell.v))); });
+  }
+  function setMode(m) {
+    mode = m; $("#player").innerHTML = "";
+    [...$("#modeBtns").children].forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+    player = new DST.Player("#player", { count: modes[m].ev.length, onStep: showStep, speed: 1, label: (i) => `event ${i + 1}/${modes[m].ev.length}` });
+  }
+  for (const m of ["bug", "ok"]) $("#modeBtns").append(el("button", { "data-m": m, onclick: () => setMode(m) }, modes[m].label));
+  setMode("bug");
+
+  // ---------- 02: rolls + buckets ----------
+  const rollTotal = rolls.reduce((a, r) => a + r[1], 0);
+  {
+    const Wc = 520, Hc = 190, m = { l: 44, r: 8, t: 10, b: 28 }, bw = (Wc - m.l - m.r) / 100;
+    const maxR = Math.max(...rolls.map((r) => r[1]));
+    const svgR = S("svg", { viewBox: `0 0 ${Wc} ${Hc}` });
+    for (const t of [0, 0.5, 1]) { const y = Hc - m.b - t * (Hc - m.t - m.b);
+      svgR.append(S("line", { x1: m.l, x2: Wc - m.r, y1: y, y2: y, stroke: C.line }));
+      svgR.append(S("text", { x: m.l - 4, y: y + 4, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, fmt(Math.round(t * maxR)))); }
+    rolls.forEach(([r, n]) => { const h = (n / maxR) * (Hc - m.t - m.b);
+      const rect = S("rect", { x: m.l + r * bw + 0.5, y: Hc - m.b - h, width: bw - 1, height: h, fill: BCOL[bucketOf(r)] });
+      DST.tip(rect, `roll ${r} (${bucketOf(r)}): ${fmt(n)} values`); svgR.append(rect); });
+    for (const r of [0, 25, 50, 75, 99]) svgR.append(S("text", { x: m.l + r * bw + bw / 2, y: Hc - 10, "text-anchor": r === 99 ? "end" : "middle", fill: r >= 98 ? BCOL[bucketOf(r)] : C.dim, "font-size": 10, "font-family": "monospace" }, r === 99 ? "98 99" : r));
+    $("#rollsChart").append(svgR);
+    const sum = (lo, hi) => rolls.filter(([r]) => r >= lo && r <= hi).reduce((a, r) => a + r[1], 0);
+    const pct = (n) => `${fmt(n)}  (${((100 * n) / rollTotal).toFixed(2)}%)`;
+    DST.bar("#bucketChart", [
+      { label: "typical 0–97", value: sum(0, 97), color: C.accent }, { label: "anywhere 98", value: sum(98, 98), color: C.violet }, { label: "edge 99", value: sum(99, 99), color: C.warn },
+    ], { width: 520, labelW: 120, log: true, max: rollTotal * 4, fmt: (v) => pct(v) });
+    $("#rollsCap").textContent = `Top: the bucket roll of every one of the ${fmt(rollTotal)} values generated by sweep 20000 (one bar per roll value, all roughly equal: the roll itself is uniform). Bottom: the three buckets on a log scale.`;
+  }
+
+  // ---------- 03: scatter ----------
+  let logScale = false;
+  function scatter(container, pairs, cap, isUniform) {
+    const Wp = 470, Hp = 440, m = { l: 76, r: 14, t: 12, b: 44 }, iw = Wp - m.l - m.r, ih = Hp - m.t - m.b;
+    const LMAX = Math.log10(TWO32);
+    const f = logScale ? (v) => Math.log10(Math.max(1, v)) / LMAX : (v) => v / U32;
+    const X = (v) => m.l + f(v) * iw, Y = (v) => m.t + ih - f(v) * ih;
+    const svgS = S("svg", { viewBox: `0 0 ${Wp} ${Hp}` });
+    svgS.append(S("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "#0b1220", stroke: C.line }));
+    // overflow region a + b > 2^32 - 1
+    let pts = [];
+    if (!logScale) pts = [[0, U32], [U32, 0], [U32, U32]];
+    else {
+      const as = []; for (let e = 0; e <= LMAX; e += 0.02) as.push(10 ** e);
+      for (let k = 31; k >= 0; k -= 0.25) as.push(TWO32 - 2 ** k);
+      as.sort((p, q) => p - q);
+      pts = as.map((a) => [a, Math.max(1, U32 - a)]); pts.push([U32, U32], [1, U32]);
+    }
+    svgS.append(S("path", { d: pts.map((p, i) => `${i ? "L" : "M"}${X(p[0])},${Y(p[1])}`).join("") + "Z", fill: "rgba(255,92,122,.22)", stroke: C.bug, "stroke-width": 1, "stroke-dasharray": "4 3" }));
+    // ticks
+    const ticks = logScale ? [1, 1e3, 1e6, 1e9, TWO32] : [0, U32 / 4, U32 / 2, (3 * U32) / 4, U32];
+    const tl = (v) => (logScale ? (v === TWO32 ? "2³²" : v === 1 ? "≤1" : `1e${Math.round(Math.log10(v))}`) : v === 0 ? "0" : v === U32 ? "2³²−1" : `${(v / U32 * 4).toFixed(0)}/4·2³²`);
+    for (const t of ticks) {
+      svgS.append(S("text", { x: X(t), y: Hp - m.b + 16, "text-anchor": "middle", fill: C.dim, "font-size": 10, "font-family": "monospace" }, tl(t)));
+      svgS.append(S("text", { x: m.l - 6, y: Y(t) + 4, "text-anchor": "end", fill: C.dim, "font-size": 10, "font-family": "monospace" }, tl(t)));
+    }
+    svgS.append(S("text", { x: m.l + iw / 2, y: Hp - 6, "text-anchor": "middle", fill: C.muted, "font-size": 12 }, "a"));
+    svgS.append(S("text", { x: 10, y: m.t + ih / 2, "text-anchor": "middle", fill: C.muted, "font-size": 12, transform: `rotate(-90 10 ${m.t + ih / 2})` }, "b"));
+    let over = 0;
+    pairs.forEach((p, i) => {
+      const o = p.a + p.b > U32; over += o;
+      const col = isUniform ? C.accent2 : BCOL[bucketOf(p.ra === 99 || p.rb === 99 ? 99 : p.ra === 98 || p.rb === 98 ? 98 : 0)];
+      const c = S("circle", { cx: X(p.a), cy: Y(p.b), r: o ? 2.6 : 2, fill: col, opacity: 0, stroke: o ? C.bug : "none", "stroke-width": 0.8 });
+      c.append(S("animate", { attributeName: "opacity", from: 0, to: 0.85, dur: "0.4s", begin: `${(i / pairs.length) * 1.2}s`, fill: "freeze" }));
+      DST.tip(c, `seed ${p.seed} step ${p.step}\na = ${fmt(p.a)} (${bucketOf(p.ra)})\nb = ${fmt(p.b)} (${bucketOf(p.rb)})\na + b ${o ? ">" : "≤"} 2³² − 1`);
+      svgS.append(c);
+    });
+    // hand-written test average(2, 4)
+    svgS.append(S("circle", { cx: X(2), cy: Y(4), r: 6, fill: "none", stroke: C.yellow, "stroke-width": 2 }));
+    svgS.append(S("text", { x: X(2) + 10, y: Y(4) - 8, fill: C.yellow, "font-size": 11, "font-family": "monospace" }, "average(2, 4)"));
+    const box = $(container); box.innerHTML = ""; box.append(svgS);
+    $(cap).innerHTML = `<b style="color:${C.bug}">${fmt(over)}</b> of ${fmt(pairs.length)} pairs (${((100 * over) / pairs.length).toFixed(1)}%) land in the overflow region — ${isUniform ? "<code>sweep 400 --dump --uniform</code>" : "<code>sweep 400 --dump</code>, shipped biased generator"}.`;
+    return over;
+  }
+  function drawScatters() {
+    const ob = scatter("#scatterB", pairsB, "#capB", false), ou = scatter("#scatterU", pairsU, "#capU", true);
+    $("#uniformNote").textContent = `In the captured pairs, the uniform generator lands in the triangle ${((100 * ou) / pairsU.length).toFixed(1)}% of the time (the math says just under 50%). The biased one lands there ${((100 * ob) / pairsB.length).toFixed(1)}% of the time.`;
+  }
+  for (const [lbl, v] of [["linear axes", false], ["log axes", true]]) $("#scaleBtns").append(el("button", { "data-v": v, class: v === logScale ? "on" : null, onclick: (e) => { logScale = v; [...$("#scaleBtns").children].forEach((b) => b.classList.toggle("on", b === e.target)); drawScatters(); } }, lbl));
+  drawScatters();
+
+  // ---------- 04: seed grids, cumulative, failing step ----------
+  for (const [grid, key, out] of [["#gridB", "bf", "#gB"], ["#gridU", "uf", "#gU"]]) {
+    perSeed.forEach((p) => { const c = el("i", { class: p[key] ? "f" : null }); DST.tip(c, `seed ${p.seed}: ${p[key] ? "FAIL" : "PASS"} after ${key === "bf" ? p.bs : p.us} step(s)`); $(grid).append(c); });
+    const n = perSeed.filter((p) => p[key]).length;
+    $(out).innerHTML = `<span style="color:${C.bug}">${n}</span> / ${perSeed.length} seeds fail`;
+  }
+  let cb = 0, cu = 0;
+  DST.line("#cumChart", [
+    { name: `uniform (${failU})`, color: C.accent2, points: perSeed.map((p) => [p.seed, (cu += p.uf)]) },
+    { name: `biased (${failB})`, color: C.bug, points: perSeed.map((p) => [p.seed, (cb += p.bf)]) },
+  ], { width: 540, height: 260, xlabel: "seed", ylabel: "failing seeds so far" });
+  const stepHist = {}; perSeed.filter((p) => p.bf).forEach((p) => (stepHist[p.bs] = (stepHist[p.bs] || 0) + 1));
+  DST.bar("#stepChart", Object.keys(stepHist).map(Number).sort((a, b) => a - b).map((k) => ({ label: `failed in step ${k - 1}`, value: stepHist[k], color: C.bug })), { width: 540, labelW: 150 });
+  $("#stepChart").append(el("div", { class: "cap" }, `Uniform: ${perSeed.filter((p) => p.uf && p.us === 1).length} of ${failU} failing seeds fail in step 0, on the very first pair.`));
+
+  // ---------- 05: bit-level addition ----------
+  const F = runA.fail;
+  function drawBits() {
+    const a = F.a, b = F.b, sum = a + b, wrapped = sum & 0xffffffffn, got = wrapped >> 1n;
+    const cell = 24, lab = 170, Wb = lab + 33 * cell + 150, rowH = 34;
+    const svgB = S("svg", { viewBox: `0 0 ${Wb} ${rowH * 6 + 30}` });
+    for (let k = 32; k >= 0; k--) { const x = lab + (32 - k) * cell;
+      if (k % 4 === 0 || k === 32) svgB.append(S("text", { x: x + cell / 2, y: 14, "text-anchor": "middle", fill: k === 32 ? C.bug : C.dim, "font-size": 10, "font-family": "monospace" }, k)); }
+    const rowsB = [
+      ["a", a, 32, C.accent], ["b", b, 32, C.warn], ["a + b (33 bits)", sum, 33, C.text, true], ["a +% b (u32)", wrapped, 32, C.bug, false, true], ["(a +% b) / 2", got, 32, C.bug],
+    ];
+    rowsB.forEach(([name, v, nb, col, animate, dropped], r) => {
+      const y = 22 + r * rowH;
+      svgB.append(S("text", { x: lab - 10, y: y + 17, "text-anchor": "end", fill: C.muted, "font-size": 12, "font-family": "monospace" }, name));
+      for (let k = 32; k >= 0; k--) {
+        const x = lab + (32 - k) * cell, bit = k < nb ? Number((v >> BigInt(k)) & 1n) : null;
+        if (bit == null) { if (dropped) { const t = S("text", { x: x + cell / 2, y: y + 18, "text-anchor": "middle", fill: C.bug, "font-size": 15, "font-weight": 700 }, "✕"); svgB.append(t); } continue; }
+        const isCarry = k === 32;
+        const rect = S("rect", { x: x + 1, y, width: cell - 2, height: 26, rx: 4, fill: bit ? col : "#121b2c", opacity: bit ? (isCarry ? 1 : 0.75) : 1, stroke: isCarry ? C.bug : "none", "stroke-width": 2 });
+        const t = S("text", { x: x + cell / 2, y: y + 18, "text-anchor": "middle", fill: bit ? "#0b0f17" : C.dim, "font-size": 12, "font-family": "monospace", "font-weight": 700 }, bit);
+        if (animate) { const d = `${(32 - (32 - k)) * 0.04}s`; for (const n of [rect, t]) { n.setAttribute("opacity", 0); n.append(S("animate", { attributeName: "opacity", from: 0, to: bit && !isCarry ? 0.75 : 1, dur: "0.15s", begin: `${(k) * 0.05}s`, fill: "freeze" })); } }
+        svgB.append(rect, t);
+      }
+      svgB.append(S("text", { x: lab + 33 * cell + 10, y: y + 18, fill: col, "font-size": 12, "font-family": "monospace" }, fmt(v)));
+    });
+    svgB.append(S("text", { x: lab + cell / 2, y: 22 + 5 * rowH + 4, "text-anchor": "start", fill: C.bug, "font-size": 11, "font-family": "monospace" }, "↑ carry out of bit 31 = 2³² — dropped by +%"));
+    $("#bits").innerHTML = ""; $("#bits").append(svgB);
+    const correct = a / 2n + b / 2n + (a & b & 1n);
+    $("#bitsOut").innerHTML = `computed in the browser from the captured a, b: wrapped/2 = ${fmt(got)} ${got === F.got ? "<span class=same>= captured got ✓</span>" : "≠ captured!"}`;
+    $("#bitsCap").innerHTML = `Correct version: a/2 + b/2 + (a &amp; b &amp; 1) = ${fmt(a / 2n)} + ${fmt(b / 2n)} + ${fmt(a & b & 1n)} = <b style="color:${C.ok}">${fmt(correct)}</b> ${correct === F.want ? "<span class=same>= captured want ✓</span>" : "≠ captured want!"}. The difference got − want = −${fmt(F.want - F.got)} = −2³¹.`;
+  }
+  $("#bitsGo").onclick = drawBits; drawBits();
+  DST.term("#failLog", "$ dst01 run 0 --bug\n" + runA.text.trimEnd());
+
+  // ---------- 06: determinism ----------
+  DST.term("#replayA", "$ dst01 run 0 --bug    # process 1\n" + runA.text.trimEnd());
+  DST.term("#replayB", "$ dst01 run 0 --bug    # process 2\n" + runB.text.trimEnd());
+  const same = runA.text === runB.text;
+  $("#sameNote").innerHTML = `<strong>${same ? "Byte-for-byte identical." : "Outputs differ!"}</strong> trace=<code>${runA.trace}</code> vs trace=<code>${runB.trace}</code> ${runA.trace === runB.trace ? "<span class=same>✓ same hash</span>" : "✗"}. Nothing outside the seed can change a run: no clock, no thread, no address-dependent ordering. The trace hash folds every observable step into 64 bits. That makes a cheap fingerprint to compare across machines, builds and commits.`;
+  const tb = $("#cmpTable");
+  tb.append(el("tr", {}, ["step", "a", "b", "got (--bug)", "got (correct)", "want"].map((h, i) => el("th", { class: i ? "num" : null }, h))));
+  dumpOk.forEach((o, i) => { const bg = dumpBug[i];
+    tb.append(el("tr", {}, el("td", {}, o.step), el("td", { class: "num" }, fmt(o.a)), el("td", { class: "num" }, fmt(o.b)),
+      el("td", { class: "num", style: { color: bg ? (bg.got === bg.want ? C.ok : C.bug) : C.dim } }, bg ? fmt(bg.got) : "— (stopped)"),
+      el("td", { class: "num", style: { color: C.ok } }, fmt(o.got)), el("td", { class: "num" }, fmt(o.want)))); });
+  tb.append(el("tr", {}, el("td", { colspan: 6, style: { fontFamily: "var(--mono)", fontSize: ".8rem", color: C.muted } },
+    `--bug: steps=${runA.steps} trace=${runA.trace} FAIL   ·   correct: steps=${runOk.steps} trace=${runOk.trace} PASS`)));
+
+  // ---------- 07: JS mini simulation ----------
+  function jsRun(seed, uniform) {
+    const r = DST.Rand(seed), gen = () => {
+      if (uniform) return Math.floor(r.float() * TWO32);
+      const roll = r.int(100);
+      return roll <= 97 ? r.range(0, 1000000) : roll === 98 ? Math.floor(r.float() * TWO32) : U32 - r.range(0, 16);
+    };
+    const steps = 1 + r.int(8), out = [];
+    for (let i = 0; i < steps; i++) {
+      const a = gen(), b = gen(), got = Math.floor(((a + b) % TWO32) / 2), want = Math.floor((a + b) / 2);
+      out.push({ i, a, b, got, want });
+      if (got !== want) return { ok: false, out };
+    }
+    return { ok: true, out };
+  }
+  const mOut = $("#mOut");
+  $("#mRun").onclick = () => {
+    const seed = +$("#mSeed").value >>> 0, res = jsRun(seed, $("#mGen").value === "uniform");
+    mOut.innerHTML = "";
+    const lines = res.out.map((o) => `  step ${o.i}: average(${o.a}, ${o.b}) = ${o.got}${o.got !== o.want ? `, want ${o.want}` : "  ✓"}`);
+    lines.push(`seed=${seed} steps=${res.out.length} ${res.ok ? "PASS" : "FAIL"}   (JS illustration)`);
+    DST.term(mOut, lines.join("\n"), [[/FAIL|want/, "f"], [/PASS/, "k"]]);
+  };
+  $("#mSweep").onclick = () => {
+    const uni = $("#mGen").value === "uniform"; let n = 0, first = null;
+    for (let s = 0; s < 1000; s++) if (!jsRun(s, uni).ok) { n++; if (first == null) first = s; }
+    $("#mSum").textContent = `JS sweep: ${n} / 1000 seeds fail, first at seed ${first}`;
+    $("#mSeed").value = first ?? 0; $("#mRun").onclick();
+  };
+  $("#mRun").onclick();
+
+  // ---------- 09: captured sweeps ----------
+  DST.term("#tSweep", "$ dst01 sweep 10000\n" + DST.text("log-sweep").trimEnd());
+  DST.term("#tSweepBug", "$ dst01 sweep 10000 --bug\n" + DST.text("log-sweep-bug").trimEnd());
+  DST.term("#tSweepU", "$ dst01 sweep 10000 --bug --uniform\n" + DST.text("log-sweep-bug-uniform").trimEnd());
+})();
+</script>
+</body></html>
