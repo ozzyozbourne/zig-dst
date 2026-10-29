@@ -9,7 +9,7 @@ Every number in this guide comes from a real run in this orb.
 
 ## Visual site
 
-`site/` is a static, interactive version of this guide: an overview, a page on TigerBeetle's VOPR, and one
+`site/` (live at https://ozzyozbourne.github.io/zig-dst/) is a static, interactive version of this guide: an overview, a page on TigerBeetle's VOPR, and one
 page per example with step-through replays, charts and in-browser mini-simulations. Every number on it is
 parsed from real program output stored in `site/data/`.
 
